@@ -77,9 +77,8 @@ pub fn inspect(
     }
 
     let mut header = [0u8; 24];
-    file.read_exact(&mut header).map_err(|_| {
-        InferenceError::invalid_model("The file ended before its GGUF header did.")
-    })?;
+    file.read_exact(&mut header)
+        .map_err(|_| InferenceError::invalid_model("The file ended before its GGUF header did."))?;
 
     if &header[0..4] != GGUF_MAGIC {
         return Err(InferenceError::invalid_model(
@@ -159,9 +158,7 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
     let read = read_magic(&mut file, &mut magic)?;
 
     if read < 2 {
-        return Err(InferenceError::invalid_model(
-            "That runtime file is empty.",
-        ));
+        return Err(InferenceError::invalid_model("That runtime file is empty."));
     }
 
     let is_windows_binary = &magic[..2] == b"MZ";
@@ -171,8 +168,7 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
     // check honest on each platform instead of calling an ELF file "not a
     // Windows executable" on Linux.
     let is_elf = read >= 4 && &magic[..4] == b"\x7fELF" && cfg!(unix);
-    let runs_here =
-        (is_windows_binary && cfg!(windows)) || (is_script && cfg!(unix)) || is_elf;
+    let runs_here = (is_windows_binary && cfg!(windows)) || (is_script && cfg!(unix)) || is_elf;
 
     if !runs_here {
         return Err(InferenceError::invalid_model(if cfg!(windows) {

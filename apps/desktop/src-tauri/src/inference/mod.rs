@@ -87,9 +87,7 @@ impl GenerateRequest {
             }
 
             if turn.content.trim().is_empty() {
-                return Err(InferenceError::invalid_request(
-                    "A message is empty.",
-                ));
+                return Err(InferenceError::invalid_request("A message is empty."));
             }
 
             let chars = turn.content.chars().count();
@@ -109,10 +107,7 @@ impl GenerateRequest {
             ));
         }
 
-        let max_tokens = self
-            .max_tokens
-            .unwrap_or(1_024)
-            .clamp(1, MAX_OUTPUT_TOKENS);
+        let max_tokens = self.max_tokens.unwrap_or(1_024).clamp(1, MAX_OUTPUT_TOKENS);
 
         let temperature = self.temperature.unwrap_or(0.2).clamp(0.0, 2.0);
 
@@ -310,15 +305,12 @@ impl InferenceState {
             engine: EngineStatus {
                 state,
                 runtime: settings.runtime_path.clone(),
-                model: settings
-                    .model_path
-                    .as_ref()
-                    .and_then(|path| {
-                        std::path::Path::new(path)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .map(str::to_string)
-                    }),
+                model: settings.model_path.as_ref().and_then(|path| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_string)
+                }),
                 detail,
             },
             model_path: settings.model_path,

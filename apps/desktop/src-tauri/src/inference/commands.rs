@@ -65,17 +65,10 @@ pub fn save_settings(
 
 /// Header-level validation of a candidate model, surfaced before loading.
 #[tauri::command]
-pub fn validate_model(
-    path: String,
-    context_size: Option<u32>,
-) -> InferenceResult<ModelInfo> {
+pub fn validate_model(path: String, context_size: Option<u32>) -> InferenceResult<ModelInfo> {
     let memory = hardware::system_info().available_ram_gib;
 
-    models::inspect(
-        &path,
-        context_size.unwrap_or(DEFAULT_CONTEXT_SIZE),
-        memory,
-    )
+    models::inspect(&path, context_size.unwrap_or(DEFAULT_CONTEXT_SIZE), memory)
 }
 
 /// Runs `llama-server --version` so a wrong binary is caught early.
@@ -190,7 +183,9 @@ pub async fn unload_model(
 ) -> InferenceResult<AppStatus> {
     if let Ok(slot) = state.active.lock() {
         if let Some(active) = slot.as_ref() {
-            active.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            active
+                .cancelled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             active.cancel.notify_one();
         }
     }

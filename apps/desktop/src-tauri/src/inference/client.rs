@@ -316,7 +316,8 @@ mod tests {
     }
 
     /// Bodies copied from a locally built b11714 server.
-    const REAL_401: &str = r#"{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}"#;
+    const REAL_401: &str =
+        r#"{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}"#;
     const REAL_400: &str = r#"{"error":{"code":400,"message":"model 'local' not found","type":"invalid_request_error"}}"#;
 
     #[test]

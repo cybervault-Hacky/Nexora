@@ -351,7 +351,9 @@ fn write_key_file(path: &Path, key: &str) -> InferenceResult<()> {
     }
 
     std::fs::write(path, format!("{key}\n")).map_err(|error| {
-        InferenceError::storage(format!("The session key file could not be written: {error}"))
+        InferenceError::storage(format!(
+            "The session key file could not be written: {error}"
+        ))
     })?;
 
     #[cfg(unix)]
@@ -567,8 +569,7 @@ mod tests {
     fn skips_warnings_before_the_build_line() {
         let captured = CapturedOutput {
             stdout: String::new(),
-            stderr: "warning: no usable GPU found\n".to_string()
-                + OBSERVED_STDERR,
+            stderr: "warning: no usable GPU found\n".to_string() + OBSERVED_STDERR,
         };
 
         assert!(first_version_line(&captured).starts_with("version: 0.7.0-dev"));
@@ -603,4 +604,3 @@ mod tests {
         assert!(!reports_pinned_build(""));
     }
 }
-
