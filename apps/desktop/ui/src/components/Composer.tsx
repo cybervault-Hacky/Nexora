@@ -11,7 +11,7 @@ import {
 } from "../features/chat/chat";
 import { Icon } from "./Icon";
 
-const MAX_TEXTAREA_HEIGHT = 200;
+const MAX_TEXTAREA_HEIGHT = 208;
 
 interface ComposerProps {
   value: string;
@@ -31,9 +31,10 @@ export function Composer({
   onDismissError,
 }: ComposerProps) {
   const length = value.length;
+  const trimmedLength = value.trim().length;
   const tooLong = length > MAX_MESSAGE_LENGTH;
   const showCounter = length > WARN_MESSAGE_LENGTH;
-  const canSend = value.trim().length > 0 && !tooLong;
+  const canSend = trimmedLength > 0 && !tooLong;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -47,12 +48,9 @@ export function Composer({
   }, [value, textareaRef]);
 
   useEffect(() => {
-    if (!error) {
-      return;
+    if (error) {
+      textareaRef.current?.focus();
     }
-
-    const textarea = textareaRef.current;
-    textarea?.focus();
   }, [error, textareaRef]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -61,11 +59,12 @@ export function Composer({
   }
 
   return (
-    <form className="composer-wrap" onSubmit={handleSubmit}>
+    <form className="composer-wrap" onSubmit={handleSubmit} aria-label="Message composer">
       <div className={`composer ${error ? "composer--error" : ""}`}>
         <label className="sr-only" htmlFor="composer-input">
           Message Nexora
         </label>
+
         <textarea
           id="composer-input"
           ref={textareaRef}
@@ -73,8 +72,9 @@ export function Composer({
           value={value}
           rows={1}
           placeholder="Describe what you want to build…"
-          aria-describedby="composer-help"
+          aria-describedby="composer-help composer-status"
           aria-invalid={error ? true : undefined}
+          spellCheck
           onChange={(event) => {
             onChange(event.target.value);
             if (error) {
@@ -100,10 +100,10 @@ export function Composer({
         />
 
         <div className="composer__footer">
-          <div className="composer__status" aria-hidden="true">
-            <span className="status-dot status-dot--idle" />
-            <span>No model loaded</span>
-          </div>
+          <p className="composer__status" id="composer-status">
+            <span className="status-dot status-dot--idle" aria-hidden="true" />
+            <span>No model connected — replies are scaffold text</span>
+          </p>
 
           <div className="composer__actions">
             {showCounter ? (
@@ -111,7 +111,8 @@ export function Composer({
                 className={`composer__counter ${tooLong ? "composer__counter--danger" : ""}`}
                 aria-hidden="true"
               >
-                {length.toLocaleString("en-US")} / {MAX_MESSAGE_LENGTH.toLocaleString("en-US")}
+                {length.toLocaleString("en-US")} /{" "}
+                {MAX_MESSAGE_LENGTH.toLocaleString("en-US")}
               </span>
             ) : null}
 

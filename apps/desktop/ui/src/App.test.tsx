@@ -13,16 +13,31 @@ describe("Nexora shell", () => {
 
   it("states that the engine is not connected", () => {
     expect(html).toContain("Engine not connected");
-    expect(html).toContain("No model loaded");
+    expect(html).toContain("No model connected");
   });
 
-  it("renders the composer and its accessible label", () => {
+  it("labels the composer and its input accessibly", () => {
     expect(html).toContain("Message Nexora");
     expect(html).toContain("Describe what you want to build");
+    expect(html).toContain('aria-label="Send message"');
+  });
+
+  it("offers a sidebar new-chat action and collapse control", () => {
+    expect(html).toContain('aria-label="New chat"');
+    expect(html).toContain('aria-controls="sidebar"');
+    expect(html).toContain('aria-expanded="true"');
   });
 
   it("does not claim that inference is working", () => {
     expect(html).not.toContain("Engine ready");
     expect(html).not.toContain("AI is ready");
+    expect(html).not.toContain("Connected</span>");
+  });
+
+  it("keeps the empty state quiet for screen readers", () => {
+    // The live log only exists once a conversation has started, so the empty
+    // state never announces anything.
+    expect(html).not.toContain('role="log"');
+    expect(html).toContain("Example prompts");
   });
 });

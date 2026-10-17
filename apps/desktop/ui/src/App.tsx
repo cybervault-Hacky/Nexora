@@ -5,175 +5,192 @@ import { Icon } from "./components/Icon";
 import { MessageList } from "./components/MessageList";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
-import {
-  submitDraft,
-  type ChatMessage,
-  type ComposerError,
-} from "./features/chat/chat";
-import {
-  browserPreviewStatus,
-  loadAppStatus,
-  type AppStatus,
-} from "./lib/ipc";
+import { useConversation } from "./features/chat/useConversation";
+import { isEngineReady } from "./lib/ipc";
+import { isNearBottom } from "./lib/scroll";
+import { useAppStatus } from "./lib/useAppStatus";
 
-let fallbackId = 0;
-
-function createId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
+function engineChipLabel(
+  ready: boolean,
+  failed: boolean,
+): string {
+  if (failed) {
+    return "Engine status unknown";
   }
 
-  fallbackId += 1;
-  return `message-${Date.now()}-${fallbackId}`;
-}
-
-function unavailableStatus(): AppStatus {
-  return {
-    ...browserPreviewStatus(),
-    engine: {
-      ...browserPreviewStatus().engine,
-      detail:
-        "The desktop core did not return a status. The interface is running, but the engine state is unknown.",
-    },
-  };
+  return ready ? "Engine ready" : "Engine not connected";
 }
 
 export default function App() {
-  const [status, setStatus] = useState<AppStatus | null>(null);
-  const [statusFailed, setStatusFailed] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
-  const [error, setError] = useState<ComposerError | null>(null);
+  const {
+    messages,
+    draft,
+    error,
+    setDraft,
+    dismissError,
+    submit,
+    newChat,
+  } = useConversation();
+  const { status, error: statusError, loading, reload } = useAppStatus();
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  const focusComposer = useCallback(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  const startNewChat = useCallback(() => {
+    newChat();
+    stickToBottomRef.current = true;
+    requestAnimationFrame(focusComposer);
+  }, [focusComposer, newChat]);
+
+  const handleSubmit = useCallback(() => {
+    stickToBottomRef.current = true;
+    submit();
+  }, [submit]);
 
   useEffect(() => {
-    let active = true;
-
-    loadAppStatus()
-      .then((next) => {
-        if (active) {
-          setStatus(next);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setStatus(unavailableStatus());
-          setStatusFailed(true);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
+    focusComposer();
+  }, [focusComposer]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.key.toLowerCase() === "l") {
-        event.preventDefault();
-        textareaRef.current?.focus();
+      if (!event.ctrlKey || event.altKey || event.metaKey) {
+        return;
+      }
+
+      switch (event.key.toLowerCase()) {
+        case "l":
+          event.preventDefault();
+          focusComposer();
+          break;
+        case "n":
+          event.preventDefault();
+          startNewChat();
+          break;
+        case "b":
+          event.preventDefault();
+          setSidebarCollapsed((current) => !current);
+          break;
+        default:
+          break;
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [focusComposer, startNewChat]);
 
   useEffect(() => {
-    if (messages.length === 0) {
+    if (messages.length === 0 || !stickToBottomRef.current) {
       return;
     }
 
-    const reducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
+    const container = scrollRef.current;
 
-    endRef.current?.scrollIntoView({
-      block: "end",
-      behavior: reducedMotion ? "auto" : "smooth",
-    });
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
   }, [messages]);
 
-  const focusComposer = useCallback(() => {
-    requestAnimationFrame(() => textareaRef.current?.focus());
+  const handleScroll = useCallback(() => {
+    const container = scrollRef.current;
+
+    if (container) {
+      stickToBottomRef.current = isNearBottom({
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight,
+      });
+    }
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    const outcome = submitDraft(messages, draft, {
-      createId,
-      now: () => Date.now(),
-    });
-
-    if (!outcome.ok) {
-      setError(outcome.error);
-      return;
-    }
-
-    setMessages(outcome.messages);
-    setDraft("");
-    setError(null);
-    focusComposer();
-  }, [draft, focusComposer, messages]);
-
-  const handleNewChat = useCallback(() => {
-    setMessages([]);
-    setDraft("");
-    setError(null);
-    focusComposer();
-  }, [focusComposer]);
-
-  const engineConnected = status?.engine.inferenceAvailable === true;
+  const engineReady = isEngineReady(status);
   const hasMessages = messages.length > 0;
+  const conversationTitle = hasMessages ? "Scaffold conversation" : "New conversation";
 
   return (
-    <div className="app">
-      <TitleBar />
+    <div className={`app ${sidebarCollapsed ? "app--collapsed" : ""}`}>
+      <TitleBar
+        conversationTitle={conversationTitle}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+      />
 
-      <Sidebar status={status} onNewChat={handleNewChat} />
+      <Sidebar
+        status={status}
+        statusFailed={statusError !== null}
+        collapsed={sidebarCollapsed}
+        onNewChat={startNewChat}
+      />
 
       <main className="workspace" aria-label="Conversation workspace">
         <header className="conversation-header">
-          <div>
+          <div className="conversation-header__titles">
             <p className="eyebrow">Conversation</p>
-            <h1 className="conversation-header__title">New conversation</h1>
+            <h1 className="conversation-header__title">{conversationTitle}</h1>
           </div>
 
           <div className="conversation-header__chips">
-            <span className="chip">
+            <span className="chip" title="Inference is designed to run on this machine">
               <Icon name="cloud-off" size={13} />
               Local-only
             </span>
             <span
-              className={`chip ${engineConnected ? "chip--ok" : "chip--warning"}`}
+              className={`chip ${
+                statusError
+                  ? "chip--unknown"
+                  : engineReady
+                    ? "chip--ok"
+                    : "chip--warning"
+              }`}
+              title={statusError ?? undefined}
             >
               <span className="status-dot status-dot--sm" aria-hidden="true" />
-              {engineConnected ? "Engine ready" : "Engine not connected"}
+              {engineChipLabel(engineReady, statusError !== null)}
             </span>
           </div>
         </header>
 
-        {statusFailed ? (
+        {statusError ? (
           <div className="notice" role="status">
             <Icon name="alert" size={14} />
-            The desktop core did not return a status. Engine state is unknown.
+            <span>
+              Could not read the engine status from the desktop core. It is not
+              known whether an engine is available.
+            </span>
+            <button
+              type="button"
+              className="notice__action"
+              onClick={reload}
+              disabled={loading}
+            >
+              {loading ? "Retrying…" : "Retry"}
+            </button>
           </div>
         ) : null}
 
-        <div className={`conversation ${hasMessages ? "conversation--active" : ""}`}>
+        <div
+          className="conversation"
+          ref={scrollRef}
+          onScroll={handleScroll}
+        >
           {hasMessages ? (
             <MessageList messages={messages} />
           ) : (
             <EmptyState
               onPick={(prompt) => {
                 setDraft(prompt);
-                setError(null);
+                dismissError();
                 focusComposer();
               }}
             />
           )}
-          <div ref={endRef} />
         </div>
 
         <Composer
@@ -182,7 +199,7 @@ export default function App() {
           textareaRef={textareaRef}
           onChange={setDraft}
           onSubmit={handleSubmit}
-          onDismissError={() => setError(null)}
+          onDismissError={dismissError}
         />
       </main>
     </div>

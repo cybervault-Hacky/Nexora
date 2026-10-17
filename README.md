@@ -2,19 +2,21 @@
 
 **Nexora is a local-first, offline-capable AI coding studio for Windows.** It combines a premium conversational workspace with a bounded coding agent that can create and edit multi-file websites, applications, animations, and code-based 3D experiences — using a local model, with no paid external AI API required for core functionality.
 
-> **Project status: Phase 3 — desktop foundation implemented, awaiting owner approval.**
-> Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phase 3 adds the real Tauri 2 + React desktop shell. It contains no model inference, no model weights, and no runtime binaries. The Windows installer has not been built or tested yet.
+> **Project status: Phase 4 — desktop UI and integration hardening complete, awaiting owner approval.**
+> Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phases 3–4 add the real Tauri 2 + React desktop shell. It contains no model inference, no model weights, and no runtime binaries. The Windows installer has not been built or tested yet.
 
-## Application foundation (Phase 3)
+## Application foundation (Phases 3–4)
 
 The desktop app lives in [`apps/desktop/`](apps/desktop/README.md): Tauri 2 shell, Rust core, React 19 + TypeScript, Vite.
 
 What works in this build:
 
-- A real native window (1280×840, minimum 960×640) with the Nexora title bar, sidebar, conversation workspace, empty state, and composer.
+- A real native window (1280×840, minimum 960×640) with the Nexora title bar, collapsible sidebar, conversation workspace, empty state, and composer.
 - Sending a message adds it to the session and returns a clearly labelled **scaffold** reply. No model runs; no AI capability is simulated.
-- An engine-status panel reads a single read-only Rust command and reports that local inference is not connected.
-- Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L`, keyboard focus, reduced motion, and accessible labels.
+- Duplicate submissions are rejected by a 350 ms guard; new chat clears messages, draft, and errors; scroll follow pauses while you read earlier output.
+- An engine-status panel reads a single read-only Rust command and distinguishes "not connected" from "status unavailable", with a retry.
+- Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L` focus, `Ctrl+N` new chat, `Ctrl+B` sidebar, keyboard focus, reduced motion, and accessible labels.
+- 49 unit, hook, and DOM interaction tests (`pnpm test`).
 
 Quick start (Windows, after installing the prerequisites in the app README):
 

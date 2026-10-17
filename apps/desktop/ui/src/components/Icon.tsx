@@ -3,13 +3,12 @@ import type { ReactElement } from "react";
 export type IconName =
   | "alert"
   | "arrow-up"
-  | "chevron-down"
   | "close"
   | "cloud-off"
   | "maximize"
   | "minimize"
-  | "plus"
-  | "search";
+  | "panel-left"
+  | "plus";
 
 const ICONS: Record<IconName, ReactElement> = {
   alert: (
@@ -25,7 +24,6 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="m6.5 10.5 5.5-5.5 5.5 5.5" />
     </>
   ),
-  "chevron-down": <path d="m7 10 5 5 5-5" />,
   close: (
     <>
       <path d="m7 7 10 10" />
@@ -41,16 +39,16 @@ const ICONS: Record<IconName, ReactElement> = {
   ),
   maximize: <rect x="6.5" y="6.5" width="11" height="11" rx="1.2" />,
   minimize: <path d="M6.5 12h11" />,
+  "panel-left": (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <path d="M9.5 4.5v15" />
+    </>
+  ),
   plus: (
     <>
       <path d="M12 5.5v13" />
       <path d="M5.5 12h13" />
-    </>
-  ),
-  search: (
-    <>
-      <circle cx="11" cy="11" r="6.5" />
-      <path d="m16 16 4 4" />
     </>
   ),
 };
