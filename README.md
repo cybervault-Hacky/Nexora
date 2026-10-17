@@ -2,8 +2,8 @@
 
 **Nexora is a local-first, offline-capable AI coding studio for Windows.** It combines a premium conversational workspace with a bounded coding agent that can create and edit multi-file websites, applications, animations, and code-based 3D experiences — using a local model, with no paid external AI API required for core functionality.
 
-> **Project status: Phase 1 — Planning complete, awaiting owner approval.**
-> No application code, dependencies, models, private repository, or release has been created. Do not begin implementation until Phase 2 is explicitly authorized.
+> **Project status: Phase 2 — Local AI model and runtime evaluation complete, awaiting owner approval.**
+> Phase 1 (requirements and architecture) and Phase 2 (runtime and model evaluation) are documentation-only. No application code, dependencies, model weights, runtime binaries, private repository, or release has been created. Do not begin implementation until Phase 3 is explicitly authorized.
 
 ## Phase 1 deliverables
 
@@ -48,6 +48,22 @@ The complete planning set is in [`docs/phase-1/`](docs/phase-1/README.md):
 | 17. Open questions for the owner | [Doc 12 §11](docs/phase-1/12-roadmap-risks-and-decisions.md) |
 | 18. Refined implementation roadmap | [Doc 12 §2–8](docs/phase-1/12-roadmap-risks-and-decisions.md) |
 
+## Phase 2 deliverables
+
+The runtime and model evaluation is in [`docs/phase-2/`](docs/phase-2/README.md). It is research and documentation only — no code, downloads, or benchmarks.
+
+| # | Document | Contents |
+|---|----------|----------|
+| 0 | [Phase 2 index](docs/phase-2/README.md) | Scope, evidence grades, headline recommendations, corrections, acceptance |
+| 1 | [Runtime evaluation](docs/phase-2/runtime-evaluation.md) | llama.cpp vs Ollama, vLLM, ONNX GenAI, mistral.rs; Windows support; hardening |
+| 2 | [Model evaluation](docs/phase-2/model-evaluation.md) | Verified specs, revisions, licences, quant sizes, KV maths, tier selection |
+| 3 | [Hardware matrix](docs/phase-2/hardware-matrix.md) | 12/16/24 GB and CPU-only estimates, labelled as estimates |
+| 4 | [Benchmark protocol](docs/phase-2/benchmark-protocol.md) | Ten-dimension reproducible protocol, scoring, gates, result schema |
+| 5 | [Integration design](docs/phase-2/integration-design.md) | Rust-owned lifecycle, streaming, cancellation, recovery, loopback hardening |
+| 6 | [Model acquisition policy](docs/phase-2/model-acquisition-policy.md) | Sources, pinning, integrity, resume, notices, malicious files |
+| 7 | [Decisions and risks](docs/phase-2/decisions-and-risks.md) | Decisions, risks, Phase 1 corrections, open questions, Phase 3 handoff |
+| 8 | [Sources](docs/phase-2/sources.md) | Every source with URL, access date, and what it supports |
+
 ## Non-negotiable boundaries
 
 - Windows desktop only. No Android, iOS, or browser-only product.
@@ -59,4 +75,6 @@ The complete planning set is in [`docs/phase-1/`](docs/phase-1/README.md):
 
 ## Next step
 
-Review the Phase 1 set, answer or defer the open questions in [document 12, Section 11](docs/phase-1/12-roadmap-risks-and-decisions.md#11-open-questions-requiring-owner-decisions), and complete the approval block. Phase 2 — technical validation spikes and model benchmarks — starts only after explicit authorization.
+Review the Phase 2 recommendations and answer the open questions in [Phase 2 decisions and risks, Section 5](docs/phase-2/decisions-and-risks.md#5-open-questions). The blocking items are reference hardware (`Q2-01`), mirror/hosting approval (`Q2-02`), and legal review of the model and CUDA redistribution terms (`Q2-03`).
+
+Phase 3 — Foundation — implements the app shell, Rust core, model manager, and inference supervisor. It starts only after explicit authorization, and it should begin with the contract tests and smoke benchmark defined in Phase 2 so that the first measured numbers replace the estimates.

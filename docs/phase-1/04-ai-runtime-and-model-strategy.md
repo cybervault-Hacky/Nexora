@@ -154,7 +154,7 @@ A model must pass **hard gates** before scoring: commercial licence verified; ru
 | **Qwen3-Coder-Next** | 80B MoE, ~3B active (per official Qwen README) | 256K | Verify model card (Qwen family is generally Apache 2.0) | ~45–50 GB Q4 | High-end 48 GB+ tier only | GGUF available; too large for mainstream 24 GB machines without heavy offload |
 | **Qwen2.5-Coder-7B-Instruct** | 7B dense | 32K native (verify) | Apache 2.0 | ~4.5–5 GB | 8 GB fallback / fast mode | Older but proven; agentic reliability lower; good for chat and small edits |
 | **Codestral 22B** | 22B dense | 256K | Mistral Non-Production Licence | ~13 GB | **Excluded** | Licence forbids commercial/production use; not acceptable for Nexora |
-| **Gemma 4 31B** | 31B dense | 256K (verify) | Gemma Terms of Use | ~19 GB | Watchlist | Quality is competitive, but terms include use restrictions and redistribution obligations; legal review required |
+| **Gemma 4 31B** | 31B dense multimodal | 262,144 | Apache 2.0 | 18.32 GB Q4_K_M | Watchlist | Licence corrected in Phase 2 (C2-01): Gemma 4 is Apache 2.0, not the Gemma Terms. Watchlisted on 24 GB memory headroom, not licence. |
 | **Llama 4 Scout** | 109B MoE, 17B active | 10M claimed | Llama 4 Community Licence | ~60 GB+ | Not planned | Licence and memory profile are a poor fit for desktop 1.0 |
 
 **Important:** vendor benchmark claims are marketing until independently measured. Several 2026 models also have limited or inconsistent GGUF/tool-call support at the time of writing. Phase 2 must benchmark actual quantized files on the pinned runtime, not the BF16 model cards.
@@ -468,7 +468,7 @@ Every automatic recovery is logged with the decision and the resulting configura
 | Qwen3-Coder / Qwen3.8 | Apache 2.0 | Notices, patent grant, no trademark misuse | Include licence; do not imply endorsement |
 | Devstral Small 2 | Apache 2.0 | Notices | Include licence |
 | gpt-oss-20b | Apache 2.0 | Notices | Include licence |
-| Gemma | Gemma Terms of Use | Use restrictions, redistribution terms | Legal review before inclusion |
+| Gemma 4 | Apache 2.0 | Notices only. Gemma 3 and earlier used the Gemma Terms of Use. | Include licence; correction C2-01 |
 | Llama 4 | Llama Community Licence | 700M MAU clause, acceptable-use policy | Avoid at 1.0 |
 | Codestral | Mistral Non-Production Licence | Prohibits production/commercial use | Exclude |
 | CUDA runtime | NVIDIA EULA | Redistribution list restrictions | Legal review; bundle only permitted files |
@@ -534,4 +534,6 @@ Official model cards and repositories (accessed 2026-10-17):
 - Hugging Face Hub API — https://huggingface.co/docs/hub/api
 - SQLite vector extension (sqlite-vec) — https://github.com/asg017/sqlite-vec
 
-Vendor benchmark claims are explicitly not treated as evidence of local performance. All figures are planning estimates and must be measured in Phase 2.
+Vendor benchmark claims are explicitly not treated as evidence of local performance. All figures are planning estimates and must be measured before they are used as performance claims.
+
+**Phase 2 correction (2026-10-17):** the Gemma 4 licence cells above were corrected from "Gemma Terms of Use" to Apache 2.0. See `docs/phase-2/decisions-and-risks.md` §4, C2-01.
