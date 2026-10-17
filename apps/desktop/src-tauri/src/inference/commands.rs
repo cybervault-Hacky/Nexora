@@ -220,15 +220,14 @@ pub async fn start_generation(
         let mut supervisor = state.supervisor.lock().map_err(|_| lock_error())?;
 
         if !supervisor.is_running() {
-            return Err(InferenceError::new(
-                "not_running",
+            return Err(InferenceError::not_running(
                 "Load a local model before sending a message.",
             ));
         }
 
         supervisor
             .endpoint()
-            .ok_or_else(|| InferenceError::new("not_running", "The engine is not ready."))?
+            .ok_or_else(|| InferenceError::not_running("The engine is not ready."))?
     };
 
     if !process::health_ok(port).await {

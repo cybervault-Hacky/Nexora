@@ -1,5 +1,8 @@
 use serde::Serialize;
 
+// Only the Windows implementation converts raw bytes with it; the Linux path
+// derives GiB from /proc/meminfo directly.
+#[cfg(windows)]
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 /// Memory the engine can see. Every field is optional: an unsupported platform

@@ -60,11 +60,18 @@ jobs:
           import sys
 
           text = open(sys.argv[1], encoding="utf-8").read()
-          if text.strip():
-              escaped = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::error title=fmt.patch::{escaped}")
-          else:
+          if not text.strip():
               print("Formatting already clean.")
+              raise SystemExit
+
+          # Annotations are capped at 4096 characters, so the patch is chunked.
+          size = 3500
+          chunks = [text[i:i + size] for i in range(0, len(text), size)]
+          print(f"patch bytes: {len(text)}, chunks: {len(chunks)}")
+
+          for index, chunk in enumerate(chunks[:10], start=1):
+              escaped = chunk.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=fmt-{index:02d}::{escaped}")
           PY
 
       - name: Report cargo check

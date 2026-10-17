@@ -55,6 +55,8 @@ impl LineBuffer {
         lines
     }
 
+    /// Test-facing probe: how many bytes are waiting for a newline.
+    #[cfg(test)]
     pub fn buffered_bytes(&self) -> usize {
         self.pending.len()
     }

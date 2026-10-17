@@ -41,8 +41,8 @@ impl InferenceError {
         Self::new("load_failed", message)
     }
 
-    pub fn not_running() -> Self {
-        Self::new("not_running", "No local engine is running.")
+    pub fn not_running(message: impl Into<String>) -> Self {
+        Self::new("not_running", message)
     }
 
     pub fn busy() -> Self {
@@ -50,10 +50,6 @@ impl InferenceError {
             "busy",
             "A response is already being generated. Stop it before sending again.",
         )
-    }
-
-    pub fn cancelled() -> Self {
-        Self::new("cancelled", "Generation was stopped.")
     }
 
     pub fn timeout(message: impl Into<String>) -> Self {

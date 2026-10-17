@@ -452,7 +452,8 @@ fn drain_pipe<R: Read + Send + 'static>(
     std::thread::spawn(move || {
         let mut text = String::new();
 
-        if let Some(mut pipe) = pipe {
+        if let Some(pipe) = pipe {
+            // `take` consumes the reader, so no mutable binding is needed.
             let _ = pipe.take(STDERR_CAP).read_to_string(&mut text);
         }
 
@@ -509,6 +510,25 @@ pub fn reports_pinned_build(version_line: &str) -> bool {
     version_line
         .split(|character: char| !character.is_ascii_digit())
         .any(|part| part == PINNED_BUILD)
+}
+
+/// True when the engine answers `/health` right now.
+pub async fn health_ok(port: u16) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(1200))
+        .build()
+    else {
+        return false;
+    };
+
+    matches!(
+        client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await,
+        Ok(response) if response.status().is_success()
+    )
 }
 
 #[cfg(test)]
@@ -584,21 +604,3 @@ mod tests {
     }
 }
 
-/// True when the engine answers `/health` right now.
-pub async fn health_ok(port: u16) -> bool {
-    let Ok(client) = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_millis(1200))
-        .build()
-    else {
-        return false;
-    };
-
-    matches!(
-        client
-            .get(format!("http://127.0.0.1:{port}/health"))
-            .send()
-            .await,
-        Ok(response) if response.status().is_success()
-    )
-}
