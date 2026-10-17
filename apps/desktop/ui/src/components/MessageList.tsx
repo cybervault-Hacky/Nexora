@@ -29,7 +29,7 @@ const AssistantMessage = memo(function AssistantMessage({
 }: {
   message: ChatMessage;
 }) {
-  const paragraphs = message.content.split("\n\n");
+  const paragraphs = message.content.split("\n\n").filter(Boolean);
 
   return (
     <article className="message message--assistant">
@@ -40,15 +40,45 @@ const AssistantMessage = memo(function AssistantMessage({
       <div className="message__body">
         <div className="message__head">
           <span className="message__author">Nexora</span>
-          {message.kind === "scaffold" ? (
-            <span className="chip chip--warning">Scaffold · no model</span>
+
+          {message.state === "streaming" ? (
+            <span className="chip chip--live">
+              <span className="pulse" aria-hidden="true" />
+              Generating
+            </span>
           ) : null}
+
+          {message.state === "stopped" ? (
+            <span className="chip chip--warning">Stopped</span>
+          ) : null}
+
+          {message.state === "error" ? (
+            <span className="chip chip--unknown">Failed</span>
+          ) : null}
+
           <span className="message__meta">{formatTime(message.createdAt)}</span>
         </div>
 
-        {paragraphs.map((paragraph, index) => (
-          <p key={`${message.id}-p${index}`}>{paragraph}</p>
-        ))}
+        {paragraphs.length > 0 ? (
+          paragraphs.map((paragraph, index) => (
+            <p key={`${message.id}-p${index}`}>
+              {paragraph}
+              {message.state === "streaming" && index === paragraphs.length - 1 ? (
+                <span className="caret" aria-hidden="true" />
+              ) : null}
+            </p>
+          ))
+        ) : message.state === "stopped" ? (
+          <p className="message__pending">Stopped before any text arrived.</p>
+        ) : (
+          <p className="message__pending" aria-live="polite">
+            Waiting for the first token…
+          </p>
+        )}
+
+        {message.failure ? (
+          <p className="message__failure">{message.failure}</p>
+        ) : null}
       </div>
     </article>
   );

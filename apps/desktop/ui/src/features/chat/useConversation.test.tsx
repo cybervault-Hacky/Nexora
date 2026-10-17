@@ -1,22 +1,69 @@
-import { act, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useConversation } from "./useConversation";
-import { SCAFFOLD_REPLY } from "./chat";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GenerationEvent, GenerationOutcome } from "../../lib/ipc";
 
-afterEach(() => {
-  vi.useRealTimers();
+vi.mock("../../lib/inference", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/inference")>();
+
+  return {
+    ...actual,
+    generate: vi.fn(),
+    cancelGeneration: vi.fn().mockResolvedValue(true),
+  };
+});
+
+import { cancelGeneration, generate } from "../../lib/inference";
+import { useConversation } from "./useConversation";
+
+const generateMock = vi.mocked(generate);
+const cancelMock = vi.mocked(cancelGeneration);
+
+/**
+ * Drives one generation: captures the channel callback, and lets the test
+ * resolve or reject the request when it chooses.
+ */
+function session() {
+  let emit: (event: GenerationEvent) => void = () => undefined;
+  let requestId = "";
+  let resolve!: (outcome: GenerationOutcome) => void;
+  let reject!: (cause: unknown) => void;
+
+  const promise = new Promise<GenerationOutcome>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  generateMock.mockImplementation((request, onEvent) => {
+    emit = onEvent;
+    requestId = request.requestId;
+    return promise;
+  });
+
+  return {
+    requestId: () => requestId,
+    send: (text: string) =>
+      emit({ type: "delta", requestId, text }),
+    settle: (overrides: Partial<GenerationOutcome> = {}) =>
+      resolve({ requestId, finishReason: "stop", cancelled: false, ...overrides }),
+    fail: (cause: unknown) => reject(cause),
+  };
+}
+
+beforeEach(() => {
+  generateMock.mockReset();
+  cancelMock.mockReset();
+  cancelMock.mockResolvedValue(true);
 });
 
 describe("useConversation", () => {
-  it("starts empty", () => {
+  it("starts empty and idle", () => {
     const { result } = renderHook(() => useConversation());
 
     expect(result.current.messages).toHaveLength(0);
-    expect(result.current.draft).toBe("");
-    expect(result.current.error).toBeNull();
+    expect(result.current.streaming).toBe(false);
   });
 
-  it("rejects a whitespace-only submission without adding messages", () => {
+  it("rejects an empty draft without calling the engine", () => {
     const { result } = renderHook(() => useConversation());
 
     act(() => result.current.setDraft("   "));
@@ -24,114 +71,201 @@ describe("useConversation", () => {
 
     expect(result.current.messages).toHaveLength(0);
     expect(result.current.error?.code).toBe("empty");
+    expect(generateMock).not.toHaveBeenCalled();
   });
 
-  it("appends the user turn and the scaffold reply, then clears the draft", () => {
+  it("adds the user turn and streams text into a single reply", async () => {
+    const run = session();
     const { result } = renderHook(() => useConversation());
 
-    act(() => result.current.setDraft("  build a landing page  "));
+    act(() => result.current.setDraft("hello"));
     act(() => result.current.submit());
 
     expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[0]).toMatchObject({
       role: "user",
-      content: "build a landing page",
+      content: "hello",
     });
     expect(result.current.messages[1]).toMatchObject({
       role: "assistant",
-      kind: "scaffold",
-      content: SCAFFOLD_REPLY,
+      state: "streaming",
+      content: "",
     });
-    expect(result.current.draft).toBe("");
-    expect(result.current.error).toBeNull();
-  });
-
-  it("ignores a rapid second submit instead of duplicating the turn", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-18T10:00:00Z"));
-
-    const { result } = renderHook(() => useConversation());
-
-    act(() => result.current.setDraft("hello"));
-    act(() => {
-      result.current.submit();
-      result.current.submit();
-      result.current.submit();
-    });
-
-    expect(result.current.messages).toHaveLength(2);
 
     act(() => {
-      vi.advanceTimersByTime(400);
+      run.send("Hi ");
+      run.send("there");
     });
 
-    act(() => result.current.setDraft("second"));
-    act(() => result.current.submit());
-
-    expect(result.current.messages).toHaveLength(4);
+    expect(result.current.messages[1]?.content).toBe("Hi there");
   });
 
-  it("gives every message a distinct id", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-18T10:00:00Z"));
-
+  it("sends the visible conversation as engine turns", () => {
+    session();
     const { result } = renderHook(() => useConversation());
 
     act(() => result.current.setDraft("first"));
     act(() => result.current.submit());
 
-    vi.advanceTimersByTime(500);
-
-    act(() => result.current.setDraft("second"));
-    act(() => result.current.submit());
-
-    const ids = result.current.messages.map((message) => message.id);
-
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(generateMock.mock.calls[0]?.[0].messages).toEqual([
+      { role: "user", content: "first" },
+    ]);
   });
 
-  it("clears messages, draft, and errors on a new chat", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-18T10:00:00Z"));
+  it("marks the reply complete when generation settles", async () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("answer"));
+
+    await act(async () => {
+      run.settle();
+    });
+
+    await waitFor(() => {
+      expect(result.current.messages[1]?.state).toBe("complete");
+      expect(result.current.streaming).toBe(false);
+    });
+  });
+
+  it("stops generation and keeps the partial text", async () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("partial"));
+
+    act(() => result.current.stop());
+
+    expect(cancelMock).toHaveBeenCalledWith(run.requestId());
+
+    await act(async () => {
+      run.settle({ cancelled: true, finishReason: "stopped" });
+    });
+
+    expect(result.current.messages[1]?.state).toBe("stopped");
+    expect(result.current.messages[1]?.content).toBe("partial");
+  });
+
+  it("keeps a stopped reply empty instead of inventing assistant text", async () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => result.current.stop());
+
+    await act(async () => {
+      run.settle({ cancelled: true, finishReason: "stopped" });
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages[1]?.state).toBe("stopped");
+    expect(result.current.messages[1]?.content).toBe("");
+  });
+
+  it("reports a runtime failure and removes the empty reply", async () => {
+    generateMock.mockRejectedValue({
+      code: "not_running",
+      message: "Load a local model before sending a message.",
+    });
 
     const { result } = renderHook(() => useConversation());
 
     act(() => result.current.setDraft("hello"));
     act(() => result.current.submit());
-    act(() => result.current.setDraft("still typing"));
 
+    await waitFor(() => {
+      expect(result.current.runtimeError).toBe(
+        "Load a local model before sending a message.",
+      );
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.streaming).toBe(false);
+  });
+
+  it("keeps partial text and marks it failed when the stream breaks", async () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("half of an answer"));
+
+    await act(async () => {
+      run.fail({ code: "timeout", message: "The model stopped responding." });
+    });
+
+    await waitFor(() => {
+      expect(result.current.messages[1]?.state).toBe("error");
+    });
+
+    expect(result.current.messages[1]?.content).toBe("half of an answer");
+    expect(result.current.messages[1]?.failure).toContain("stopped responding");
+  });
+
+  it("refuses a second submit while a reply is streaming", () => {
+    session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("one"));
+    act(() => result.current.submit());
+    act(() => result.current.setDraft("two"));
+    act(() => result.current.submit());
+
+    expect(result.current.error?.code).toBe("busy");
+    expect(generateMock).toHaveBeenCalledTimes(1);
     expect(result.current.messages).toHaveLength(2);
+  });
 
+  it("drops deltas and results that belong to a previous chat", async () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+
+    const staleId = run.requestId();
+
+    act(() => result.current.newChat());
+    act(() => run.send("stale"));
+
+    await act(async () => {
+      run.settle();
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.streaming).toBe(false);
+    expect(staleId.length).toBeGreaterThan(0);
+  });
+
+  it("cancels the active request when a new chat starts", () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => result.current.newChat());
+
+    expect(cancelMock).toHaveBeenCalledWith(run.requestId());
+  });
+
+  it("clears messages, draft, and errors on a new chat", () => {
+    session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => result.current.setDraft("typing"));
     act(() => result.current.newChat());
 
     expect(result.current.messages).toHaveLength(0);
     expect(result.current.draft).toBe("");
     expect(result.current.error).toBeNull();
-  });
-
-  it("accepts a new message immediately after a new chat", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-18T10:00:00Z"));
-
-    const { result } = renderHook(() => useConversation());
-
-    act(() => result.current.setDraft("hello"));
-    act(() => result.current.submit());
-    act(() => result.current.newChat());
-    act(() => result.current.setDraft("fresh"));
-    act(() => result.current.submit());
-
-    expect(result.current.messages).toHaveLength(2);
-    expect(result.current.messages[0]?.content).toBe("fresh");
-  });
-
-  it("dismisses a composer error", () => {
-    const { result } = renderHook(() => useConversation());
-
-    act(() => result.current.submit());
-    expect(result.current.error).not.toBeNull();
-
-    act(() => result.current.dismissError());
-    expect(result.current.error).toBeNull();
+    expect(result.current.runtimeError).toBeNull();
   });
 });

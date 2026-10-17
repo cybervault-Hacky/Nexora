@@ -17,8 +17,13 @@ interface ComposerProps {
   value: string;
   error: ComposerError | null;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  /** True while a model reply is streaming. */
+  busy: boolean;
+  /** False when no model is loaded, so sending is disabled with a reason. */
+  canGenerate: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onStop: () => void;
   onDismissError: () => void;
 }
 
@@ -26,15 +31,18 @@ export function Composer({
   value,
   error,
   textareaRef,
+  busy,
+  canGenerate,
   onChange,
   onSubmit,
+  onStop,
   onDismissError,
 }: ComposerProps) {
   const length = value.length;
   const trimmedLength = value.trim().length;
   const tooLong = length > MAX_MESSAGE_LENGTH;
   const showCounter = length > WARN_MESSAGE_LENGTH;
-  const canSend = trimmedLength > 0 && !tooLong;
+  const canSend = canGenerate && trimmedLength > 0 && !tooLong && !busy;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -53,10 +61,24 @@ export function Composer({
     }
   }, [error, textareaRef]);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function requestSubmit() {
+    if (!canGenerate || busy) {
+      return;
+    }
+
     onSubmit();
   }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    requestSubmit();
+  }
+
+  const statusText = busy
+    ? "Generating on this machine…"
+    : canGenerate
+      ? "Local model ready"
+      : "No model loaded";
 
   return (
     <form className="composer-wrap" onSubmit={handleSubmit} aria-label="Message composer">
@@ -71,7 +93,11 @@ export function Composer({
           className="composer__input"
           value={value}
           rows={1}
-          placeholder="Describe what you want to build…"
+          placeholder={
+            canGenerate
+              ? "Describe what you want to build…"
+              : "Load a local model to start"
+          }
           aria-describedby="composer-help composer-status"
           aria-invalid={error ? true : undefined}
           spellCheck
@@ -88,21 +114,30 @@ export function Composer({
               return;
             }
 
+            if (event.key === "Escape" && busy) {
+              event.preventDefault();
+              onStop();
+              return;
+            }
+
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
               !event.nativeEvent.isComposing
             ) {
               event.preventDefault();
-              onSubmit();
+              requestSubmit();
             }
           }}
         />
 
         <div className="composer__footer">
           <p className="composer__status" id="composer-status">
-            <span className="status-dot status-dot--idle" aria-hidden="true" />
-            <span>No model connected — replies are scaffold text</span>
+            <span
+              className={`status-dot ${busy ? "status-dot--busy" : canGenerate ? "status-dot--ok" : "status-dot--idle"}`}
+              aria-hidden="true"
+            />
+            <span>{statusText}</span>
           </p>
 
           <div className="composer__actions">
@@ -116,16 +151,35 @@ export function Composer({
               </span>
             ) : null}
 
-            <button
-              type="submit"
-              className="send"
-              disabled={!canSend}
-              aria-label="Send message"
-              aria-keyshortcuts="Enter"
-              title={canSend ? "Send (Enter)" : "Type a message to send"}
-            >
-              <Icon name="arrow-up" size={17} />
-            </button>
+            {busy ? (
+              <button
+                type="button"
+                className="send send--stop"
+                onClick={onStop}
+                aria-label="Stop generating"
+                aria-keyshortcuts="Escape"
+                title="Stop (Esc)"
+              >
+                <Icon name="stop" size={14} />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="send"
+                disabled={!canSend}
+                aria-label="Send message"
+                aria-keyshortcuts="Enter"
+                title={
+                  canGenerate
+                    ? canSend
+                      ? "Send (Enter)"
+                      : "Type a message to send"
+                    : "Load a model to send"
+                }
+              >
+                <Icon name="arrow-up" size={17} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -138,7 +192,7 @@ export function Composer({
       ) : null}
 
       <p className="composer__help" id="composer-help">
-        Enter to send · Shift + Enter for a new line · Ctrl + L to focus
+        Enter to send · Shift + Enter for a new line · Esc to stop · Ctrl + L to focus
       </p>
     </form>
   );

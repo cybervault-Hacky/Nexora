@@ -1,27 +1,44 @@
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { MAX_MESSAGE_LENGTH, type ComposerError } from "../features/chat/chat";
 
-function render(value: string, error: ComposerError | null = null): string {
+interface RenderOptions {
+  value?: string;
+  error?: ComposerError | null;
+  busy?: boolean;
+  canGenerate?: boolean;
+}
+
+function renderOptions({
+  value = "",
+  error = null,
+  busy = false,
+  canGenerate = true,
+}: RenderOptions = {}): string {
   return renderToStaticMarkup(
     <Composer
       value={value}
       error={error}
       textareaRef={createRef<HTMLTextAreaElement>()}
+      busy={busy}
+      canGenerate={canGenerate}
       onChange={() => undefined}
       onSubmit={() => undefined}
+      onStop={() => undefined}
       onDismissError={() => undefined}
     />,
   );
 }
 
-function sendButton(html: string): string {
-  const match = html.match(/<button[^>]*class="send"[^>]*>/);
+function button(html: string, kind: "send" | "send send--stop"): string {
+  const match = html.match(new RegExp(`<button[^>]*class="${kind}"[^>]*>`));
 
   if (!match) {
-    throw new Error("send button not rendered");
+    throw new Error(`${kind} button not rendered`);
   }
 
   return match[0];
@@ -29,30 +46,40 @@ function sendButton(html: string): string {
 
 describe("Composer", () => {
   it("disables send for an empty draft", () => {
-    expect(sendButton(render(""))).toContain("disabled");
+    expect(button(renderOptions(), "send")).toContain("disabled");
   });
 
   it("disables send for a whitespace-only draft", () => {
-    expect(sendButton(render("   \n\t"))).toContain("disabled");
+    expect(button(renderOptions({ value: "   \n\t" }), "send")).toContain("disabled");
   });
 
   it("enables send when there is text", () => {
-    expect(sendButton(render("hello"))).not.toContain("disabled");
+    expect(button(renderOptions({ value: "hello" }), "send")).not.toContain("disabled");
+  });
+
+  it("disables send and explains itself when no model is loaded", () => {
+    const html = renderOptions({ value: "hello", canGenerate: false });
+
+    expect(button(html, "send")).toContain("disabled");
+    expect(html).toContain("Load a model to send");
+    expect(html).toContain("No model loaded");
   });
 
   it("disables send past the length limit and shows the counter", () => {
-    const html = render("a".repeat(MAX_MESSAGE_LENGTH + 1));
+    const html = renderOptions({ value: "a".repeat(MAX_MESSAGE_LENGTH + 1) });
 
-    expect(sendButton(html)).toContain("disabled");
+    expect(button(html, "send")).toContain("disabled");
     expect(html).toContain("composer__counter--danger");
   });
 
   it("hides the counter for short messages", () => {
-    expect(render("hello")).not.toContain("composer__counter");
+    expect(renderOptions({ value: "hello" })).not.toContain("composer__counter");
   });
 
   it("surfaces an error accessibly", () => {
-    const html = render("", { code: "empty", message: "Enter a message before sending." });
+    const html = renderOptions({
+      error: { code: "empty", message: "Enter a message before sending." },
+    });
 
     expect(html).toContain('role="alert"');
     expect(html).toContain("Enter a message before sending.");
@@ -60,11 +87,99 @@ describe("Composer", () => {
     expect(html).toContain("composer--error");
   });
 
+  it("replaces send with a stop control while streaming", () => {
+    const html = renderOptions({ value: "", busy: true });
+
+    expect(html).toContain('aria-label="Stop generating"');
+    expect(html).toContain("Generating on this machine");
+    expect(html).not.toContain('aria-label="Send message"');
+  });
+
+  it("never renders a fabricated model message", () => {
+    const html = renderOptions({ value: "" });
+
+    expect(html).not.toContain("Scaffold");
+    expect(html).not.toContain("demo reply");
+  });
+
   it("has no attachment, microphone, or model-switcher controls", () => {
-    const html = render("hello");
+    const html = renderOptions({ value: "hello" });
 
     expect(html).not.toContain("attach");
     expect(html).not.toContain("microphone");
     expect(html).not.toContain("model-picker");
+  });
+
+});
+
+describe("Composer interaction", () => {
+  function setup({ busy = false, canGenerate = true, value = "hello" } = {}) {
+    const onSubmit = vi.fn();
+    const onStop = vi.fn();
+    const onChange = vi.fn();
+
+    render(
+      <Composer
+        value={value}
+        error={null}
+        textareaRef={createRef<HTMLTextAreaElement>()}
+        busy={busy}
+        canGenerate={canGenerate}
+        onChange={onChange}
+        onSubmit={onSubmit}
+        onStop={onStop}
+        onDismissError={() => undefined}
+      />,
+    );
+
+    return { onSubmit, onStop, onChange, user: userEvent.setup() };
+  }
+
+  it("submits with Enter and not with Shift+Enter", async () => {
+    const { onSubmit, user } = setup();
+
+    await user.type(screen.getByLabelText("Message Nexora"), "{Enter}");
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox")).toBeTruthy();
+
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends from the send button", async () => {
+    const { onSubmit, user } = setup();
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops with Escape while generating", async () => {
+    const { onStop, user } = setup({ busy: true, value: "" });
+
+    await user.type(screen.getByLabelText("Message Nexora"), "{Escape}");
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops from the stop button", async () => {
+    const { onStop, user } = setup({ busy: true, value: "" });
+
+    await user.click(screen.getByRole("button", { name: "Stop generating" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot send while the model is unavailable", async () => {
+    const { onSubmit, user } = setup({ canGenerate: false });
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.type(screen.getByLabelText("Message Nexora"), "{Enter}");
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("reports every keystroke to the owner", async () => {
+    const { onChange, user } = setup({ value: "" });
+
+    await user.type(screen.getByLabelText("Message Nexora"), "ab");
+    expect(onChange).toHaveBeenCalled();
   });
 });

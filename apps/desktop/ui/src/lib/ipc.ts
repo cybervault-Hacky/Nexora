@@ -1,15 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+/** Types shared with the Rust inference layer. Keep in sync with `inference/mod.rs`. */
 
-/**
- * Engine states the interface can render. `ready` is part of the contract so
- * the UI can consume it unchanged when the supervisor lands, but the Rust core
- * in this build only ever returns `not_connected`.
- */
-export type EngineState = "not_connected" | "ready";
+export type EngineState =
+  | "not_configured"
+  | "stopped"
+  | "loading"
+  | "ready"
+  | "generating"
+  | "error";
 
 export interface EngineStatus {
   state: EngineState;
-  runtime: string;
+  runtime: string | null;
   model: string | null;
   detail: string;
 }
@@ -18,6 +19,69 @@ export interface AppStatus {
   name: string;
   version: string;
   engine: EngineStatus;
+  modelPath: string | null;
+  runtimePath: string | null;
+  contextSize: number;
+}
+
+export interface Settings {
+  modelPath: string | null;
+  runtimePath: string | null;
+  contextSize: number;
+}
+
+export interface ModelInfo {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+  sizeGib: number;
+  ggufVersion: number;
+  tensorCount: number;
+  estimatedMinRamGib: number;
+  fitsAvailableRam: boolean | null;
+  warnings: string[];
+}
+
+export interface RuntimeInfo {
+  path: string;
+  versionLine: string;
+  /** False when the executable does not report the llama.cpp build in docs/phase-2. */
+  pinnedBuildMatched: boolean;
+}
+
+export interface SystemInfo {
+  totalRamGib: number | null;
+  availableRamGib: number | null;
+  platform: string;
+}
+
+export interface ChatTurn {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface GenerateRequestPayload {
+  requestId: string;
+  messages: ChatTurn[];
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface GenerationEvent {
+  type: "started" | "delta";
+  requestId: string;
+  text?: string;
+}
+
+export interface GenerationOutcome {
+  requestId: string;
+  finishReason: string | null;
+  cancelled: boolean;
+}
+
+export interface InferenceError {
+  code: string;
+  message: string;
 }
 
 /** True only inside the Tauri webview, never in a plain browser tab. */
@@ -27,37 +91,28 @@ export function isDesktopShell(): boolean {
   );
 }
 
-/** Single source of truth for "is inference usable right now?". */
 export function isEngineReady(status: AppStatus | null): boolean {
-  return status?.engine.state === "ready";
+  return status?.engine.state === "ready" || status?.engine.state === "generating";
 }
 
-/**
- * Status shown when the UI runs outside Tauri (browser preview or a failed
- * IPC call). It never pretends that an engine exists.
- */
-export function browserPreviewStatus(): AppStatus {
+export function isEngineBusy(status: AppStatus | null): boolean {
+  return status?.engine.state === "generating";
+}
+
+/** Status used when the UI runs in a plain browser, never pretending otherwise. */
+export function previewStatus(): AppStatus {
   return {
     name: "Nexora",
     version: "0.1.0",
     engine: {
-      state: "not_connected",
-      runtime: "llama.cpp (planned)",
+      state: "not_configured",
+      runtime: null,
       model: null,
       detail:
-        "Running outside the desktop shell. Open the Tauri build to reach the Rust core.",
+        "Browser preview. Local inference is only available in the Tauri desktop build.",
     },
+    modelPath: null,
+    runtimePath: null,
+    contextSize: 32768,
   };
-}
-
-/**
- * The only Rust call in the foundation: a read-only status snapshot.
- * It cannot read files, spawn processes, or change application state.
- */
-export async function loadAppStatus(): Promise<AppStatus> {
-  if (!isDesktopShell()) {
-    return browserPreviewStatus();
-  }
-
-  return invoke<AppStatus>("get_app_status");
 }

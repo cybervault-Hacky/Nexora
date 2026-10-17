@@ -1,13 +1,42 @@
-mod commands;
+mod inference;
+
+use tauri::Manager;
 
 /// Starts the Nexora desktop shell.
 ///
-/// The foundation build exposes exactly one command (`get_app_status`). The
-/// inference supervisor, model manager, and tool gateway are deliberately not
-/// present yet; adding them requires the review gates documented in Phase 2.
+/// The only capabilities exposed to the webview are the read-only status
+/// snapshot, model/runtime configuration with validation, engine start/stop,
+/// and one streaming generation request. There is no shell, no filesystem
+/// browsing, and no network access from the UI.
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::get_app_status])
+        .setup(|app| {
+            let config_dir = app.path().app_config_dir()?;
+            std::fs::create_dir_all(&config_dir)?;
+            app.manage(inference::InferenceState::load(config_dir));
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.try_state::<inference::InferenceState>() {
+                    if let Ok(mut supervisor) = state.supervisor.lock() {
+                        supervisor.stop();
+                    }
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            inference::commands::get_app_status,
+            inference::commands::get_system_info,
+            inference::commands::get_settings,
+            inference::commands::save_settings,
+            inference::commands::validate_model,
+            inference::commands::probe_runtime,
+            inference::commands::load_model,
+            inference::commands::unload_model,
+            inference::commands::start_generation,
+            inference::commands::cancel_generation,
+        ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { loadAppStatus, type AppStatus } from "./ipc";
+import { fetchStatus, toInferenceError } from "./inference";
+import type { AppStatus } from "./ipc";
 
 export interface AppStatusState {
   status: AppStatus | null;
@@ -9,24 +10,12 @@ export interface AppStatusState {
   reload: () => void;
 }
 
-function describeFailure(cause: unknown): string {
-  if (typeof cause === "string" && cause.trim().length > 0) {
-    return cause;
-  }
-
-  if (cause instanceof Error && cause.message.trim().length > 0) {
-    return cause.message;
-  }
-
-  return "The desktop core did not answer.";
-}
-
 /**
- * Reads the Rust status once on mount and on demand.
+ * Reads the real engine status from the Rust core.
  *
- * A failed request is kept separate from a successful `not_connected` reply:
- * the first means "we do not know", the second means "we know there is no
- * engine". Collapsing the two would let the UI claim more than it knows.
+ * A failed request is kept separate from a successful `stopped` or
+ * `not_configured` reply: the first means "unknown", the others mean "known and
+ * not ready". The UI must never blur that distinction.
  */
 export function useAppStatus(): AppStatusState {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -39,7 +28,7 @@ export function useAppStatus(): AppStatusState {
 
     setLoading(true);
 
-    loadAppStatus()
+    fetchStatus()
       .then((next) => {
         if (!active) {
           return;
@@ -54,7 +43,7 @@ export function useAppStatus(): AppStatusState {
         }
 
         setStatus(null);
-        setError(describeFailure(cause));
+        setError(toInferenceError(cause).message);
       })
       .finally(() => {
         if (active) {

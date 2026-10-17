@@ -3,41 +3,50 @@ import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { MessageList } from "./components/MessageList";
+import { ModelSetup } from "./components/ModelSetup";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useConversation } from "./features/chat/useConversation";
-import { isEngineReady } from "./lib/ipc";
+import {
+  unloadModel,
+  toInferenceError as describeFailure,
+} from "./lib/inference";
+import { isDesktopShell, isEngineReady, type AppStatus } from "./lib/ipc";
 import { isNearBottom } from "./lib/scroll";
 import { useAppStatus } from "./lib/useAppStatus";
 
-function engineChipLabel(
-  ready: boolean,
-  failed: boolean,
-): string {
-  if (failed) {
-    return "Engine status unknown";
-  }
-
-  return ready ? "Engine ready" : "Engine not connected";
-}
-
 export default function App() {
+  const { status, error: statusError, loading, reload } = useAppStatus();
+
+  const handleSettled = useCallback(() => {
+    reload();
+  }, [reload]);
+
   const {
     messages,
     draft,
     error,
+    runtimeError,
+    streaming,
     setDraft,
     dismissError,
+    dismissRuntimeError,
     submit,
+    stop,
     newChat,
-  } = useConversation();
-  const { status, error: statusError, loading, reload } = useAppStatus();
+  } = useConversation({ onSettled: handleSettled });
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [loadedStatus, setLoadedStatus] = useState<AppStatus | null>(null);
+  const [unloading, setUnloading] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+
+  const engineReady = isEngineReady(loadedStatus ?? status);
+  const engineStatus = loadedStatus ?? status;
 
   const focusComposer = useCallback(() => {
     textareaRef.current?.focus();
@@ -54,9 +63,37 @@ export default function App() {
     submit();
   }, [submit]);
 
+  const handleStatus = useCallback(
+    (next: AppStatus) => {
+      setLoadedStatus(next);
+      reload();
+    },
+    [reload],
+  );
+
+  const handleUnload = useCallback(() => {
+    setUnloading(true);
+    setEngineError(null);
+
+    void unloadModel()
+      .catch((cause: unknown) => {
+        setEngineError(describeFailure(cause).message);
+      })
+      .finally(() => {
+        setUnloading(false);
+        reload();
+      });
+  }, [reload]);
+
   useEffect(() => {
     focusComposer();
   }, [focusComposer]);
+
+  // The status returned by `load_model` is only a bridge until the next
+  // authoritative read; never let it outlive a fresh snapshot.
+  useEffect(() => {
+    setLoadedStatus(null);
+  }, [status]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -110,9 +147,12 @@ export default function App() {
     }
   }, []);
 
-  const engineReady = isEngineReady(status);
+  const desktop = isDesktopShell();
   const hasMessages = messages.length > 0;
-  const conversationTitle = hasMessages ? "Scaffold conversation" : "New conversation";
+  const engineChip = describeEngineChip(engineStatus, statusError, engineReady);
+  const conversationTitle = hasMessages ? "Local conversation" : "New conversation";
+  // An unreadable status is "unknown", not "no model": never show setup then.
+  const showSetup = !engineReady && !hasMessages && statusError === null;
 
   return (
     <div className={`app ${sidebarCollapsed ? "app--collapsed" : ""}`}>
@@ -123,10 +163,12 @@ export default function App() {
       />
 
       <Sidebar
-        status={status}
+        status={engineStatus}
         statusFailed={statusError !== null}
         collapsed={sidebarCollapsed}
         onNewChat={startNewChat}
+        onUnload={desktop ? handleUnload : undefined}
+        unloading={unloading}
       />
 
       <main className="workspace" aria-label="Conversation workspace">
@@ -137,22 +179,16 @@ export default function App() {
           </div>
 
           <div className="conversation-header__chips">
-            <span className="chip" title="Inference is designed to run on this machine">
+            <span className="chip" title="Inference runs on this machine">
               <Icon name="cloud-off" size={13} />
               Local-only
             </span>
             <span
-              className={`chip ${
-                statusError
-                  ? "chip--unknown"
-                  : engineReady
-                    ? "chip--ok"
-                    : "chip--warning"
-              }`}
-              title={statusError ?? undefined}
+              className={`chip ${engineChip.tone}`}
+              title={statusError ?? engineStatus?.engine.detail}
             >
               <span className="status-dot status-dot--sm" aria-hidden="true" />
-              {engineChipLabel(engineReady, statusError !== null)}
+              {engineChip.label}
             </span>
           </div>
         </header>
@@ -162,7 +198,7 @@ export default function App() {
             <Icon name="alert" size={14} />
             <span>
               Could not read the engine status from the desktop core. It is not
-              known whether an engine is available.
+              known whether a model is available.
             </span>
             <button
               type="button"
@@ -175,13 +211,81 @@ export default function App() {
           </div>
         ) : null}
 
-        <div
-          className="conversation"
-          ref={scrollRef}
-          onScroll={handleScroll}
-        >
+        {engineError ? (
+          <div className="notice notice--danger" role="alert">
+            <Icon name="alert" size={14} />
+            <span>{engineError}</span>
+            <button
+              type="button"
+              className="notice__action"
+              onClick={() => setEngineError(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {runtimeError ? (
+          <div className="notice notice--danger" role="alert">
+            <Icon name="alert" size={14} />
+            <span>{runtimeError}</span>
+            <button
+              type="button"
+              className="notice__action"
+              onClick={dismissRuntimeError}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        <div className="conversation" ref={scrollRef} onScroll={handleScroll}>
           {hasMessages ? (
             <MessageList messages={messages} />
+          ) : showSetup ? (
+            <div className="empty">
+              <div className="empty__mark" aria-hidden="true">
+                <Icon name="cloud-off" size={30} />
+              </div>
+
+              {desktop ? (
+                <>
+                  <h1 className="empty__title">Bring your own model.</h1>
+                  <p className="empty__copy">
+                    Nexora runs entirely on this PC. Point it at a llama.cpp build
+                    and a GGUF model you already have. Nothing is downloaded and no
+                    prompt leaves the machine.
+                  </p>
+
+                  <ModelSetup status={engineStatus} onStatus={handleStatus} />
+                </>
+              ) : (
+                <>
+                  <h1 className="empty__title">Desktop app required.</h1>
+                  <p className="empty__copy">
+                    This is the browser preview of the Nexora interface. Local
+                    inference needs the Tauri desktop build, because the engine is
+                    a separate process on your machine that a browser tab cannot
+                    start or reach.
+                  </p>
+                  <p className="empty__note">
+                    The window itself is the real UI — same components, same
+                    layout, and the same honest engine reporting.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : statusError ? (
+            <div className="empty">
+              <div className="empty__mark" aria-hidden="true">
+                <Icon name="alert" size={28} />
+              </div>
+              <h1 className="empty__title">Engine state unavailable.</h1>
+              <p className="empty__copy">
+                The desktop core did not answer, so Nexora cannot tell whether a
+                model is loaded. It will not guess — retry the status read above.
+              </p>
+            </div>
           ) : (
             <EmptyState
               onPick={(prompt) => {
@@ -197,11 +301,42 @@ export default function App() {
           value={draft}
           error={error}
           textareaRef={textareaRef}
+          busy={streaming}
+          canGenerate={engineReady}
           onChange={setDraft}
           onSubmit={handleSubmit}
+          onStop={stop}
           onDismissError={dismissError}
         />
       </main>
     </div>
   );
+}
+
+/** One place that turns engine state into a label and a tone. */
+function describeEngineChip(
+  status: AppStatus | null,
+  statusError: string | null,
+  ready: boolean,
+): { label: string; tone: string } {
+  if (statusError) {
+    return { label: "Engine status unknown", tone: "chip--unknown" };
+  }
+
+  switch (status?.engine.state) {
+    case "generating":
+      return { label: "Generating", tone: "chip--live" };
+    case "loading":
+      return { label: "Loading model", tone: "chip--live" };
+    case "ready":
+      return ready
+        ? { label: "Engine ready", tone: "chip--ok" }
+        : { label: "Engine starting", tone: "chip--live" };
+    case "error":
+      return { label: "Engine failed", tone: "chip--unknown" };
+    case "stopped":
+      return { label: "Engine stopped", tone: "chip--warning" };
+    default:
+      return { label: "No model loaded", tone: "chip--warning" };
+  }
 }

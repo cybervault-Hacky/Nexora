@@ -30,8 +30,8 @@ export function EmptyState({ onPick }: EmptyStateProps) {
       <h1 className="empty__title">Build something real.</h1>
       <p className="empty__copy">
         Nexora is a desktop studio for planning, writing, and checking code with a
-        model that runs on your machine. This first build contains the interface
-        shell only — the local engine is not connected yet.
+        model loaded from your own machine. Prompts stay on this device, and
+        nothing you type is sent to a cloud service.
       </p>
 
       <div className="empty__suggestions" aria-label="Example prompts">

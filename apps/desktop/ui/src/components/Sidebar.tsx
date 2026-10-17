@@ -8,6 +8,8 @@ interface SidebarProps {
   statusFailed: boolean;
   collapsed: boolean;
   onNewChat: () => void;
+  onUnload?: () => void;
+  unloading?: boolean;
 }
 
 export function Sidebar({
@@ -15,6 +17,8 @@ export function Sidebar({
   statusFailed,
   collapsed,
   onNewChat,
+  onUnload,
+  unloading = false,
 }: SidebarProps) {
   return (
     <aside id="sidebar" className="sidebar" aria-label="Workspace">
@@ -52,11 +56,13 @@ export function Sidebar({
           status={status}
           failed={statusFailed}
           collapsed={collapsed}
+          onUnload={onUnload}
+          unloading={unloading}
         />
         <div className="sidebar__legal">
           <span>Nexora {status?.version ?? "0.1.0"}</span>
           <span aria-hidden="true">·</span>
-          <span>Scaffold build</span>
+          <span>Runs on device</span>
         </div>
       </div>
     </aside>

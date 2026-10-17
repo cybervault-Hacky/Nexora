@@ -17,7 +17,6 @@ export function shouldIgnoreSubmission(
 
   const elapsed = now - lastSubmitAt;
 
-  // A backwards clock is not a reason to lock the composer forever.
   if (elapsed < 0) {
     return false;
   }
@@ -25,20 +24,66 @@ export function shouldIgnoreSubmission(
   return elapsed < guardMs;
 }
 
-/**
- * Appends a completed turn only when it belongs to the conversation that is
- * still on screen. A reply produced for an earlier conversation can never
- * leak into a new one.
- */
-export function appendForConversation(
-  current: ChatMessage[],
-  additions: ChatMessage[],
-  capturedConversationId: string,
-  activeConversationId: string,
+/** Immutably replaces the message with `id`, if it exists. */
+export function patchMessage(
+  messages: ChatMessage[],
+  id: string,
+  patch: Partial<ChatMessage>,
 ): ChatMessage[] {
-  if (capturedConversationId !== activeConversationId || additions.length === 0) {
-    return current;
+  const index = messages.findIndex((message) => message.id === id);
+
+  if (index === -1) {
+    return messages;
   }
 
-  return [...current, ...additions];
+  const current = messages[index];
+  const next = { ...current, ...patch } as ChatMessage;
+
+  if (next === current) {
+    return messages;
+  }
+
+  const copy = messages.slice();
+  copy[index] = next;
+
+  return copy;
+}
+
+/**
+ * Appends streamed text to one assistant reply.
+ *
+ * Returns the same array when the target is gone, so a delta that arrives after
+ * a new chat cannot resurrect an old reply.
+ */
+export function appendDelta(
+  messages: ChatMessage[],
+  id: string,
+  text: string,
+): ChatMessage[] {
+  const current = messages.find((message) => message.id === id);
+
+  if (!current || current.state !== "streaming") {
+    return messages;
+  }
+
+  return patchMessage(messages, id, { content: current.content + text });
+}
+
+export function removeMessage(
+  messages: ChatMessage[],
+  id: string,
+): ChatMessage[] {
+  const next = messages.filter((message) => message.id !== id);
+
+  return next.length === messages.length ? messages : next;
+}
+
+/**
+ * True when a stream result still belongs to the conversation on screen.
+ */
+export function isCurrentConversation(
+  capturedConversationId: string,
+  activeConversationId: string,
+): boolean {
+  return capturedConversationId === activeConversationId;
 }

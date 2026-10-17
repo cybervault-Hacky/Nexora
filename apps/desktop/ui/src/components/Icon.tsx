@@ -8,7 +8,8 @@ export type IconName =
   | "maximize"
   | "minimize"
   | "panel-left"
-  | "plus";
+  | "plus"
+  | "stop";
 
 const ICONS: Record<IconName, ReactElement> = {
   alert: (
@@ -51,6 +52,7 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="M5.5 12h13" />
     </>
   ),
+  stop: <rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor" stroke="none" />,
 };
 
 interface IconProps {
