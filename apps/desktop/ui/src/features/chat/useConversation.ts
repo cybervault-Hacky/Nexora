@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelGeneration,
   generate,
@@ -79,6 +79,15 @@ export function useConversation({ onSettled }: Options = {}): ConversationContro
   const conversationRef = useRef(createId());
   const lastSubmitAtRef = useRef(0);
   const sessionRef = useRef<StreamSession | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const commit = useCallback((next: ChatMessage[]) => {
     messagesRef.current = next;
@@ -141,7 +150,7 @@ export function useConversation({ onSettled }: Options = {}): ConversationContro
     const isLive = () => sessionRef.current === session;
 
     const settle = (outcome: GenerationOutcome) => {
-      if (!isLive()) {
+      if (!mountedRef.current || !isLive()) {
         return;
       }
 
@@ -184,7 +193,7 @@ export function useConversation({ onSettled }: Options = {}): ConversationContro
     const fail = (cause: unknown) => {
       const failure = toInferenceError(cause);
 
-      if (!isLive()) {
+      if (!mountedRef.current || !isLive()) {
         return;
       }
 
@@ -242,8 +251,14 @@ export function useConversation({ onSettled }: Options = {}): ConversationContro
       } finally {
         if (sessionRef.current === session) {
           sessionRef.current = null;
-          setStreaming(false);
-          onSettled?.();
+
+          // A generation can outlive the component that started it. Writing
+          // state is a no-op after unmount, but `onSettled` would still spend an
+          // IPC round trip on a tree that no longer exists.
+          if (mountedRef.current) {
+            setStreaming(false);
+            onSettled?.();
+          }
         }
       }
     })();

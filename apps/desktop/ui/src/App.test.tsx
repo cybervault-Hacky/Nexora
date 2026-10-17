@@ -49,6 +49,31 @@ afterEach(() => {
   markDesktop(false);
 });
 
+describe("shell lifecycle", () => {
+  it("removes its keyboard listener when it unmounts", () => {
+    const remove = vi.spyOn(window, "removeEventListener");
+    const add = vi.spyOn(window, "addEventListener");
+
+    statusMock.mockResolvedValue(makeStatus({ state: "not_configured" }));
+
+    const { unmount } = render(<App />);
+
+    const registered = add.mock.calls.filter(([type]) => type === "keydown");
+
+    expect(registered).toHaveLength(1);
+
+    const handler = registered[0]?.[1];
+
+    unmount();
+
+    expect(
+      remove.mock.calls.some(
+        ([type, listener]) => type === "keydown" && listener === handler,
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("browser preview", () => {
   it("says the desktop app is required instead of pretending inference works", async () => {
     statusMock.mockResolvedValue(previewStatus());

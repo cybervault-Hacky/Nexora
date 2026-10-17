@@ -378,6 +378,44 @@ describe("useConversation", () => {
     expect(result.current.messages[1]?.state).toBe("complete");
   });
 
+  it("does not call back into a tree that has unmounted", async () => {
+    const onSettled = vi.fn();
+    const run = session();
+    const { result, unmount } = renderHook(() => useConversation({ onSettled }));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("partial"));
+
+    unmount();
+
+    await act(async () => {
+      run.settle();
+      await Promise.resolve();
+    });
+
+    // `onSettled` triggers a status refresh; firing it after unmount would
+    // spend an IPC round trip on a component that no longer exists.
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it("drops a late failure after unmount", async () => {
+    const onSettled = vi.fn();
+    const run = session();
+    const { result, unmount } = renderHook(() => useConversation({ onSettled }));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    unmount();
+
+    await act(async () => {
+      run.fail({ code: "network", message: "The connection failed." });
+      await Promise.resolve();
+    });
+
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
   it("clears messages, draft, and errors on a new chat", () => {
     session();
     const { result } = renderHook(() => useConversation());
