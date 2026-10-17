@@ -93,7 +93,12 @@ mod tests {
     fn yields_only_complete_lines() {
         let mut buffer = LineBuffer::new();
 
-        assert!(buffer.push(b"data: one\npartial").is_empty());
+        // The first chunk ends with a complete line, so exactly that line is
+        // returned and the seven-byte fragment stays buffered.
+        assert_eq!(
+            buffer.push(b"data: one\npartial"),
+            vec!["data: one".to_string()]
+        );
         assert_eq!(buffer.buffered_bytes(), 7);
 
         let lines = buffer.push(b" two\n");
