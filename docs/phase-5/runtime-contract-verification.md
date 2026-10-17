@@ -157,8 +157,11 @@ process was started in an earlier shell).
 
 - A usage chunk is only emitted when `stream_options.include_usage` is set
   (Nexora never sets it and never reports token counts).
-- `--api-key-file`: one key per line, `#` comments (verified by using a key file
-  that contained a comment line), `Authorization: Bearer`.
+- `--api-key-file`: one key per line, `#` comment lines. Verified with a file
+  whose first line was a 32-byte hex key and whose second line was
+  `# a comment line`: the correct key passed authentication (the router then
+  answered 400 "model not found"), a wrong key got 401, and no key got 401.
+  `Authorization: Bearer` is the accepted header.
 - `/health` is served through the same middleware that returns 503 until the
   model is ready.
 
