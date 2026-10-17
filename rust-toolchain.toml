@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned, not "stable": a Windows build must be reproducible, and a moving
+# toolchain can change lint output mid-phase. Update deliberately, running the
+# full CI matrix before moving the pin.
+channel = "1.93.0"
 components = ["rustfmt", "clippy"]

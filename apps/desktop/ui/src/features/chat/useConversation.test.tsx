@@ -41,6 +41,7 @@ function session() {
 
   return {
     requestId: () => requestId,
+    raw: (event: GenerationEvent) => emit(event),
     send: (text: string) =>
       emit({ type: "delta", requestId, text }),
     settle: (overrides: Partial<GenerationOutcome> = {}) =>
@@ -252,6 +253,129 @@ describe("useConversation", () => {
     act(() => result.current.newChat());
 
     expect(cancelMock).toHaveBeenCalledWith(run.requestId());
+  });
+
+  it("ignores malformed and unknown channel events", () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("kept"));
+
+    expect(() => {
+      // A delta without text, an unknown variant, and an empty payload must
+      // not append "undefined" or end the stream.
+      act(() => run.raw({ type: "delta", requestId: run.requestId() } as never));
+      act(() => run.raw({ type: "finished" } as never));
+      act(() => run.raw({} as never));
+    }).not.toThrow();
+
+    expect(result.current.messages[1]?.content).toBe("kept");
+    expect(result.current.streaming).toBe(true);
+    expect(result.current.runtimeError).toBeNull();
+  });
+
+  it("drops a delta that carries another request id", () => {
+    const run = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("mine"));
+
+    act(() =>
+      run.raw({ type: "delta", requestId: "someone-else", text: " not mine" }),
+    );
+
+    expect(result.current.messages[1]?.content).toBe("mine");
+  });
+
+  it("does not ask the core to cancel when nothing is running", () => {
+    const { result } = renderHook(() => useConversation());
+
+    expect(() => act(() => result.current.stop())).not.toThrow();
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts the next prompt after a stop", async () => {
+    const first = session();
+    const { result } = renderHook(() => useConversation());
+    const clock = vi.spyOn(Date, "now");
+    const started = Date.now();
+
+    act(() => result.current.setDraft("first"));
+    act(() => result.current.submit());
+    act(() => first.send("partial"));
+    act(() => result.current.stop());
+
+    await act(async () => {
+      first.settle({ cancelled: true, finishReason: "stopped" });
+      await Promise.resolve();
+    });
+
+    expect(result.current.streaming).toBe(false);
+
+    // Past the duplicate-submission guard, as a person typing would be.
+    clock.mockReturnValue(started + 1_000);
+
+    const second = session();
+
+    act(() => result.current.setDraft("second"));
+    act(() => result.current.submit());
+
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    expect(result.current.streaming).toBe(true);
+
+    await act(async () => {
+      second.send("fresh answer");
+      second.settle();
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages).toHaveLength(4);
+    expect(result.current.messages[2]?.content).toBe("second");
+    expect(result.current.messages[3]?.content).toBe("fresh answer");
+    expect(result.current.messages[3]?.state).toBe("complete");
+  });
+
+  it("accepts a retry after a runtime failure", async () => {
+    const retry = session();
+    const { result } = renderHook(() => useConversation());
+    const clock = vi.spyOn(Date, "now");
+    const started = Date.now();
+
+    generateMock.mockRejectedValueOnce({
+      code: "not_running",
+      message: "Load a local model before sending a message.",
+    });
+
+    act(() => result.current.setDraft("first"));
+    act(() => result.current.submit());
+
+    await waitFor(() => {
+      expect(result.current.runtimeError).toContain("Load a local model");
+    });
+
+    expect(result.current.streaming).toBe(false);
+    expect(result.current.messages).toHaveLength(1);
+
+    clock.mockReturnValue(started + 1_000);
+
+    act(() => result.current.setDraft("second"));
+    act(() => result.current.submit());
+
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    expect(result.current.streaming).toBe(true);
+    expect(result.current.runtimeError).toBeNull();
+
+    await act(async () => {
+      retry.settle();
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1]?.state).toBe("complete");
   });
 
   it("clears messages, draft, and errors on a new chat", () => {
