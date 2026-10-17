@@ -195,7 +195,7 @@ pinned to commit SHAs, no packaging or upload step:
 | `39074401878`, `39074591311` | temporary diagnostics: retrieved fmt diff and clippy findings as annotations |
 | `39074790912` | frontend **success**; fmt/check/clippy **pass**; `cargo test` **failure** (D6) on both platforms |
 | `39075293782` | diagnostics: **48/48 Linux, 45/45 Windows** after the test fix |
-| final run on this commit | all three jobs **success** |
+| `39075598548` | all three jobs **success**: frontend, Linux Rust (fmt, check, clippy, 48 tests), Windows (check, 45 tests) |
 
 The sandbox cannot read Actions log blobs (they are served from a host it cannot
 reach), so a temporary workflow republished failing output as check-run
