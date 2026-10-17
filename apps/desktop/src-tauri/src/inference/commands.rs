@@ -1,8 +1,9 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tokio::sync::Notify;
 
 use super::error::{InferenceError, InferenceResult};
@@ -115,9 +116,42 @@ pub async fn load_model(
             .ok_or_else(|| InferenceError::spawn_failed("The engine did not expose a port."))?
     };
 
-    match process::wait_for_health(port, process::LOAD_TIMEOUT).await {
-        Ok(()) => Ok(state.status(version).await),
-        Err(error) => {
+    let deadline = Instant::now() + process::LOAD_TIMEOUT;
+
+    loop {
+        if process::health_ok(port).await {
+            return Ok(state.status(version.clone()).await);
+        }
+
+        // A runtime that exits during startup must fail at once with its own
+        // message. Without this check a missing or unsupported model looked
+        // like a three-minute load and then a generic timeout.
+        let failure = {
+            let mut supervisor = match state.supervisor.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            supervisor.poll_failure()
+        };
+
+        if let Some(reason) = failure {
+            let message = format!("The local engine could not load the model. {reason}");
+
+            let mut supervisor = match state.supervisor.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            supervisor.stop();
+            // Remember the human-readable reason so the sidebar reports a real
+            // failure until the next successful load.
+            supervisor.last_error = Some(message.clone());
+
+            return Err(InferenceError::load_failed(message));
+        }
+
+        if Instant::now() >= deadline {
             let diagnostics = {
                 let mut supervisor = match state.supervisor.lock() {
                     Ok(guard) => guard,
@@ -126,17 +160,25 @@ pub async fn load_model(
 
                 let diagnostics = supervisor.diagnostics();
                 supervisor.stop();
-                // Remember the human-readable reason so the sidebar can report
-                // a real failure until the next successful load.
-                supervisor.last_error = Some(error.message.clone());
+
+                supervisor.last_error = Some(
+                    "The engine did not finish loading the model in time. The model may be too large for this machine."
+                        .to_string(),
+                );
 
                 diagnostics
             };
 
-            let message = format!("{} {}", error.message, diagnostics).trim().to_string();
+            let message = format!(
+                "The engine did not finish loading the model in time. The model may be too large for this machine. {diagnostics}"
+            )
+            .trim()
+            .to_string();
 
-            Err(InferenceError::new(error.code, message))
+            return Err(InferenceError::load_failed(message));
         }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -228,12 +270,10 @@ pub async fn start_generation(
 
     state.finish_generation(&request.request_id);
 
-    if let Ok(result) = &outcome {
-        if result.cancelled {
-            client::release_slot(port, &key).await;
-        }
-    }
-
+    // Cancellation does not need a request here: dropping the response closes
+    // the connection, and b11714 stops generating for that slot on its own.
+    // `POST /slots/{id}?action=erase` would return 501 because Nexora does not
+    // start the runtime with `--slot-save-path`.
     outcome
 }
 

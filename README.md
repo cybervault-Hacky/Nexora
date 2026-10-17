@@ -19,7 +19,7 @@ What works in this build:
 - No model or runtime is downloaded by the app. Nothing is bundled. Paths are typed deliberately by the user and validated (GGUF magic/version/size, executable header) before launch.
 - Duplicate submissions are rejected by a 350 ms guard; new chat clears messages, draft, and errors and cancels any in-flight request; scroll follow pauses while you read earlier output.
 - Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L` focus, `Ctrl+N` new chat, `Ctrl+B` sidebar, keyboard focus, reduced motion, and accessible labels.
-- 85 unit, hook, and DOM interaction tests (`pnpm test`).
+- 87 unit, hook, and DOM interaction tests (`pnpm test`).
 
 Quick start (Windows, after installing the prerequisites in the app README):
 
@@ -28,7 +28,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Linux verification performed here: `pnpm typecheck`, `pnpm test` (85/85), and `pnpm build` pass. `cargo` is unavailable in this environment, so the Rust crate, the streaming client, and the Windows executable are **not** compiled or runtime-verified. See the Phase 5 report for the exact commands, results, and unverified surface.
+Verification performed here: `pnpm typecheck`, `pnpm test` (87/87), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, and startup-failure behaviour; four contract defects were fixed as a result. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
 
 ## Phase 5 deliverables
 

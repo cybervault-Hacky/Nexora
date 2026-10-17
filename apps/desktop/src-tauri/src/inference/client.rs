@@ -119,12 +119,14 @@ pub async fn stream_chat(
     let status = response.status();
 
     if !status.is_success() {
-        let detail = response.text().await.unwrap_or_default();
-        let snippet: String = detail.chars().take(300).collect();
+        let body = response.text().await.unwrap_or_default();
+        let detail: String =
+            error_message(&body).unwrap_or_else(|| body.chars().take(300).collect());
 
-        return Err(InferenceError::load_failed(format!(
-            "The local engine rejected the request ({status}). {snippet}"
-        )));
+        return Err(InferenceError::new(
+            status_error_code(status.as_u16()),
+            format!("The local engine rejected the request ({status}): {detail}"),
+        ));
     }
 
     let _ = on_event.send(GenerationEvent::Started {
@@ -218,6 +220,13 @@ pub async fn stream_chat(
     })
 }
 
+/// Builds the "user stopped it" outcome.
+///
+/// Cancellation needs no slot cleanup: llama.cpp notices the dropped connection
+/// (`req.should_stop`) and cancels the task itself. `POST /slots/0?action=erase`
+/// is **not** available here — b11714 rejects every slot action with 501 unless
+/// the server was started with `--slot-save-path` (`server-context.cpp`,
+/// `post_slots`), and Nexora deliberately does not enable slot files.
 fn cancelled_outcome(request_id: &str) -> GenerationOutcome {
     GenerationOutcome {
         request_id: request_id.to_string(),
@@ -226,22 +235,40 @@ fn cancelled_outcome(request_id: &str) -> GenerationOutcome {
     }
 }
 
-/// Best-effort slot cleanup after a stop. Failure is ignored: the connection
-/// drop is what actually stops generation.
-pub async fn release_slot(port: u16, key: &str) {
-    let Ok(client) = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()
-    else {
-        return;
-    };
+/// Maps an HTTP rejection to a stable UI-facing code.
+///
+/// The runtime answers 401 for a bad session key, 503 while the model is still
+/// loading, and 400 for a malformed request. Treating all of them as one
+/// generic failure hid the real cause from the user.
+pub fn status_error_code(status: u16) -> &'static str {
+    match status {
+        401 | 403 => "auth_failed",
+        503 => "not_ready",
+        400 | 404 | 422 => "invalid_request",
+        _ => "engine_rejected",
+    }
+}
 
-    let _ = client
-        .post(format!("http://127.0.0.1:{port}/slots/0?action=erase"))
-        .bearer_auth(key)
-        .send()
-        .await;
+/// Pulls `error.message` out of the runtime's OpenAI-compatible error body.
+///
+/// Real bodies observed from a locally built b11714 server:
+/// `{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}`
+/// and `{"error":{"code":400,"message":"model 'local' not found","type":"invalid_request_error"}}`.
+pub fn error_message(body: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        error: ErrorBody,
+    }
+
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        message: String,
+    }
+
+    serde_json::from_str::<Envelope>(body)
+        .ok()
+        .map(|envelope| envelope.error.message)
+        .filter(|message| !message.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -286,6 +313,41 @@ mod tests {
     #[test]
     fn tolerates_an_empty_choice_list() {
         assert_eq!(extract_delta(r#"{"choices":[]}"#), DeltaPiece::default());
+    }
+
+    /// Bodies copied from a locally built b11714 server.
+    const REAL_401: &str = r#"{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}"#;
+    const REAL_400: &str = r#"{"error":{"code":400,"message":"model 'local' not found","type":"invalid_request_error"}}"#;
+
+    #[test]
+    fn maps_http_rejections_to_specific_codes() {
+        assert_eq!(status_error_code(401), "auth_failed");
+        assert_eq!(status_error_code(403), "auth_failed");
+        assert_eq!(status_error_code(503), "not_ready");
+        assert_eq!(status_error_code(400), "invalid_request");
+        assert_eq!(status_error_code(500), "engine_rejected");
+    }
+
+    #[test]
+    fn reads_the_runtime_error_message() {
+        assert_eq!(error_message(REAL_401).as_deref(), Some("Invalid API Key"));
+        assert_eq!(
+            error_message(REAL_400).as_deref(),
+            Some("model 'local' not found")
+        );
+    }
+
+    #[test]
+    fn falls_back_when_the_body_is_not_json() {
+        assert_eq!(error_message("<html>nope</html>"), None);
+        assert_eq!(error_message(r#"{"error":{"message":"  "}}"#), None);
+    }
+
+    #[test]
+    fn the_401_body_is_not_reported_as_a_model_failure() {
+        // Regression: every rejection used to be "load_failed", which hid an
+        // auth problem behind a model message.
+        assert_ne!(status_error_code(401), "load_failed");
     }
 
     #[test]

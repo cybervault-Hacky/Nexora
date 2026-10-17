@@ -119,6 +119,25 @@ describe("desktop status routing", () => {
     expect(screen.queryByText("Build something real.")).toBeNull();
   });
 
+  it("reports an engine failure with the core's own words", async () => {
+    markDesktop();
+    statusMock.mockResolvedValue(
+      makeStatus({
+        state: "error",
+        detail: "The local engine stopped unexpectedly (exit status: 1).",
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Engine failed")).toBeTruthy();
+    expect(
+      screen.getByTitle(/stopped unexpectedly \(exit status: 1\)/),
+    ).toBeTruthy();
+    expect(screen.queryByText("Engine ready")).toBeNull();
+    expect(screen.queryByText("Build something real.")).toBeNull();
+  });
+
   it("never confuses an IPC failure with a healthy but model-less engine", async () => {
     markDesktop();
     statusMock.mockRejectedValue({

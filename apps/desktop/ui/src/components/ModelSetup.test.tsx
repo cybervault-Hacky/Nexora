@@ -235,6 +235,46 @@ describe("ModelSetup", () => {
     expect(onStatus).not.toHaveBeenCalled();
   });
 
+  it("refreshes the engine status when a load fails after saving", async () => {
+    saveMock.mockResolvedValue({
+      modelPath: "D:\\m\\model.gguf",
+      runtimePath: "C:\\llama-server.exe",
+      contextSize: 32768,
+    });
+    loadMock.mockRejectedValue({
+      code: "load_failed",
+      message:
+        "The local engine could not load the model. The local engine stopped unexpectedly (exit status: 1).",
+    });
+
+    const onRefresh = vi.fn();
+    const onStatus = vi.fn();
+    render(
+      <ModelSetup
+        status={notConfigured}
+        onStatus={onStatus}
+        onRefresh={onRefresh}
+      />,
+    );
+    const user = userEvent.setup();
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Runtime executable" }),
+      "C:\\llama-server.exe",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Model file (.gguf)" }),
+      "D:\\m\\model.gguf",
+    );
+    await user.click(screen.getByRole("button", { name: "Save and load model" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("could not load the model");
+    expect(onRefresh).toHaveBeenCalled();
+    // A failed load must never be reported as a ready engine.
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
   it("never renders a fake success state", async () => {
     setup();
 

@@ -138,8 +138,10 @@ apps/desktop/
 - Only one generation may run at a time. A second send while streaming is
   refused with a typed `busy` error; it is never queued.
 - **Stop** calls `cancel_generation` with the request id. The Rust client wakes
-  from its wait, drops the HTTP stream, erases the engine's slot cache, and
-  resolves the promise with `cancelled: true`. The partial text stays visible
+  from its wait and drops the HTTP stream; llama.cpp notices the closed
+  connection and stops the task (`POST /slots/0?action=erase` is **not** used —
+  b11714 rejects slot actions unless `--slot-save-path` is set). The promise
+  resolves with `cancelled: true`. The partial text stays visible
   and is labelled `Stopped`.
 - A submission guard rejects a second submit inside 350 ms. Each new chat
   rotates an internal conversation id so a late token or completion from the
@@ -193,7 +195,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-85 Vitest tests run in jsdom:
+87 Vitest tests run in jsdom:
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
@@ -207,9 +209,11 @@ decision and a Windows machine to verify.
 - scroll-follow logic
 
 Rust unit tests live beside the code (`cargo test`): SSE framing and
-classification, delta extraction, GGUF header validation, settings
-normalisation, memory parsing, and request validation. They have **not** been
-executed in this environment — see the Phase 5 report.
+classification, delta extraction, GGUF header validation, executable magic,
+settings normalisation, memory parsing, request validation, the `--version`
+line (captured from a real build, printed on stderr), and the mapping from HTTP
+rejections to UI error codes. They have **not** been executed in this
+environment — see the Phase 5 report.
 
 ## Known limitations
 
@@ -217,7 +221,9 @@ executed in this environment — see the Phase 5 report.
   **not** been compiled or run here; no Rust toolchain is available in this
   container. They are unverified, not proven.
 - No genuine model inference has been performed. No weights or binaries are
-  committed, and nothing is downloaded automatically.
+  committed, and nothing is downloaded automatically. A runtime binary *was*
+  built from the pinned source and its HTTP surface exercised on Linux; that
+  proves the contract, not generation. Linux runs are not Windows proof.
 - Only the documented llama.cpp `llama-server` interface is targeted
   (`/health`, `/v1/chat/completions` with SSE). Arbitrary GGUF files are not
   claimed to work: architecture support is proven only when the engine loads

@@ -257,7 +257,11 @@ export default function App() {
                     prompt leaves the machine.
                   </p>
 
-                  <ModelSetup status={engineStatus} onStatus={handleStatus} />
+                  <ModelSetup
+                    status={engineStatus}
+                    onStatus={handleStatus}
+                    onRefresh={reload}
+                  />
                 </>
               ) : (
                 <>

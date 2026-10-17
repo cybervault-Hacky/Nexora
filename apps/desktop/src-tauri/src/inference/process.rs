@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,8 @@ struct RunningServer {
     child: Child,
     port: u16,
     key: String,
+    /// Removed when the engine stops, so a session key never outlives its use.
+    key_path: PathBuf,
     stderr: Arc<Mutex<String>>,
 }
 
@@ -147,6 +149,9 @@ impl Supervisor {
         }
 
         let mut child = command.spawn().map_err(|error| {
+            // The key file is useless without the process that reads it.
+            let _ = std::fs::remove_file(&key_path);
+
             InferenceError::spawn_failed(format!(
                 "The engine could not be started. Check that the runtime path is correct. ({error})"
             ))
@@ -189,6 +194,7 @@ impl Supervisor {
             child,
             port,
             key,
+            key_path,
             stderr,
         });
 
@@ -199,7 +205,26 @@ impl Supervisor {
         if let Some(mut server) = self.running.take() {
             let _ = server.child.kill();
             let _ = server.child.wait();
+            let _ = std::fs::remove_file(&server.key_path);
         }
+    }
+
+    /// `Some(reason)` once the engine is no longer running.
+    ///
+    /// Loading is bounded by wall-clock time in the caller, but a runtime that
+    /// dies during startup must fail immediately with its own words instead of
+    /// looking like a three-minute load. `is_running` records the exit status
+    /// and the stderr tail, so the reason is already human-readable here.
+    pub fn poll_failure(&mut self) -> Option<String> {
+        if self.is_running() {
+            return None;
+        }
+
+        Some(
+            self.last_error
+                .clone()
+                .unwrap_or_else(|| "The local engine stopped before it was ready.".to_string()),
+        )
     }
 
     /// Bounded tail of engine output, for a readable failure message.
@@ -311,17 +336,12 @@ pub fn probe_runtime(runtime_path: &str) -> InferenceResult<RuntimeInfo> {
     })?;
 
     let stdout = child.stdout.take();
-    let (sender, receiver) = mpsc::channel::<String>();
+    let stderr = child.stderr.take();
+    let (sender, receiver) = mpsc::channel::<(Stream, String)>();
 
-    std::thread::spawn(move || {
-        let mut text = String::new();
-
-        if let Some(mut pipe) = stdout {
-            let _ = pipe.take(STDERR_CAP).read_to_string(&mut text);
-        }
-
-        let _ = sender.send(text);
-    });
+    drain_pipe(stdout, Stream::Stdout, sender.clone());
+    drain_pipe(stderr, Stream::Stderr, sender.clone());
+    drop(sender);
 
     let deadline = Instant::now() + Duration::from_secs(5);
 
@@ -347,24 +367,81 @@ pub fn probe_runtime(runtime_path: &str) -> InferenceResult<RuntimeInfo> {
         }
     }
 
-    let text = receiver
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap_or_default();
+    // Both pipes are read concurrently: draining only stdout would leave the
+    // version text unread, and draining only stderr would risk a blocked pipe.
+    let mut captured = CapturedOutput::default();
+    let collect_deadline = Instant::now() + Duration::from_secs(2);
 
-    let version_line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("unknown build")
-        .chars()
-        .take(200)
-        .collect::<String>();
+    for _ in 0..2 {
+        let remaining = collect_deadline.saturating_duration_since(Instant::now());
+
+        match receiver.recv_timeout(remaining) {
+            Ok((Stream::Stdout, text)) => captured.stdout = text,
+            Ok((Stream::Stderr, text)) => captured.stderr = text,
+            Err(_) => break,
+        }
+    }
+
+    let version_line = first_version_line(&captured);
 
     Ok(RuntimeInfo {
         pinned_build_matched: reports_pinned_build(&version_line),
         path: runtime_path.to_string(),
         version_line,
     })
+}
+
+/// Reads one child pipe to completion on its own thread.
+///
+/// Draining only one stream would deadlock the handshake as soon as the other
+/// pipe filled, so both are consumed concurrently.
+fn drain_pipe<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    stream: Stream,
+    sender: mpsc::Sender<(Stream, String)>,
+) {
+    std::thread::spawn(move || {
+        let mut text = String::new();
+
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.take(STDERR_CAP).read_to_string(&mut text);
+        }
+
+        let _ = sender.send((stream, text));
+    });
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Default)]
+pub struct CapturedOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Picks the build line out of the runtime's output.
+///
+/// `llama-server --version` writes to **stderr** at b11714
+/// (`llama_print_build_info(version)` defaults to `stderr`), which was verified
+/// by running the binary: stdout was empty and stderr held
+/// `version: 0.7.0-dev (build 11714, commit c0fd786...)`. Reading stdout alone
+/// reported "unknown build" for a perfectly good runtime, so stderr is
+/// preferred and stdout is kept as a fallback for other builds.
+pub fn first_version_line(captured: &CapturedOutput) -> String {
+    captured
+        .stderr
+        .lines()
+        .chain(captured.stdout.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("unknown build")
+        .chars()
+        .take(200)
+        .collect()
 }
 
 /// True when the version line contains the pinned build number as a whole
@@ -386,42 +463,54 @@ mod tests {
         assert!(reports_pinned_build("11714"));
     }
 
+    /// Captured verbatim from the locally built b11714 binary:
+    /// `llama-server --version` printed nothing on stdout and the build line on
+    /// stderr. Reading stdout only is what this test guards against.
+    const OBSERVED_STDERR: &str = "version: 0.7.0-dev (build 11714, commit c0fd78626405c6d9b934efef0ec7291fcc20e3d6)\nbuilt with GNU 12.2.0 for Linux x86_64\n";
+
+    #[test]
+    fn reads_the_build_line_from_stderr() {
+        let captured = CapturedOutput {
+            stdout: String::new(),
+            stderr: OBSERVED_STDERR.to_string(),
+        };
+
+        let line = first_version_line(&captured);
+
+        assert_eq!(
+            line,
+            "version: 0.7.0-dev (build 11714, commit c0fd78626405c6d9b934efef0ec7291fcc20e3d6)"
+        );
+        assert!(reports_pinned_build(&line));
+    }
+
+    #[test]
+    fn falls_back_to_stdout_for_other_builds() {
+        let captured = CapturedOutput {
+            stdout: "\nversion: 9000 (build 9000, commit deadbeef)\n".to_string(),
+            stderr: String::new(),
+        };
+
+        assert_eq!(
+            first_version_line(&captured),
+            "version: 9000 (build 9000, commit deadbeef)"
+        );
+    }
+
+    #[test]
+    fn reports_unknown_when_the_runtime_says_nothing() {
+        let captured = CapturedOutput::default();
+
+        assert_eq!(first_version_line(&captured), "unknown build");
+        assert!(!reports_pinned_build(&first_version_line(&captured)));
+    }
+
     #[test]
     fn rejects_other_or_partial_build_numbers() {
         assert!(!reports_pinned_build("version: 1171 (abc)"));
         assert!(!reports_pinned_build("version: 117140 (abc)"));
         assert!(!reports_pinned_build("unknown build"));
         assert!(!reports_pinned_build(""));
-    }
-}
-
-/// Polls `GET /health` until the model reports loaded.
-///
-/// `/health` is unauthenticated in the runtime, so it is used only as a
-/// liveness signal; `/props` and generation prove the engine really works.
-pub async fn wait_for_health(port: u16, timeout: Duration) -> InferenceResult<()> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()?;
-
-    let url = format!("http://127.0.0.1:{port}/health");
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => return Ok(()),
-            Ok(_) => {}
-            Err(_) => {}
-        }
-
-        if Instant::now() >= deadline {
-            return Err(InferenceError::load_failed(
-                "The engine did not finish loading the model in time. The model may be too large for this machine.",
-            ));
-        }
-
-        tokio::time::sleep(Duration::from_millis(300)).await;
     }
 }
 

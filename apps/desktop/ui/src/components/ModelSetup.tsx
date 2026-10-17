@@ -20,6 +20,8 @@ const CONTEXT_CHOICES = [8192, 16384, 32768, 65536] as const;
 interface ModelSetupProps {
   status: AppStatus | null;
   onStatus: (status: AppStatus) => void;
+  /** Re-reads the authoritative status, e.g. after a failed load. */
+  onRefresh?: () => void;
 }
 
 type Busy = "runtime" | "model" | "load" | null;
@@ -30,7 +32,7 @@ type Busy = "runtime" | "model" | "load" | null;
  * Nexora does not download weights or binaries. Both paths are validated by the
  * Rust core before anything is launched.
  */
-export function ModelSetup({ status, onStatus }: ModelSetupProps) {
+export function ModelSetup({ status, onStatus, onRefresh }: ModelSetupProps) {
   const [runtimePath, setRuntimePath] = useState("");
   const [modelPath, setModelPath] = useState("");
   const [contextSize, setContextSize] = useState<number>(32768);
@@ -123,10 +125,14 @@ export function ModelSetup({ status, onStatus }: ModelSetupProps) {
     } catch (cause) {
       setError(toInferenceError(cause).message);
       setNote(null);
+      // The core keeps its own failure state (exit status and the engine's
+      // last words). Pull it in so the sidebar and chip say "Engine failed"
+      // instead of silently staying on "No model loaded".
+      onRefresh?.();
     } finally {
       setBusy(null);
     }
-  }, [contextSize, modelPath, onStatus, runtimePath]);
+  }, [contextSize, modelPath, onRefresh, onStatus, runtimePath]);
 
   const configured = Boolean(status?.modelPath && status?.runtimePath);
 

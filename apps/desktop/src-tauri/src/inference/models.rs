@@ -155,8 +155,8 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
     }
 
     let mut file = File::open(file_path)?;
-    let mut magic = [0u8; 2];
-    let read = file.read(&mut magic).unwrap_or(0);
+    let mut magic = [0u8; 4];
+    let read = read_magic(&mut file, &mut magic)?;
 
     if read < 2 {
         return Err(InferenceError::invalid_model(
@@ -164,13 +164,22 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
         ));
     }
 
-    let is_windows_binary = &magic == b"MZ";
-    let is_script = &magic == b"#!";
+    let is_windows_binary = &magic[..2] == b"MZ";
+    let is_script = &magic[..2] == b"#!";
+    // Nexora ships for Windows, but the same code runs on a Linux development
+    // machine, where `llama-server` is an ELF binary. Accepting both keeps the
+    // check honest on each platform instead of calling an ELF file "not a
+    // Windows executable" on Linux.
+    let is_elf = read >= 4 && &magic[..4] == b"\x7fELF" && cfg!(unix);
+    let runs_here =
+        (is_windows_binary && cfg!(windows)) || (is_script && cfg!(unix)) || is_elf;
 
-    if !is_windows_binary && !is_script {
-        return Err(InferenceError::invalid_model(
-            "That file is not a Windows executable. Choose llama-server.exe.",
-        ));
+    if !runs_here {
+        return Err(InferenceError::invalid_model(if cfg!(windows) {
+            "That file is not a Windows executable. Choose llama-server.exe."
+        } else {
+            "That file is not an executable for this platform. Choose the llama-server binary."
+        }));
     }
 
     // Reject a directory masquerading as a file and confirm we can seek.
@@ -178,6 +187,21 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
         .map_err(|error| InferenceError::invalid_model(error.to_string()))?;
 
     Ok(())
+}
+
+/// Reads up to `buffer.len()` leading bytes, tolerating short reads.
+fn read_magic(file: &mut File, buffer: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+
+    while filled < buffer.len() {
+        match file.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(filled)
 }
 
 #[cfg(test)]
@@ -266,6 +290,28 @@ mod tests {
     #[test]
     fn detects_a_windows_executable() {
         let path = temp_file("llama-server.exe", b"MZ\x90\x00payload");
+
+        #[cfg(windows)]
+        assert!(looks_like_executable(path.to_str().unwrap()).is_ok());
+
+        // A PE file is the wrong binary on Linux; the check must say so rather
+        // than accept it and fail later inside the OS loader.
+        #[cfg(not(windows))]
+        assert!(looks_like_executable(path.to_str().unwrap()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_an_elf_executable_on_unix() {
+        let path = temp_file("llama-server", b"\x7fELF\x02\x01\x01payload");
+
+        assert!(looks_like_executable(path.to_str().unwrap()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_a_script_launcher() {
+        let path = temp_file("llama-server.sh", b"#!/bin/sh\nexec llama-server $@\n");
 
         assert!(looks_like_executable(path.to_str().unwrap()).is_ok());
     }
