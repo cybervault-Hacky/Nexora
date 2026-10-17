@@ -8,7 +8,9 @@ tools, no project modification, and no model or runtime downloads**.
 
 The Rust crate has **not been compiled** in the verification environment (no
 toolchain, no reachable crate registry), and no native window or real model run
-has been observed. See [`docs/phase-7/`](../../docs/phase-7/README.md).
+has been observed. [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
+now compiles and tests the crate on Linux and Windows; it has not been executed
+yet. See [`docs/phase-8/`](../../docs/phase-8/README.md).
 
 ## Stack
 
@@ -199,7 +201,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-105 Vitest tests run in jsdom:
+148 Vitest tests run in jsdom (plus a node-environment configuration suite):
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
@@ -211,16 +213,21 @@ decision and a Windows machine to verify.
 - shell routing: browser preview, no model, loading, ready, and unreadable IPC
 - composer disabled/counter/error/stop states and keyboard behaviour
 - scroll-follow logic
-- cross-language contract: serde field names, enum encodings, command
-  registration, invocation, and argument keys, compared against the real Rust
-  sources (source-derived, not a serde execution; mutation-tested)
+- IPC runtime: invoke names and argument objects, channel pass-through, typed
+  and transport-level rejection normalisation, and closed-failure status helpers
+- build configuration: Vite/Tauri port and output wiring, bundle icons, capability
+  allowlist, CSP, and the pinned Rust and pnpm versions
+- cross-language contract: serde field names, optional/nullable mapping, enum
+  encodings, constructor integrity, command registration, invocation, and argument
+  keys, compared against the real Rust sources (source-derived, not a serde
+  execution; mutation-tested)
 
 Rust unit tests live beside the code (`cargo test`): SSE framing and
 classification, delta extraction, GGUF header validation, executable magic,
 settings normalisation, memory parsing, request validation, the `--version`
 line (captured from a real build, printed on stderr), and the mapping from HTTP
 rejections to UI error codes. They have **not** been executed in this
-environment — see the Phase 7 report.
+environment — see the Phase 8 report.
 
 ## Known limitations
 
