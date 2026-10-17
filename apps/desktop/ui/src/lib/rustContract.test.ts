@@ -634,6 +634,28 @@ describe("Tauri command surface", () => {
     }
   });
 
+  it("agrees about which commands take no arguments at all", () => {
+    const calls = uiCommands();
+    const argless = commands
+      .filter((command) => command.args.length === 0)
+      .map((command) => command.name);
+
+    // These read state the core already owns; Tauri injects `State`/`AppHandle`
+    // rather than the UI sending them. Adding an argument to one of these Rust
+    // signatures without updating the wrapper would break every call.
+    expect(sorted(argless)).toEqual([
+      "get_app_status",
+      "get_settings",
+      "get_system_info",
+      "load_model",
+      "unload_model",
+    ]);
+
+    for (const name of argless) {
+      expect({ name, args: calls.get(name) }).toEqual({ name, args: [] });
+    }
+  });
+
   it("pins the argument names of the stateful commands", () => {
     const byName = new Map(commands.map((command) => [command.name, sorted(command.args)]));
 
