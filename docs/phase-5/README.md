@@ -50,7 +50,7 @@ that does not match `11714` as unverified.
 | `--port PORT` | default `9931` | an ephemeral loopback port is chosen per launch |
 | `--ctx-size` | context size in tokens | from validated settings, clamped 2 048–131 072 |
 | `-np, --parallel N` | number of server slots | `--parallel 1` |
-| `--no-webui` (alias `--no-ui`) | disables the Web UI | always passed |
+| `--ui, --no-ui` (aliases `--webui, --no-webui`) | enables/disables the Web UI | always passed as `--no-ui` (verified on the built binary) |
 | `--jinja` | jinja chat templates (default enabled) | passed explicitly |
 | `--api-key-file FNAME` | file of API keys, one per line, `#` comments | a 32-byte random hex key, one line |
 | `-to, --timeout N` | server read/write timeout, seconds (default 3600) | `--timeout 600` |
@@ -78,13 +78,20 @@ following moved from *assumed* to *measured* (full transcript in
   `error.message`;
 - an unloadable model makes the process exit 1 within milliseconds and prints a
   specific reason on stderr;
-- `POST /slots/{id}?action=erase` is rejected unless `--slot-save-path` is set,
-  so it cannot be part of this design.
+- `POST /slots/{id}?action=erase` is rejected (501) unless `--slot-save-path` is
+  set, so it cannot be part of this design;
+- the SSE stream itself, using a 441 KB synthetic random-weight GGUF: first
+  delta with `content: null`, token deltas, a final chunk with an empty `delta`
+  and a real `finish_reason`, then `data: [DONE]`;
+- cancellation by connection drop: the server stopped at 521 tokens instead of
+  1543 and served the next request 12 ms later.
 
-Still read only from the pinned source, not seen on the wire: the SSE frame
-shape (`data: {json}` … `data: [DONE]`), the streaming chunk fields, and the
-final chunk carrying `finish_reason` with an empty `delta`. Those require a
-loaded model, which the build host does not have.
+The synthetic model has random weights and its output is meaningless; it proves
+the protocol, not language quality, and it is smaller than Nexora's own 16 MiB
+minimum.
+
+Still read only from the pinned source: the `include_usage` chunk (Nexora never
+sets it) and the exact 503 body served while a model is loading.
 
 ## Local verification actually performed
 

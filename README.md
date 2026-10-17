@@ -28,7 +28,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Verification performed here: `pnpm typecheck`, `pnpm test` (87/87), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, and startup-failure behaviour; four contract defects were fixed as a result. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
+Verification performed here: `pnpm typecheck`, `pnpm test` (87/87), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
 
 ## Phase 5 deliverables
 

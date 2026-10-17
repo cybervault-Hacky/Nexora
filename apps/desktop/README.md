@@ -116,7 +116,7 @@ apps/desktop/
 │  │     ├─ mod.rs                    state, request validation, status, cancel
 │  │     ├─ commands.rs               the Tauri command surface
 │  │     ├─ process.rs                child-process supervisor, key file, probes
-│  │     ├─ client.rs                 streaming SSE client, cancel ladder
+│  │     ├─ client.rs                 streaming SSE client, HTTP error mapping
 │  │     ├─ sse.rs                    byte-safe line framing
 │  │     ├─ models.rs                 GGUF header + runtime executable checks
 │  │     ├─ hardware.rs               physical/available memory
@@ -161,7 +161,7 @@ apps/desktop/
   `llama-server` with `--api-key-file` — never on the command line, never to
   the UI.
 - The runtime is launched with structured arguments only
-  (`--model`, `--host`, `--port`, `--ctx-size`, `--parallel 1`, `--no-webui`,
+  (`--model`, `--host`, `--port`, `--ctx-size`, `--parallel 1`, `--no-ui`,
   `--jinja`, `--api-key-file`, `--timeout`), no shell, and no interpolated
   argument string. On Windows the child is created with `CREATE_NO_WINDOW` and
   is killed and reaped on unload, on window close, and on `Drop`.

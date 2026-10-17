@@ -132,7 +132,7 @@ impl Supervisor {
             .arg(context_size.to_string())
             .arg("--parallel")
             .arg("1")
-            .arg("--no-webui")
+            .arg("--no-ui")
             .arg("--jinja")
             .arg("--api-key-file")
             .arg(&key_path)
@@ -432,12 +432,22 @@ pub struct CapturedOutput {
 /// reported "unknown build" for a perfectly good runtime, so stderr is
 /// preferred and stdout is kept as a fallback for other builds.
 pub fn first_version_line(captured: &CapturedOutput) -> String {
-    captured
-        .stderr
-        .lines()
-        .chain(captured.stdout.lines())
-        .map(str::trim)
-        .find(|line| !line.is_empty())
+    fn build_line(text: &str) -> Option<&str> {
+        text.lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("version:"))
+    }
+
+    fn first_text(text: &str) -> Option<&str> {
+        text.lines().map(str::trim).find(|line| !line.is_empty())
+    }
+
+    // A build line anywhere beats the first line: some builds print a warning
+    // (CUDA, backend selection) before the version block.
+    build_line(&captured.stderr)
+        .or_else(|| build_line(&captured.stdout))
+        .or_else(|| first_text(&captured.stderr))
+        .or_else(|| first_text(&captured.stdout))
         .unwrap_or("unknown build")
         .chars()
         .take(200)
@@ -482,6 +492,17 @@ mod tests {
             "version: 0.7.0-dev (build 11714, commit c0fd78626405c6d9b934efef0ec7291fcc20e3d6)"
         );
         assert!(reports_pinned_build(&line));
+    }
+
+    #[test]
+    fn skips_warnings_before_the_build_line() {
+        let captured = CapturedOutput {
+            stdout: String::new(),
+            stderr: "warning: no usable GPU found\n".to_string()
+                + OBSERVED_STDERR,
+        };
+
+        assert!(first_version_line(&captured).starts_with("version: 0.7.0-dev"));
     }
 
     #[test]
