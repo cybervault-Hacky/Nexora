@@ -155,6 +155,14 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo check --all-targets
 
+      # `cargo check` type-checks but does not link. Building the binary on
+      # Windows compiles the linker step, the `windows_subsystem` attribute and
+      # the embedded icon, which is the part a check cannot reach. No bundling:
+      # `tauri build` is deliberately absent, so no installer is produced.
+      - name: Link the native executable
+        working-directory: apps/desktop/src-tauri
+        run: cargo build
+
       - name: Run Rust tests on Windows
         working-directory: apps/desktop/src-tauri
         run: cargo test
