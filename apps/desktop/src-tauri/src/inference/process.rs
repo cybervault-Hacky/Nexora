@@ -18,7 +18,17 @@ pub const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 /// Nexora never downloads a runtime, so this is a report, not an enforcement:
 /// a mismatch is surfaced to the user instead of being silently tolerated.
 pub const PINNED_BUILD: &str = "11714";
-const KEY_FILE: &str = "runtime-session.key";
+/// Session key file name inside the app config directory.
+///
+/// Public so startup can remove a key left behind by an unclean exit: the key
+/// is useless without the process that read it, and a secret should not sit on
+/// disk across runs.
+pub const SESSION_KEY_FILE: &str = "runtime-session.key";
+/// How long a stop may wait for the child to be reaped.
+///
+/// `wait()` on a child whose `kill()` failed blocks forever, and this runs
+/// while the supervisor mutex is held, so shutdown is bounded instead.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const STDERR_CAP: u64 = 64 * 1024;
 
 #[cfg(windows)]
@@ -117,7 +127,7 @@ impl Supervisor {
 
         let port = free_loopback_port()?;
         let key = session_key()?;
-        let key_path = config_dir.join(KEY_FILE);
+        let key_path = config_dir.join(SESSION_KEY_FILE);
         write_key_file(&key_path, &key)?;
 
         let mut command = Command::new(runtime_path);
@@ -201,12 +211,51 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Stops and reaps the child, without ever blocking indefinitely.
+    ///
+    /// `Child::wait()` blocks until the process exits. If `kill()` fails — an
+    /// access-denied `TerminateProcess` on Windows, for example — waiting would
+    /// hang the caller while it holds the supervisor mutex, and the window
+    /// close handler takes the same mutex. Polling with a deadline keeps
+    /// shutdown bounded and reports the failure instead of pretending success.
     pub fn stop(&mut self) {
-        if let Some(mut server) = self.running.take() {
-            let _ = server.child.kill();
-            let _ = server.child.wait();
-            let _ = std::fs::remove_file(&server.key_path);
+        let Some(mut server) = self.running.take() else {
+            return;
+        };
+
+        let _ = server.child.kill();
+
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let mut reaped = false;
+
+        loop {
+            match server.child.try_wait() {
+                Ok(Some(_)) => {
+                    reaped = true;
+                    break;
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    self.last_error = Some(format!(
+                        "The local engine could not be confirmed stopped: {error}"
+                    ));
+                    break;
+                }
+            }
         }
+
+        if !reaped && self.last_error.is_none() {
+            self.last_error = Some(
+                "The local engine did not exit after being asked to stop; it may still be running."
+                    .to_string(),
+            );
+        }
+
+        // The key is useless without the process that was given it.
+        let _ = std::fs::remove_file(&server.key_path);
     }
 
     /// `Some(reason)` once the engine is no longer running.

@@ -242,6 +242,10 @@ fn classify_engine(
 
 impl InferenceState {
     pub fn load(config_dir: PathBuf) -> Self {
+        // A session key from a crashed run is useless — the process that read
+        // it is gone — so it is removed rather than left on disk for days.
+        let _ = std::fs::remove_file(config_dir.join(process::SESSION_KEY_FILE));
+
         Self {
             supervisor: Mutex::new(process::Supervisor::new()),
             settings: Mutex::new(SettingsStore::load(&config_dir)),
