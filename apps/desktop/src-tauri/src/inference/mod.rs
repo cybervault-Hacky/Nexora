@@ -190,6 +190,56 @@ pub struct InferenceState {
     pub config_dir: PathBuf,
 }
 
+/// Pure state derivation, so engine transitions can be tested without spawning
+/// a process. The order encodes the precedence: an in-flight generation wins,
+/// then a healthy engine, then one that is up but not ready, then a recorded
+/// failure, then configuration, and finally a configured-but-stopped engine.
+fn classify_engine(
+    running: bool,
+    healthy: bool,
+    generating: bool,
+    configured: bool,
+    last_error: Option<&str>,
+) -> (EngineState, String) {
+    if generating {
+        return (
+            EngineState::Generating,
+            "Generating a reply on this machine.".to_string(),
+        );
+    }
+
+    if running && healthy {
+        return (
+            EngineState::Ready,
+            "The local model is loaded and ready.".to_string(),
+        );
+    }
+
+    if running {
+        return (
+            EngineState::Loading,
+            "The local engine is starting and loading the model.".to_string(),
+        );
+    }
+
+    if let Some(error) = last_error {
+        return (EngineState::Error, error.to_string());
+    }
+
+    if !configured {
+        return (
+            EngineState::NotConfigured,
+            "Choose the llama-server runtime and a GGUF model to enable local inference."
+                .to_string(),
+        );
+    }
+
+    (
+        EngineState::Stopped,
+        "The engine is configured but not running. Load the model to start it.".to_string(),
+    )
+}
+
 impl InferenceState {
     pub fn load(config_dir: PathBuf) -> Self {
         Self {
@@ -241,42 +291,14 @@ impl InferenceState {
             _ => false,
         };
 
-        let (state, detail) = if generating {
-            ("generating", "Generating a reply on this machine.".to_string())
-        } else if running && healthy {
-            (
-                "ready",
-                "The local model is loaded and ready.".to_string(),
-            )
-        } else if running {
-            (
-                "loading",
-                "The local engine is starting and loading the model.".to_string(),
-            )
-        } else if let Some(error) = last_error {
-            ("error", error)
-        } else if settings.model_path.is_none() || settings.runtime_path.is_none() {
-            (
-                "not_configured",
-                "Choose the llama-server runtime and a GGUF model to enable local inference."
-                    .to_string(),
-            )
-        } else {
-            (
-                "stopped",
-                "The engine is configured but not running. Load the model to start it."
-                    .to_string(),
-            )
-        };
-
-        let state = match state {
-            "generating" => EngineState::Generating,
-            "ready" => EngineState::Ready,
-            "loading" => EngineState::Loading,
-            "error" => EngineState::Error,
-            "not_configured" => EngineState::NotConfigured,
-            _ => EngineState::Stopped,
-        };
+        let configured = settings.model_path.is_some() && settings.runtime_path.is_some();
+        let (state, detail) = classify_engine(
+            running,
+            healthy,
+            generating,
+            configured,
+            last_error.as_deref(),
+        );
 
         AppStatus {
             name: "Nexora",
@@ -401,6 +423,42 @@ mod tests {
         let error = request(vec![turn("user", &huge)]).validate().unwrap_err();
 
         assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn reports_each_engine_transition() {
+        let ready = classify_engine(true, true, false, true, None);
+        assert!(matches!(ready.0, EngineState::Ready));
+
+        let loading = classify_engine(true, false, false, true, None);
+        assert!(matches!(loading.0, EngineState::Loading));
+
+        let generating = classify_engine(true, true, true, true, None);
+        assert!(matches!(generating.0, EngineState::Generating));
+
+        let stopped = classify_engine(false, false, false, true, None);
+        assert!(matches!(stopped.0, EngineState::Stopped));
+
+        let unconfigured = classify_engine(false, false, false, false, None);
+        assert!(matches!(unconfigured.0, EngineState::NotConfigured));
+
+        let failed = classify_engine(false, false, false, true, Some("it crashed"));
+        assert!(matches!(failed.0, EngineState::Error));
+        assert_eq!(failed.1, "it crashed");
+    }
+
+    #[test]
+    fn a_failure_outranks_a_missing_configuration() {
+        let (state, _) = classify_engine(false, false, false, false, Some("no device"));
+
+        assert!(matches!(state, EngineState::Error));
+    }
+
+    #[test]
+    fn generating_wins_over_a_transient_health_failure() {
+        let (state, _) = classify_engine(true, false, true, true, None);
+
+        assert!(matches!(state, EngineState::Generating));
     }
 
     #[test]
