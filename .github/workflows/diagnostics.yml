@@ -1,9 +1,9 @@
 # TEMPORARY diagnostic workflow — delete once the Rust gates are green.
 #
 # The development sandbox cannot read Actions job logs (they are served from a
-# host it cannot reach), so failures found by `ci.yml` are reported through the
-# job summary instead, which is readable through the API. This workflow runs
-# only on manual dispatch and never modifies the repository.
+# host it cannot reach) and job summaries are not exposed by the API, so
+# failures found by `ci.yml` are republished as check-run annotations, which are
+# readable through api.github.com. This workflow only reads the repository.
 
 name: Diagnostics
 
@@ -51,51 +51,52 @@ jobs:
       - name: Install the pinned Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
-      - name: Collect formatting diff
+      - name: Report formatting diff
         working-directory: apps/desktop/src-tauri
         run: |
           cargo fmt --all
           git diff -- . > "$RUNNER_TEMP/fmt.patch" || true
-          {
-            echo '### cargo fmt diff'
-            echo ''
-            echo '```diff'
-            head -c 400000 "$RUNNER_TEMP/fmt.patch"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$RUNNER_TEMP/fmt.patch" <<'PY'
+          import sys
 
-      - name: Collect compiler diagnostics
+          text = open(sys.argv[1], encoding="utf-8").read()
+          if text.strip():
+              escaped = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=fmt.patch::{escaped}")
+          else:
+              print("Formatting already clean.")
+          PY
+
+      - name: Report cargo check
         working-directory: apps/desktop/src-tauri
         run: |
-          {
-            echo ''
-            echo '### cargo check'
-            echo ''
-            echo '```text'
-            cargo check --all-targets 2>&1 | tail -c 200000 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          cargo check --all-targets > "$RUNNER_TEMP/check.log" 2>&1
+          status=$?
+          python3 - "$RUNNER_TEMP/check.log" "$status" <<'PY'
+          import sys
 
-      - name: Collect clippy diagnostics
+          text = open(sys.argv[1], encoding="utf-8").read()
+          if sys.argv[2] != "0":
+              escaped = text[-60000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=cargo-check::{escaped}")
+          else:
+              print("cargo check clean.")
+          PY
+
+      - name: Report clippy
         working-directory: apps/desktop/src-tauri
         run: |
-          {
-            echo ''
-            echo '### cargo clippy'
-            echo ''
-            echo '```text'
-            cargo clippy --all-targets -- -D warnings 2>&1 | tail -c 200000 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          cargo clippy --all-targets -- -D warnings > "$RUNNER_TEMP/clippy.log" 2>&1
+          status=$?
+          python3 - "$RUNNER_TEMP/clippy.log" "$status" <<'PY'
+          import sys
 
-      - name: Collect test results
-        working-directory: apps/desktop/src-tauri
-        run: |
-          {
-            echo ''
-            echo '### cargo test'
-            echo ''
-            echo '```text'
-            cargo test 2>&1 | tail -c 200000 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          text = open(sys.argv[1], encoding="utf-8").read()
+          if sys.argv[2] != "0":
+              escaped = text[-60000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=clippy::{escaped}")
+          else:
+              print("clippy clean.")
+          PY
