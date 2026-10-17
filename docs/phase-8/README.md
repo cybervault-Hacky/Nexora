@@ -1,9 +1,9 @@
 # Phase 8 — engineering hardening, CI verification, Windows build readiness
 
-**The Rust crate now compiles and its unit tests pass on Linux and Windows in
-CI.** That is a change from every previous phase, and it came from running the
+**The Rust crate compiles, its unit tests pass, and the Windows executable links
+in CI.** That is a change from every previous phase, and it came from running the
 gates rather than reading the code. The development sandbox still has no Rust
-toolchain, so the compilation evidence is GitHub's runners — not this machine.
+toolchain, so the build evidence is GitHub's runners — not this machine.
 
 **Still not verified:** the native window, the installer, a Windows process
 lifecycle against a real `llama-server.exe`, and any genuine model output. No
@@ -89,6 +89,13 @@ line to be returned and the seven-byte fragment to remain buffered.
 **D7 — `cargo check` was clean throughout**, which is itself worth recording: the
 Phases 5–7 Rust changes were never compiled, and they compile as written.
 
+**D8 — a finished generation called back into an unmounted tree.** `onSettled`
+ran in the `finally` block regardless of whether the component was still mounted,
+so a stream that outlived the UI triggered a status refresh (`fetchStatus` IPC)
+for a tree that no longer existed. State writes were already no-ops; the IPC call
+was not. A mounted ref now guards `settle`, `fail`, and the `finally` path, with
+tests for unmount mid-stream and for a late failure.
+
 ### Gaps closed by new tests
 
 | Gap | Risk it left open |
@@ -100,6 +107,9 @@ Phases 5–7 Rust changes were never compiled, and they compile as written.
 | No post-stop/post-failure retry test | A session-cleanup regression could strand the composer |
 | No build-config coherence test | A missing icon or port mismatch would only fail on Windows |
 | No constructor-integrity test | A typo is a compile error that cannot be caught locally |
+| No check of commands that take no arguments | Adding a Rust parameter the wrapper never sends would break every call |
+| No unmount coverage | A generation finishing after unmount refreshed status for a dead tree |
+| No listener-cleanup check | A leaked `keydown` handler would act on an unmounted shell |
 
 ## 4. Command-by-command status
 
@@ -109,9 +119,9 @@ Local runs were in `apps/desktop` unless stated.
 |---|---|---|---|
 | 1 | `pnpm install --frozen-lockfile` | **PASS** | local, 160 packages |
 | 2 | `pnpm typecheck` | **PASS** | local |
-| 3 | `pnpm test` | **PASS** | local, 148 tests in 11 files |
+| 3 | `pnpm test` | **PASS** | local, 152 tests in 11 files |
 | 4 | `pnpm build` | **PASS** | local, 53 modules, 267.72 kB JS (82.40 gzip) |
-| 5 | Contract / IPC / config / lifecycle suites | **PASS** | local, 21 + 21 + 14 + 5 new tests |
+| 5 | Contract / IPC / config / lifecycle suites | **PASS** | local, 22 + 21 + 14 + 7 new tests |
 | 6 | Workflow YAML parse + policy assertions | **PASS** | local, PyYAML 6.0.3 in an uncommitted venv |
 | 7 | Mutation check of the contract suite | **PASS** | 4 mutations → 4 failures, then reverted |
 | 8 | `cargo fmt --all -- --check` | **PASS** | CI run `39074790912` and later |
@@ -120,6 +130,7 @@ Local runs were in `apps/desktop` unless stated.
 | 11 | `cargo test` (Linux) | **PASS** | CI, 48 tests |
 | 12 | `cargo check --all-targets` (Windows) | **PASS** | CI, `windows-2022` |
 | 13 | `cargo test` (Windows) | **PASS** | CI, 45 tests (3 Linux-only `meminfo` tests excluded) |
+| 13a | `cargo build` (Windows link) | **PASS** | CI `39076931214`; links the executable, no bundle |
 | 14 | All three CI jobs green | **PASS** | final CI run on the report commit |
 | 15 | `pnpm tauri dev` / native window | **NOT RUN** | no Windows host in this sandbox |
 | 16 | Installer build | **NOT APPLICABLE** | out of scope this phase |
@@ -139,10 +150,12 @@ produced them rather than as local successes.
 | `inference/error.rs`, `commands.rs`, `hardware.rs`, `sse.rs` | D5 lints, D6 test fix, rustfmt |
 | `inference/client.rs`, `models.rs` | rustfmt only |
 | `rust-toolchain.toml` | D3 pin |
-| `ui/src/lib/rustContract.test.ts` | rewritten, 21 tests |
+| `ui/src/lib/rustContract.test.ts` | rewritten, 22 tests |
 | `ui/src/lib/inference.test.ts` | new, 21 tests |
 | `ui/src/lib/buildConfig.test.ts` | new, 14 tests |
-| `ui/src/features/chat/useConversation.test.tsx` | +5 lifecycle tests |
+| `ui/src/features/chat/useConversation.ts` | D8 unmount guard |
+| `ui/src/features/chat/useConversation.test.tsx` | +7 lifecycle tests |
+| `ui/src/App.test.tsx` | +1 listener-cleanup test |
 | `.github/workflows/ci.yml` | new: frontend, Linux Rust, Windows Rust |
 | `docs/phase-8/README.md`, `README.md`, `apps/desktop/README.md` | report and status |
 
@@ -150,7 +163,7 @@ No production TypeScript, dependency, capability, or Tauri configuration changed
 
 ## 6. Tests added
 
-**`rustContract.test.ts` (21).** One fixture table drives ten struct comparisons:
+**`rustContract.test.ts` (22).** One fixture table drives ten struct comparisons:
 serde-renamed field names, `Option<T>` ⇄ `T | null` for responses, and optional
 request fields coupled to `#[serde(default)]`. Adds constructor integrity (every
 `InferenceError::<name>(` call resolves to a `pub fn`), `EngineState` reachability,
@@ -167,13 +180,26 @@ target, real package scripts, one version across crate/app/workspace, NSIS
 current-user packaging, icon existence, capability allowlist, CSP without
 `unsafe-eval`/wildcards/remote `connect-src`, pinned toolchain and pnpm.
 
-**`useConversation.test.tsx` (+5).** Malformed/unknown events ignored, foreign
-`requestId` dropped, idle `stop()` sends nothing, and a new prompt succeeds after
-a stop and after a failure.
+**`useConversation.test.tsx` (+7).** Malformed/unknown events ignored, foreign
+`requestId` dropped, idle `stop()` sends nothing, a new prompt succeeds after a
+stop and after a failure, and neither a settlement nor a late failure calls back
+after unmount. **`App.test.tsx` (+1)** proves the `keydown` listener is removed
+with the same function reference it was added with.
 
-**Mutation check.** Removing `#[serde(default)]`, misspelling a constructor,
-widening `Option<bool>` to `bool`, and renaming `EngineState::Error` produced four
-distinct failures; the suite returned to green after reverting.
+**Mutation check.** Six deliberate, reverted mutations:
+
+| Mutation | Failures |
+|---|---|
+| `#[serde(default)]` removed from `max_tokens` | optional-request test |
+| `InferenceError::not_configured` misspelled | constructor integrity |
+| `fits_available_ram` widened from `Option<bool>` to `bool` | `ModelInfo` nullability |
+| `EngineState::Error` renamed at one site | enum reachability |
+| `cancel_generation` renamed in Rust (function + registration) | invocation parity, argument keys, pinned args (3 tests) |
+| `cancel_generation`'s `request_id` renamed to `id` | argument keys and pinned args (2 tests) |
+
+Each failed only the tests that guard that contract, and the suite returned to
+green after reverting. The unmount guard was checked the same way: removing it
+fails both unmount tests.
 
 ## 7. CI
 
@@ -185,7 +211,9 @@ pinned to commit SHAs, no packaging or upload step:
 2. **rust** (`ubuntu-24.04`) — Tauri system packages, frontend built first (the
    `generate_context!` macro embeds `ui/dist`), then fmt, check, clippy, test.
 3. **windows** (`windows-2022`) — same frontend build, then `cargo check
-   --all-targets` and `cargo test`, compiling the `cfg(windows)` paths.
+   --all-targets`, `cargo build` (links the executable, which a check cannot do)
+   and `cargo test`, compiling the `cfg(windows)` paths. No bundling step, so no
+   installer exists.
 
 **Yes, it executed.** What the runs actually showed:
 
@@ -196,6 +224,7 @@ pinned to commit SHAs, no packaging or upload step:
 | `39074790912` | frontend **success**; fmt/check/clippy **pass**; `cargo test` **failure** (D6) on both platforms |
 | `39075293782` | diagnostics: **48/48 Linux, 45/45 Windows** after the test fix |
 | `39075598548` | all three jobs **success**: frontend, Linux Rust (fmt, check, clippy, 48 tests), Windows (check, 45 tests) |
+| `39076931214` | all three jobs **success** after the link step and unmount fix; Windows now also links `nexora.exe` |
 
 The sandbox cannot read Actions log blobs (they are served from a host it cannot
 reach), so a temporary workflow republished failing output as check-run
@@ -207,6 +236,8 @@ Now established by execution:
 
 - the crate compiles for Windows, including `windows-sys` memory detection,
   `CREATE_NO_WINDOW`, and platform-aware executable sniffing;
+- the executable **links** on Windows (`cargo build`), which exercises the
+  linker, the `windows_subsystem` attribute and the embedded icon;
 - its unit tests pass on Windows (45/45);
 - the frontend builds against the same configuration on Windows.
 

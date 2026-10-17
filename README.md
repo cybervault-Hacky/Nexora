@@ -4,7 +4,7 @@
 
 > **Project status: Phase 8 delivered — hardened and CI-ready, still partially verified. The native build and real inference remain unverified.**
 > Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phases 3–4 built the real Tauri 2 + React desktop shell. Phase 5 connects that shell to a **user-supplied** `llama-server` and GGUF file over loopback HTTP, with streaming, cancellation, and honest failure states. Phases 6–8 are verification and hardening phases: Phase 8 fixes process-shutdown and key-cleanup defects, pins the Rust toolchain, and adds a CI workflow with a Windows job.
-> The repository ships **no model weights and no runtime binaries**, and downloads nothing on its own. The verification sandbox has no Rust toolchain, no Windows host, and no crate-registry access, so nothing is compiled on that machine — but the CI workflow now runs, and the crate **compiles, lints clean, and passes its unit tests on Linux and Windows** there. No window has been launched and no real model output produced; the Windows installer has not been built or tested. See the [Phase 8 report](docs/phase-8/README.md) for exact statuses.
+> The repository ships **no model weights and no runtime binaries**, and downloads nothing on its own. The verification sandbox has no Rust toolchain, no Windows host, and no crate-registry access, so nothing is compiled on that machine — but the CI workflow now runs, and the crate **compiles, lints clean, passes its unit tests, and links the Windows executable** there. No window has been launched and no real model output produced; the Windows installer has not been built or tested. See the [Phase 8 report](docs/phase-8/README.md) for exact statuses.
 
 ## Application foundation (Phases 3–5)
 
@@ -19,7 +19,7 @@ What the code implements (see the verification note above for what has actually 
 - No model or runtime is downloaded by the app. Nothing is bundled. Paths are typed deliberately by the user and validated (GGUF magic/version/size, executable header) before launch.
 - Duplicate submissions are rejected by a 350 ms guard; new chat clears messages, draft, and errors and cancels any in-flight request; scroll follow pauses while you read earlier output.
 - Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L` focus, `Ctrl+N` new chat, `Ctrl+B` sidebar, keyboard focus, reduced motion, and accessible labels.
-- 148 unit, hook, DOM interaction, IPC-runtime, build-config, and cross-language contract tests (`pnpm test`).
+- 152 unit, hook, DOM interaction, IPC-runtime, build-config, and cross-language contract tests (`pnpm test`).
 
 Quick start (Windows, after installing the prerequisites in the app README):
 
@@ -28,7 +28,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Verification performed here: `pnpm typecheck`, `pnpm test` (148/148), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. Phase 7 added a source-derived check that the serde wire shapes and Tauri command arguments match the TypeScript IPC types, with a mutation test proving it fails on drift; Phase 8 extended it to optional/nullable fields, constructor integrity, and build-configuration coherence. `cargo` is unavailable in this sandbox; the crate is compiled and tested by CI on Linux and Windows instead. The Windows executable is still not runtime-verified and no model weights were available for real generation. See [`docs/phase-7/`](docs/phase-7/README.md) and [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
+Verification performed here: `pnpm typecheck`, `pnpm test` (152/152), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. Phase 7 added a source-derived check that the serde wire shapes and Tauri command arguments match the TypeScript IPC types, with a mutation test proving it fails on drift; Phase 8 extended it to optional/nullable fields, constructor integrity, and build-configuration coherence. `cargo` is unavailable in this sandbox; the crate is compiled and tested by CI on Linux and Windows instead. The Windows executable is still not runtime-verified and no model weights were available for real generation. See [`docs/phase-7/`](docs/phase-7/README.md) and [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
 
 ## Phase 8 deliverables
 

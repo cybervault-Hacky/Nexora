@@ -8,8 +8,8 @@ tools, no project modification, and no model or runtime downloads**.
 
 The Rust crate cannot be compiled in the development sandbox (no toolchain, no
 reachable crate registry). [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
-compiles it, runs clippy with warnings denied, and runs its unit tests on Linux
-(48) and Windows (45). Nothing has verified the window, the installer, or a real
+compiles it, runs clippy with warnings denied, runs its unit tests on Linux
+(48) and Windows (45), and links the Windows executable. Nothing has verified the window, the installer, or a real
 model run. See [`docs/phase-8/`](../../docs/phase-8/README.md).
 
 ## Stack
@@ -201,7 +201,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-148 Vitest tests run in jsdom (plus a node-environment configuration suite):
+152 Vitest tests run in jsdom (plus a node-environment configuration suite):
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
