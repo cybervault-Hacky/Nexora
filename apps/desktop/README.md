@@ -6,11 +6,11 @@ a user-supplied `llama-server` process and streams its output into the
 conversation — carried through the Phase 6–7 verification work. It still contains **no agent
 tools, no project modification, and no model or runtime downloads**.
 
-The Rust crate has **not been compiled** in the verification environment (no
-toolchain, no reachable crate registry), and no native window or real model run
-has been observed. [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
-now compiles and tests the crate on Linux and Windows; it has not been executed
-yet. See [`docs/phase-8/`](../../docs/phase-8/README.md).
+The Rust crate cannot be compiled in the development sandbox (no toolchain, no
+reachable crate registry). [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
+compiles it, runs clippy with warnings denied, and runs its unit tests on Linux
+(48) and Windows (45). Nothing has verified the window, the installer, or a real
+model run. See [`docs/phase-8/`](../../docs/phase-8/README.md).
 
 ## Stack
 
@@ -226,8 +226,8 @@ Rust unit tests live beside the code (`cargo test`): SSE framing and
 classification, delta extraction, GGUF header validation, executable magic,
 settings normalisation, memory parsing, request validation, the `--version`
 line (captured from a real build, printed on stderr), and the mapping from HTTP
-rejections to UI error codes. They have **not** been executed in this
-environment — see the Phase 8 report.
+rejections to UI error codes. They run in CI on Linux and Windows; they cannot
+run in the development sandbox, which has no Rust toolchain.
 
 ## Known limitations
 
