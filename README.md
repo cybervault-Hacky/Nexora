@@ -30,6 +30,10 @@ pnpm tauri dev
 
 Verification performed here: `pnpm typecheck`, `pnpm test` (87/87), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
 
+## Phase 6 deliverables
+
+- [`docs/phase-6/`](docs/phase-6/README.md) — environment, what was executed against a locally built `llama-server`, the four defects fixed, and the exact blockers that keep this phase at **partially verified**.
+
 ## Phase 5 deliverables
 
 - [`docs/phase-5/`](docs/phase-5/README.md) — the runtime contract actually verified against llama.cpp `b11714`, the interfaces assumed rather than proven, and the Windows checklist that remains.
