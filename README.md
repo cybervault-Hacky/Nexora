@@ -2,8 +2,28 @@
 
 **Nexora is a local-first, offline-capable AI coding studio for Windows.** It combines a premium conversational workspace with a bounded coding agent that can create and edit multi-file websites, applications, animations, and code-based 3D experiences — using a local model, with no paid external AI API required for core functionality.
 
-> **Project status: Phase 2 — Local AI model and runtime evaluation complete, awaiting owner approval.**
-> Phase 1 (requirements and architecture) and Phase 2 (runtime and model evaluation) are documentation-only. No application code, dependencies, model weights, runtime binaries, private repository, or release has been created. Do not begin implementation until Phase 3 is explicitly authorized.
+> **Project status: Phase 3 — desktop foundation implemented, awaiting owner approval.**
+> Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phase 3 adds the real Tauri 2 + React desktop shell. It contains no model inference, no model weights, and no runtime binaries. The Windows installer has not been built or tested yet.
+
+## Application foundation (Phase 3)
+
+The desktop app lives in [`apps/desktop/`](apps/desktop/README.md): Tauri 2 shell, Rust core, React 19 + TypeScript, Vite.
+
+What works in this build:
+
+- A real native window (1280×840, minimum 960×640) with the Nexora title bar, sidebar, conversation workspace, empty state, and composer.
+- Sending a message adds it to the session and returns a clearly labelled **scaffold** reply. No model runs; no AI capability is simulated.
+- An engine-status panel reads a single read-only Rust command and reports that local inference is not connected.
+- Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L`, keyboard focus, reduced motion, and accessible labels.
+
+Quick start (Windows, after installing the prerequisites in the app README):
+
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+Linux verification performed here: `pnpm typecheck`, `pnpm test`, and `pnpm build` pass. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable are **not** verified. See the Phase 3 report for the exact commands and results.
 
 ## Phase 1 deliverables
 
@@ -75,6 +95,4 @@ The runtime and model evaluation is in [`docs/phase-2/`](docs/phase-2/README.md)
 
 ## Next step
 
-Review the Phase 2 recommendations and answer the open questions in [Phase 2 decisions and risks, Section 5](docs/phase-2/decisions-and-risks.md#5-open-questions). The blocking items are reference hardware (`Q2-01`), mirror/hosting approval (`Q2-02`), and legal review of the model and CUDA redistribution terms (`Q2-03`).
-
-Phase 3 — Foundation — implements the app shell, Rust core, model manager, and inference supervisor. It starts only after explicit authorization, and it should begin with the contract tests and smoke benchmark defined in Phase 2 so that the first measured numbers replace the estimates.
+Verify the desktop build on Windows: install the Rust toolchain and Visual Studio Build Tools, run `pnpm tauri dev`, then `pnpm tauri build`. Phase 4 — workspace and safe tools — starts only after the Phase 3 window and installer checks are approved. Model inference remains a later phase and is not part of this scaffold.

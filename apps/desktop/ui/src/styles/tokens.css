@@ -1,0 +1,57 @@
+:root {
+  /* Surfaces */
+  --bg-base: #0a0c0f;
+  --bg-panel: #111419;
+  --bg-elevated: #171b21;
+  --bg-raised: #1d232b;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  /* Text */
+  --text-primary: #f4f2ec;
+  --text-secondary: #a8afb9;
+  --text-tertiary: #7d8692;
+  --text-inverse: #0a0c0f;
+
+  /* Accent and semantics */
+  --accent: #8fa7ff;
+  --accent-hover: #a7b8ff;
+  --accent-pressed: #738df0;
+  --accent-subtle: rgba(143, 167, 255, 0.12);
+  --success: #63c98d;
+  --warning: #e3b36a;
+  --danger: #e07575;
+  --info: #7cc7e8;
+
+  /* Radii */
+  --radius-chip: 4px;
+  --radius-input: 8px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+  --radius-composer: 24px;
+
+  /* Spacing rhythm */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* Motion */
+  --motion-fast: 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-base: 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Elevation */
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-high: 0 24px 64px rgba(0, 0, 0, 0.45);
+
+  /* Glass */
+  --glass-panel: rgba(17, 20, 25, 0.78);
+  --glass-raised: rgba(24, 28, 35, 0.84);
+
+  color-scheme: dark;
+}
