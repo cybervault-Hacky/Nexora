@@ -2,24 +2,24 @@
 
 **Nexora is a local-first, offline-capable AI coding studio for Windows.** It combines a premium conversational workspace with a bounded coding agent that can create and edit multi-file websites, applications, animations, and code-based 3D experiences — using a local model, with no paid external AI API required for core functionality.
 
-> **Project status: Phase 5 delivered — local llama.cpp integration implemented, awaiting owner approval.**
-> Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phases 3–4 built the real Tauri 2 + React desktop shell. Phase 5 connects that shell to a **user-supplied** `llama-server` and GGUF file over loopback HTTP, with streaming, cancellation, and honest failure states.
-> The repository ships **no model weights and no runtime binaries**, and downloads nothing on its own. The Rust crate has not been compiled in this environment (no toolchain), so the native build remains unverified; see the Phase 5 report for the exact limits. The Windows installer has not been built or tested.
+> **Project status: Phase 7 delivered — partially verified. The native build and real inference are still unverified.**
+> Phase 1 (requirements) and Phase 2 (runtime and model evaluation) are documentation. Phases 3–4 built the real Tauri 2 + React desktop shell. Phase 5 connects that shell to a **user-supplied** `llama-server` and GGUF file over loopback HTTP, with streaming, cancellation, and honest failure states. Phases 6–7 are verification phases.
+> The repository ships **no model weights and no runtime binaries**, and downloads nothing on its own. There is no Rust toolchain, Windows host, crate-registry access, or owner-supplied model in the verification environment, so the crate remains **uncompiled**, no window was launched, and no real model output was produced. See the [Phase 7 report](docs/phase-7/README.md) for exactly what ran and what did not. The Windows installer has not been built or tested.
 
 ## Application foundation (Phases 3–5)
 
 The desktop app lives in [`apps/desktop/`](apps/desktop/README.md): Tauri 2 shell, Rust core, React 19 + TypeScript, Vite.
 
-What works in this build:
+What the code implements (see the verification note above for what has actually been executed):
 
 - A real native window (1280×840, minimum 960×640) with the Nexora title bar, collapsible sidebar, conversation workspace, empty state, and composer.
-- **Real local inference.** Point Nexora at a `llama-server` executable and a GGUF model you already have; replies stream token by token from that process over a loopback-only, key-protected endpoint.
+- **Local inference with your own runtime and model.** Point Nexora at a `llama-server` executable and a GGUF file you already have; replies are streamed token by token from that process over a loopback-only, key-protected endpoint.
 - **Stop generation** cancels the live request, keeps the partial text, and labels it `Stopped`. One generation at a time; a second send is refused, not queued.
 - Engine states are read from the Rust core, not guessed: no model configured, stopped, loading, ready, generating, and error are all distinct — and an unreadable IPC status is shown as *unknown*, never as "no model".
 - No model or runtime is downloaded by the app. Nothing is bundled. Paths are typed deliberately by the user and validated (GGUF magic/version/size, executable header) before launch.
 - Duplicate submissions are rejected by a 350 ms guard; new chat clears messages, draft, and errors and cancels any in-flight request; scroll follow pauses while you read earlier output.
 - Empty-input and over-length handling, Enter/Shift+Enter, `Ctrl+L` focus, `Ctrl+N` new chat, `Ctrl+B` sidebar, keyboard focus, reduced motion, and accessible labels.
-- 87 unit, hook, and DOM interaction tests (`pnpm test`).
+- 105 unit, hook, DOM interaction, and cross-language contract tests (`pnpm test`).
 
 Quick start (Windows, after installing the prerequisites in the app README):
 
@@ -28,7 +28,11 @@ pnpm install
 pnpm tauri dev
 ```
 
-Verification performed here: `pnpm typecheck`, `pnpm test` (87/87), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
+Verification performed here: `pnpm typecheck`, `pnpm test` (105/105), and `pnpm build` pass. A `llama-server` was built from the pinned llama.cpp `b11714` source and executed on Linux, which confirmed the version handshake, launch flags, `/health`, authentication and error bodies, startup-failure behaviour, and SSE streaming with cancellation (using a synthetic random-weight model for protocol only); four contract defects were fixed as a result. Phase 7 added a source-derived check that the serde wire shapes and Tauri command arguments match the TypeScript IPC types, with a mutation test proving it fails on drift. `cargo` is unavailable in this environment, so the Rust crate and the Windows executable remain **not** compiled or runtime-verified, and no model weights were available for real generation. See [`docs/phase-7/`](docs/phase-7/README.md) and [`docs/phase-5/`](docs/phase-5/README.md) for the exact commands, results, and unverified surface.
+
+## Phase 7 deliverables
+
+- [`docs/phase-7/`](docs/phase-7/README.md) — the measured environment boundary, the executed frontend gate, the Rust↔TypeScript contract test (including its mutation check), and the exact checks that remain unrun. Verdict: **C — partially verified**.
 
 ## Phase 6 deliverables
 
@@ -109,4 +113,4 @@ The runtime and model evaluation is in [`docs/phase-2/`](docs/phase-2/README.md)
 
 ## Next step
 
-Verify the desktop build on Windows: install the Rust toolchain and Visual Studio Build Tools, run `pnpm tauri dev`, then `pnpm tauri build`. A genuine inference check needs a llama.cpp build pinned to the version recorded in [`docs/phase-2/`](docs/phase-2/README.md) plus a GGUF file the owner supplies; none is committed here. Phase 6 starts only after Phase 5 is approved.
+Native verification still requires a Windows machine: install the Rust toolchain and Visual Studio Build Tools, run `pnpm tauri dev`, then `pnpm tauri build`. A genuine inference check needs a llama.cpp build pinned to the version recorded in [`docs/phase-2/`](docs/phase-2/README.md) plus a GGUF file the owner supplies; none is committed here and nothing is downloaded automatically. Phase 8 starts only after Phase 7 is approved.

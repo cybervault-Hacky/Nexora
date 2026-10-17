@@ -1,10 +1,14 @@
 # Nexora Desktop
 
-The Tauri 2 desktop client for Nexora. This is the Phase 5 build: a real native
-window, a polished React interface, and a Rust core that supervises a local
-`llama-server` process and streams real model output into the conversation. It
-still contains **no agent tools, no project modification, and no model or
-runtime downloads**.
+The Tauri 2 desktop client for Nexora. This is the Phase 5 feature set — a
+native window shell, a polished React interface, and a Rust core that supervises
+a user-supplied `llama-server` process and streams its output into the
+conversation — carried through the Phase 6–7 verification work. It still contains **no agent
+tools, no project modification, and no model or runtime downloads**.
+
+The Rust crate has **not been compiled** in the verification environment (no
+toolchain, no reachable crate registry), and no native window or real model run
+has been observed. See [`docs/phase-7/`](../../docs/phase-7/README.md).
 
 ## Stack
 
@@ -195,7 +199,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-87 Vitest tests run in jsdom:
+105 Vitest tests run in jsdom:
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
@@ -207,13 +211,16 @@ decision and a Windows machine to verify.
 - shell routing: browser preview, no model, loading, ready, and unreadable IPC
 - composer disabled/counter/error/stop states and keyboard behaviour
 - scroll-follow logic
+- cross-language contract: serde field names, enum encodings, command
+  registration, invocation, and argument keys, compared against the real Rust
+  sources (source-derived, not a serde execution; mutation-tested)
 
 Rust unit tests live beside the code (`cargo test`): SSE framing and
 classification, delta extraction, GGUF header validation, executable magic,
 settings normalisation, memory parsing, request validation, the `--version`
 line (captured from a real build, printed on stderr), and the mapping from HTTP
 rejections to UI error codes. They have **not** been executed in this
-environment — see the Phase 5 report.
+environment — see the Phase 7 report.
 
 ## Known limitations
 
