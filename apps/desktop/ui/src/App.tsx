@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
 import { FilePreview } from "./components/FilePreview";
@@ -8,8 +8,14 @@ import { ModelSetup } from "./components/ModelSetup";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { ContextBudgetBar } from "./components/ContextBudgetBar";
+import { PatchEditor } from "./components/PatchEditor";
+import { PatchPreview } from "./components/PatchPreview";
 import { usePersistentConversation } from "./features/chat/usePersistentConversation";
 import { useWorkspace } from "./features/workspace/useWorkspace";
+import { usePatch } from "./features/workspace/usePatch";
+import { planContextBudget } from "./features/workspace/contextBudget";
+import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
 import {
   unloadModel,
   toInferenceError as describeFailure,
@@ -57,8 +63,10 @@ export default function App() {
   } = usePersistentConversation({ onSettled: handleSettled });
 
   const workspace = useWorkspace();
+  const patch = usePatch(workspace.workspacePath);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [settingsRestored, setSettingsRestored] = useState(false);
   const [loadedStatus, setLoadedStatus] = useState<AppStatus | null>(null);
   const [unloading, setUnloading] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
@@ -72,6 +80,67 @@ export default function App() {
   const engineReady = isEngineReady(loadedStatus ?? status);
   const engineStatus = loadedStatus ?? status;
 
+  // Context budget: reserve system + output, fit prompt + selected files + recent history
+  const contextSize = engineStatus?.contextSize ?? 32768;
+  const maxTokens = 1024; // reserved for model output
+  const contextPlan = useMemo(() => {
+    // History for budget: all messages as role/content, newest trimming
+    const hist = messages.map((m) => ({ role: m.role, content: m.content ?? "" }));
+    // Prompt for planning is current draft
+    const prompt = draft ?? "";
+    const files = workspace.contextFiles.map((f) => ({ path: f.path, content: f.content, size: f.size }));
+    try {
+      return planContextBudget({
+        contextSize,
+        maxTokens,
+        history: hist,
+        currentPrompt: prompt,
+        selectedFiles: files,
+      });
+    } catch {
+      return null;
+    }
+  }, [contextSize, messages, draft, workspace.contextFiles]);
+
+  const filteredContextBlock = useMemo(() => {
+    if (!contextPlan) return workspace.contextBlock;
+    const included = new Set(contextPlan.filePlans.filter((f) => f.included).map((f) => f.path));
+    if (included.size === workspace.contextFiles.length) return workspace.contextBlock;
+    if (included.size === 0) return null;
+    // Rebuild block with only included files, preserving fences/paths
+    const files = workspace.contextFiles.filter((f) => included.has(f.path));
+    if (files.length === 0) return null;
+    const fenceFor = (content: string) => (content.includes("```") ? "````" : "```");
+    const inferLang = (path: string) => {
+      const ext = path.split(".").pop()?.toLowerCase() ?? "";
+      const map: Record<string, string> = {
+        rs: "rust",
+        ts: "typescript",
+        tsx: "tsx",
+        js: "javascript",
+        jsx: "jsx",
+        py: "python",
+        json: "json",
+        md: "markdown",
+        toml: "toml",
+        yaml: "yaml",
+        yml: "yaml",
+        css: "css",
+        html: "html",
+        sh: "bash",
+      };
+      return map[ext] ?? "";
+    };
+    let block = "Consider the following project context (read-only; do not claim to have modified files):\n\n";
+    for (const file of files) {
+      const lang = inferLang(file.path);
+      const fence = fenceFor(file.content);
+      block += `\nFile: ${file.path}\n${fence}${lang}\n${file.content}\n${fence}\n`;
+    }
+    block += "\nUse the context above only as background for your answer.\n";
+    return block;
+  }, [contextPlan, workspace.contextBlock, workspace.contextFiles]);
+
   const focusComposer = useCallback(() => {
     textareaRef.current?.focus();
   }, []);
@@ -84,8 +153,10 @@ export default function App() {
 
   const handleSubmit = useCallback(() => {
     stickToBottomRef.current = true;
-    submit(workspace.contextFiles.length > 0 ? { contextBlock: workspace.contextBlock } : undefined);
-  }, [submit, workspace.contextBlock, workspace.contextFiles.length]);
+    const block = filteredContextBlock ?? workspace.contextBlock;
+    const hasContext = block !== null && block.length > 0;
+    submit(hasContext ? { contextBlock: block } : undefined);
+  }, [submit, filteredContextBlock, workspace.contextBlock]);
 
   // Handle manual path entry from WorkspacePanel (custom event)
   useEffect(() => {
@@ -98,6 +169,28 @@ export default function App() {
     window.addEventListener("workspace:openManual" as never, handler as never);
     return () => window.removeEventListener("workspace:openManual" as never, handler as never);
   }, [workspace]);
+
+  // Workspace settings: restore last path once, then persist on change (no auto-scan)
+  useEffect(() => {
+    if (settingsRestored) return;
+    void getWorkspaceSettings()
+      .then((s) => {
+        setSettingsRestored(true);
+        // Do not auto-scan; only remember for manual open hint if no workspace active
+        if (s.lastWorkspacePath && !workspace.workspacePath) {
+          // Hint stored; user must explicitly open. We don't auto-open.
+        }
+      })
+      .catch(() => setSettingsRestored(true));
+  }, [settingsRestored, workspace.workspacePath]);
+
+  useEffect(() => {
+    if (!settingsRestored) return;
+    // Persist last path and collapsed state on change
+    const pref = { explorerCollapsed: sidebarCollapsed };
+    const last = workspace.workspacePath ?? null;
+    void saveWorkspaceSettings({ version: 1, lastWorkspacePath: last, preferences: pref }).catch(() => {});
+  }, [settingsRestored, workspace.workspacePath, sidebarCollapsed]);
 
   const handleStatus = useCallback(
     (next: AppStatus) => {
@@ -272,6 +365,85 @@ export default function App() {
               error={workspace.previewError}
               onClose={workspace.clearPreview}
             />
+            {contextPlan ? (
+              <ContextBudgetBar plan={contextPlan} />
+            ) : null}
+            {/* Patch workflow — read-only until explicit apply */}
+            {workspace.previewPath && workspace.preview?.content !== undefined && !workspace.previewLoading && !workspace.previewError ? (
+              <div className="workspace__patch" aria-label="Patch workflow">
+                {patch.patchState.status === "idle" ? (
+                  <button
+                    type="button"
+                    className="button button--ghost button--sm workspace__propose"
+                    disabled={!workspace.workspacePath || workspace.preview?.content?.includes("\0")}
+                    onClick={() => {
+                      if (workspace.previewPath && workspace.preview?.content !== undefined) {
+                        patch.startEditing(workspace.previewPath, workspace.preview!.content);
+                      }
+                    }}
+                    title={!workspace.workspacePath ? "Open a project first" : "Edit a proposal — original file unchanged until you apply"}
+                  >
+                    <Icon name="edit" size={12} /> Propose change
+                  </button>
+                ) : patch.patchState.status === "editing" ? (
+                  <PatchEditor
+                    path={patch.patchState.path}
+                    value={patch.editorContent}
+                    onChange={patch.updateEditor}
+                    onCancel={patch.cancel}
+                    onPreview={() => void patch.createProposal()}
+                    disabled={patch.editorContent === patch.patchState.originalContent}
+                  />
+                ) : patch.patchState.status === "creating" ? (
+                  <div className="patch-preview" role="status">
+                    <p className="patch-preview__status">Creating proposal… Validating single file, checking traversal, sensitive, binary, size…</p>
+                  </div>
+                ) : patch.patchState.status === "preview" ? (
+                  <PatchPreview
+                    proposal={patch.patchState.proposal}
+                    validation={patch.patchState.validation}
+                    onCancel={patch.cancel}
+                    onApply={() => void patch.apply()}
+                    applying={false}
+                    applied={false}
+                  />
+                ) : patch.patchState.status === "validating" ? (
+                  <PatchPreview proposal={patch.patchState.proposal} validation={null} loading onCancel={patch.cancel} onApply={() => {}} />
+                ) : patch.patchState.status === "applying" ? (
+                  <PatchPreview
+                    proposal={patch.patchState.proposal}
+                    validation={{ ok: true, errors: [], warnings: [], diffSummary: { added: 0, removed: 0, unchanged: 0, originalLines: 0, proposedLines: 0, truncated: false } }}
+                    loading={false}
+                    applying
+                    onCancel={patch.cancel}
+                    onApply={() => {}}
+                  />
+                ) : patch.patchState.status === "applied" ? (
+                  <PatchPreview
+                    proposal={patch.patchState.proposal}
+                    validation={null}
+                    applied
+                    onCancel={() => {
+                      patch.cancel();
+                      void workspace.refresh();
+                      if (workspace.previewPath) void workspace.loadPreview(workspace.previewPath);
+                    }}
+                    onApply={() => {}}
+                  />
+                ) : patch.patchState.status === "error" ? (
+                  <PatchPreview
+                    proposal={patch.patchState.proposal ?? null}
+                    validation={null}
+                    error={patch.patchState.message}
+                    onCancel={patch.cancel}
+                    onApply={() => {}}
+                  />
+                ) : null}
+                {patch.patchState.status !== "idle" && patch.patchState.status !== "editing" && patch.patchState.status !== "error" ? (
+                  <p className="workspace__patch-note">Reviewing a diff does not modify the file. Only Apply changes the intended file. Never auto-applies on generate or switch.</p>
+                ) : null}
+              </div>
+            ) : null}
           </aside>
           <section className="workspace__chat" aria-label="Conversation">
             <header className="conversation-header">

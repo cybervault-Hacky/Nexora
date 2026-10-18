@@ -219,7 +219,7 @@ pub fn is_sensitive_file(path: &Path) -> bool {
     false
 }
 
-fn is_binary_bytes(bytes: &[u8]) -> bool {
+pub fn is_binary_bytes(bytes: &[u8]) -> bool {
     // NUL byte is a strong binary signal
     if bytes.contains(&0) {
         return true;
@@ -228,7 +228,7 @@ fn is_binary_bytes(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_err()
 }
 
-fn validate_relative_path(input: &str) -> WorkspaceResult<()> {
+pub fn validate_relative_path(input: &str) -> WorkspaceResult<()> {
     if input.is_empty() {
         return Err(WorkspaceError::invalid_request("File path is empty."));
     }
@@ -269,7 +269,7 @@ fn validate_relative_path(input: &str) -> WorkspaceResult<()> {
     Ok(())
 }
 
-fn posix_relative(canonical_root: &Path, canonical_path: &Path) -> WorkspaceResult<String> {
+pub fn posix_relative(canonical_root: &Path, canonical_path: &Path) -> WorkspaceResult<String> {
     let rel = canonical_path
         .strip_prefix(canonical_root)
         .map_err(|_| WorkspaceError::forbidden("File escapes workspace."))?;

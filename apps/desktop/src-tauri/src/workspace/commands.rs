@@ -203,6 +203,100 @@ pub fn pick_workspace_dialog() -> WorkspaceResult<Option<String>> {
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Workspace settings persistence (versioned, app_config_dir)
+// ---------------------------------------------------------------------------
+
+pub struct WorkspaceSettingsState {
+    pub store: Mutex<super::settings::WorkspaceSettingsStore>,
+}
+
+impl WorkspaceSettingsState {
+    pub fn new(config_dir: PathBuf) -> Self {
+        Self {
+            store: Mutex::new(super::settings::WorkspaceSettingsStore::load(&config_dir)),
+        }
+    }
+}
+
+fn settings_lock_err() -> WorkspaceError {
+    WorkspaceError::storage("Workspace settings unavailable. Restart Nexora.")
+}
+
+#[tauri::command]
+pub fn get_workspace_settings(
+    state: State<WorkspaceSettingsState>,
+) -> WorkspaceResult<super::settings::WorkspaceSettings> {
+    let guard = state.store.lock().map_err(|_| settings_lock_err())?;
+    Ok(guard.get())
+}
+
+#[tauri::command]
+pub fn save_workspace_settings(
+    state: State<WorkspaceSettingsState>,
+    settings: super::settings::WorkspaceSettings,
+) -> WorkspaceResult<super::settings::WorkspaceSettings> {
+    let mut guard = state.store.lock().map_err(|_| settings_lock_err())?;
+    guard.save(settings)
+}
+
+// ---------------------------------------------------------------------------
+// Patch proposal — single file, validated, explicit apply
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn create_patch_proposal(
+    _state: State<WorkspaceState>,
+    root: String,
+    relative_path: String,
+    proposed_content: String,
+) -> WorkspaceResult<super::patch::PatchProposal> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::create_patch_proposal(&root_path, &relative_path, &proposed_content)
+}
+
+#[tauri::command]
+pub fn validate_patch_proposal(
+    _state: State<WorkspaceState>,
+    root: String,
+    proposal: super::patch::PatchProposal,
+) -> WorkspaceResult<super::patch::PatchValidation> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::validate_patch_proposal(&root_path, &proposal)
+}
+
+#[tauri::command]
+pub fn apply_patch_proposal(
+    _state: State<WorkspaceState>,
+    root: String,
+    proposal: super::patch::PatchProposal,
+) -> WorkspaceResult<super::patch::ApplyResult> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::apply_patch_proposal(&root_path, &proposal)
+}
+
+#[tauri::command]
+pub fn get_patch_diff(
+    _state: State<WorkspaceState>,
+    original: String,
+    proposed: String,
+) -> WorkspaceResult<super::patch::PatchDiffSummary> {
+    // No filesystem access — pure diff, safe for any input up to limit
+    if original.len() > 400_000 || proposed.len() > 400_000 {
+        return Err(WorkspaceError::too_large("Diff input too large."));
+    }
+    Ok(super::patch::diff_summary(&original, &proposed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

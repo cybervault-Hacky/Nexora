@@ -20,6 +20,9 @@ pub fn run() {
                 app.path().app_data_dir()?,
             ));
             app.manage(workspace::commands::WorkspaceState::new());
+            app.manage(workspace::commands::WorkspaceSettingsState::new(
+                config_dir.clone(),
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -56,6 +59,12 @@ pub fn run() {
             workspace::commands::close_workspace,
             workspace::commands::get_workspace,
             workspace::commands::pick_workspace_dialog,
+            workspace::commands::get_workspace_settings,
+            workspace::commands::save_workspace_settings,
+            workspace::commands::create_patch_proposal,
+            workspace::commands::validate_patch_proposal,
+            workspace::commands::apply_patch_proposal,
+            workspace::commands::get_patch_diff,
         ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");
