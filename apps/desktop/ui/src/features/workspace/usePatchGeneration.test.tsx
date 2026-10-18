@@ -18,12 +18,22 @@ vi.mock("../../lib/patch", async (importOriginal) => {
     createPatchProposal: vi.fn(),
     validatePatchProposal: vi.fn(),
     applyPatchProposal: vi.fn(),
+    createPatchBatch: vi.fn(),
+    validatePatchBatch: vi.fn(),
+    applyPatchBatch: vi.fn(),
     getPatchDiff: vi.fn().mockResolvedValue({ added: 1, removed: 1, unchanged: 0, originalLines: 1, proposedLines: 1, truncated: false }),
   };
 });
 
 import { generate, cancelGeneration } from "../../lib/inference";
-import { createPatchProposal, validatePatchProposal, applyPatchProposal } from "../../lib/patch";
+import {
+  createPatchProposal,
+  validatePatchProposal,
+  applyPatchProposal,
+  createPatchBatch,
+  validatePatchBatch,
+  applyPatchBatch,
+} from "../../lib/patch";
 import { usePatchGeneration } from "./usePatchGeneration";
 
 const generateMock = vi.mocked(generate);
@@ -31,6 +41,9 @@ const cancelMock = vi.mocked(cancelGeneration);
 const createMock = vi.mocked(createPatchProposal);
 const validateMock = vi.mocked(validatePatchProposal);
 const applyMock = vi.mocked(applyPatchProposal);
+const createBatchMock = vi.mocked(createPatchBatch);
+const validateBatchMock = vi.mocked(validatePatchBatch);
+const applyBatchMock = vi.mocked(applyPatchBatch);
 
 const proposal = {
   id: "patch-1",
@@ -61,6 +74,9 @@ beforeEach(() => {
   createMock.mockResolvedValue(proposal);
   validateMock.mockResolvedValue({ ok: true, errors: [], warnings: [], diffSummary: { added: 1, removed: 1, unchanged: 0, originalLines: 1, proposedLines: 1, truncated: false } });
   applyMock.mockResolvedValue({ applied: true, path: "src/app.ts", previousHash: "abc", newHash: "def", newSize: 10 });
+  createBatchMock.mockReset();
+  validateBatchMock.mockReset();
+  applyBatchMock.mockReset();
 });
 
 describe("usePatchGeneration — inference integration", () => {
@@ -332,5 +348,115 @@ describe("usePatchGeneration — inference integration", () => {
     if (result.current.generationState.status === "error") {
       expect(result.current.generationState.message).toMatch(/File changed/);
     }
+  });
+});
+
+describe("usePatchGeneration — multi-file batches (contract v2)", () => {
+  const batchFixture = {
+    id: "batch-1",
+    files: [proposal, { ...proposal, id: "patch-2", path: "src/b.ts" }],
+    createdAt: Date.now(),
+  };
+  const batchValidationOk = {
+    ok: true,
+    errors: [],
+    warnings: [],
+    files: [
+      { path: "src/app.ts", validation: { ok: true, errors: [], warnings: [], diffSummary: { added: 1, removed: 1, unchanged: 0, originalLines: 1, proposedLines: 1, truncated: false } } },
+      { path: "src/b.ts", validation: { ok: true, errors: [], warnings: [], diffSummary: { added: 1, removed: 1, unchanged: 0, originalLines: 1, proposedLines: 1, truncated: false } } },
+    ],
+  };
+
+  function streamV2(files: Array<Record<string, unknown>>) {
+    generateMock.mockImplementation(async (req, onEvent) => {
+      onEvent({
+        type: "delta",
+        requestId: req.requestId,
+        text: JSON.stringify({ version: 2, explanation: "multi", files }),
+      });
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+    });
+  }
+
+  it("turns v2 multi-file output into an atomic batch preview", async () => {
+    streamV2([
+      { targetPath: "a.txt", proposedContent: "a2" },
+      { targetPath: "b.txt", proposedContent: "b2" },
+    ]);
+    createBatchMock.mockResolvedValue(batchFixture as never);
+    validateBatchMock.mockResolvedValue(batchValidationOk as never);
+
+    const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change both", filteredContextBlock: null });
+    });
+
+    await waitFor(() => expect(result.current.generationState.status).toBe("previewBatch"));
+    expect(createBatchMock).toHaveBeenCalledWith("/tmp/proj", [
+      { relativePath: "a.txt", proposedContent: "a2" },
+      { relativePath: "b.txt", proposedContent: "b2" },
+    ]);
+    if (result.current.generationState.status === "previewBatch") {
+      expect(result.current.generationState.batch.files).toHaveLength(2);
+      expect(result.current.generationState.explanation).toBe("multi");
+    }
+  });
+
+  it("applies a batch atomically via apply_patch_batch", async () => {
+    streamV2([
+      { targetPath: "a.txt", proposedContent: "a2" },
+      { targetPath: "b.txt", proposedContent: "b2" },
+    ]);
+    createBatchMock.mockResolvedValue(batchFixture as never);
+    validateBatchMock.mockResolvedValue(batchValidationOk as never);
+    applyBatchMock.mockResolvedValue({ applied: true, results: [] } as never);
+
+    const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change both", filteredContextBlock: null });
+    });
+    await waitFor(() => expect(result.current.generationState.status).toBe("previewBatch"));
+    await act(async () => {
+      await result.current.apply();
+    });
+    await waitFor(() => expect(result.current.generationState.status).toBe("appliedBatch"));
+    expect(applyBatchMock).toHaveBeenCalledWith("/tmp/proj", batchFixture);
+  });
+
+  it("surfaces batch validation failures as honest errors", async () => {
+    streamV2([
+      { targetPath: "a.txt", proposedContent: "a2" },
+      { targetPath: "b.txt", proposedContent: "b2" },
+    ]);
+    createBatchMock.mockResolvedValue(batchFixture as never);
+    validateBatchMock.mockResolvedValue({
+      ok: false,
+      errors: ["src/b.ts: Stale proposal: file has changed."],
+      warnings: [],
+      files: [],
+    } as never);
+
+    const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change both", filteredContextBlock: null });
+    });
+    await waitFor(() => expect(result.current.generationState.status).toBe("error"));
+    if (result.current.generationState.status === "error") {
+      expect(result.current.generationState.message).toMatch(/Stale proposal/);
+    }
+  });
+
+  it("keeps v1 single-file output on the unchanged single path", async () => {
+    generateMock.mockImplementation(async (req, onEvent) => {
+      onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+    });
+    const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change it", filteredContextBlock: null });
+    });
+    await waitFor(() => expect(result.current.generationState.status).toBe("preview"));
+    expect(createMock).toHaveBeenCalledWith("/tmp/proj", "a.txt", "new");
+    expect(createBatchMock).not.toHaveBeenCalled();
   });
 });

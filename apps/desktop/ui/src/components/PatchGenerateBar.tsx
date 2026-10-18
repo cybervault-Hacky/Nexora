@@ -123,6 +123,27 @@ export function PatchGenerateBar({
   // Render generation UI + preview when needed
   const state = generation.generationState;
 
+  // Multi-file batch preview: per-file diffs, atomic apply-all.
+  if (state.status === "previewBatch") {
+    return (
+      <div className="patch-generate" aria-label="Patch generation">
+        {state.explanation ? (
+          <p className="patch-generate__explanation">{state.explanation}</p>
+        ) : null}
+        <PatchPreview
+          proposal={null}
+          validation={null}
+          files={state.batch.files}
+          onCancel={handleDismiss}
+          onApply={handleApply}
+        />
+        <p className="patch-generate__note">
+          Multi-file batch ({state.batch.files.length} files) — generated via local model, untrusted until reviewed. All files apply together or not at all; nothing changes until you apply.
+        </p>
+      </div>
+    );
+  }
+
   // If preview or applied, show explanation + PatchPreview + detailed validation
   if (state.status === "preview") {
     const isRevised = repair.repairState.status === "revised";
@@ -188,6 +209,24 @@ export function PatchGenerateBar({
           </div>
         ) : null}
         <p className="patch-generate__note">Generated via local model — untrusted until validated. Original file unchanged until you apply.</p>
+      </div>
+    );
+  }
+
+  if (state.status === "appliedBatch") {
+    return (
+      <div className="patch-generate" aria-label="Patch generation">
+        <PatchPreview
+          proposal={null}
+          validation={null}
+          files={state.batch.files}
+          applied
+          onCancel={handleDismiss}
+          onApply={() => {}}
+        />
+        {state.explanation ? (
+          <p className="patch-generate__explanation">{state.explanation}</p>
+        ) : null}
       </div>
     );
   }

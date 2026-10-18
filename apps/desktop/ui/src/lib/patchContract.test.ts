@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAndValidatePatchResponse, validateInstruction } from "./patchContract";
+import { parseAndValidatePatchBatch, parseAndValidatePatchResponse, validateInstruction } from "./patchContract";
 
 const original = "let a = 1;\n";
 
@@ -207,5 +207,122 @@ describe("validateInstruction", () => {
   });
   it("rejects too short", () => {
     expect(validateInstruction("ab").ok).toBe(false);
+  });
+});
+
+describe("patchContract v2 — multi-file batches", () => {
+  const batchJson = (files: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ version: 2, files, ...extra });
+
+  it("accepts a valid multi-file batch", () => {
+    const res = parseAndValidatePatchBatch(
+      batchJson([
+        { targetPath: "src/a.ts", proposedContent: "a2\n", explanation: "part one" },
+        { targetPath: "src/b.ts", proposedContent: "b2\n" },
+      ], { explanation: "batch" }),
+      { "src/a.ts": "a1\n", "src/b.ts": "b1\n" },
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.batch.version).toBe(2);
+      expect(res.batch.files.map((f) => f.targetPath)).toEqual(["src/a.ts", "src/b.ts"]);
+      expect(res.batch.files[0]!.explanation).toBe("part one");
+      expect(res.batch.explanation).toBe("batch");
+    }
+  });
+
+  it("wraps a v1 single-file object as a one-file batch", () => {
+    const res = parseAndValidatePatchBatch(
+      JSON.stringify({ version: 1, targetPath: "a.txt", proposedContent: "new" }),
+      { "a.txt": "old" },
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.batch.version).toBe(1);
+      expect(res.batch.files).toHaveLength(1);
+      expect(res.batch.files[0]!.targetPath).toBe("a.txt");
+    }
+  });
+
+  it("rejects duplicate target paths case-insensitively", () => {
+    const res = parseAndValidatePatchBatch(
+      batchJson([
+        { targetPath: "src/A.ts", proposedContent: "x\n" },
+        { targetPath: "src/a.ts", proposedContent: "y\n" },
+      ]),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/Duplicate target path/);
+  });
+
+  it("rejects empty and oversized batches", () => {
+    expect(parseAndValidatePatchBatch(batchJson([])).ok).toBe(false);
+    const many = Array.from({ length: 21 }, (_, i) => ({
+      targetPath: `f${i}.txt`,
+      proposedContent: "x",
+    }));
+    const res = parseAndValidatePatchBatch(batchJson(many));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/Too many files/);
+  });
+
+  it("enforces per-file rules inside a batch", () => {
+    const traversal = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "ok.txt", proposedContent: "x" }, { targetPath: "../evil.txt", proposedContent: "x" }]),
+    );
+    expect(traversal.ok).toBe(false);
+    if (!traversal.ok) expect(traversal.error).toMatch(/traversal/);
+
+    const sensitive = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "ok.txt", proposedContent: "x" }, { targetPath: "cfg/.env", proposedContent: "x" }]),
+    );
+    expect(sensitive.ok).toBe(false);
+    if (!sensitive.ok) expect(sensitive.error).toMatch(/Sensitive file/);
+
+    const noChange = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "a.txt", proposedContent: "same" }]),
+      { "a.txt": "same" },
+    );
+    expect(noChange.ok).toBe(false);
+    if (!noChange.ok) expect(noChange.error).toMatch(/No changes detected/);
+
+    const nul = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "a.bin", proposedContent: "x\u0000y" }]),
+    );
+    expect(nul.ok).toBe(false);
+    if (!nul.ok) expect(nul.error).toMatch(/binary/);
+  });
+
+  it("rejects wrong versions and unknown fields strictly", () => {
+    const wrongVersion = parseAndValidatePatchBatch(
+      JSON.stringify({ version: 1, files: [{ targetPath: "a.txt", proposedContent: "x" }] }),
+    );
+    expect(wrongVersion.ok).toBe(false);
+    if (!wrongVersion.ok) expect(wrongVersion.error).toMatch(/Unsupported contract version/);
+
+    const unknownTop = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "a.txt", proposedContent: "x" }], { extra: 1 } as Record<string, unknown>),
+    );
+    expect(unknownTop.ok).toBe(false);
+    if (!unknownTop.ok) expect(unknownTop.error).toMatch(/Unexpected field/);
+
+    const unknownFile = parseAndValidatePatchBatch(
+      batchJson([{ targetPath: "a.txt", proposedContent: "x", mode: "append" }]),
+    );
+    expect(unknownFile.ok).toBe(false);
+    if (!unknownFile.ok) expect(unknownFile.error).toMatch(/Unexpected field in file entry/);
+
+    expect(parseAndValidatePatchBatch("[{\"targetPath\":\"a\"}]").ok).toBe(false);
+  });
+
+  it("allows files the caller has not seen (checked later against disk)", () => {
+    const res = parseAndValidatePatchBatch(
+      batchJson([
+        { targetPath: "seen.txt", proposedContent: "new" },
+        { targetPath: "unseen.txt", proposedContent: "anything" },
+      ]),
+      { "seen.txt": "old" },
+    );
+    expect(res.ok).toBe(true);
   });
 });

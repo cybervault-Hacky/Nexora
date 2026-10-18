@@ -1,0 +1,52 @@
+[package]
+name = "nexora-auth"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Standalone Nexora authentication service foundation (health-only scaffold; no authentication yet)."
+
+# Intentionally a standalone package, NOT a member of any Cargo workspace and
+# outside the pnpm workspace (services/ is not in pnpm-workspace.yaml). This
+# keeps apps/desktop/src-tauri (Tauri desktop shell) untouched and lets this
+# service be built and tested independently.
+
+[dependencies]
+# HTTP framework for the standalone service (architecture plan: Axum).
+axum = "0.8"
+# Async runtime: server loop, TCP listener, graceful shutdown on Ctrl+C.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+# Typed, deterministic JSON payloads (health + error envelopes).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Argon2id password hashing (Phase 23B): maintained RustCrypto password-hashes
+# family; PHC encoded strings with parameters + per-hash random salt. Used only
+# by src/password.rs, independent of HTTP routes and the frontend.
+argon2 = "0.5"
+# sha256 for email-verification token digests (Phase 23C): tokens are 32 random
+# bytes, stored ONLY as sha256(raw) — the plan (phase-23 §4/§5) specifies
+# sha256-at-rest for high-entropy tokens (not Argon2id; fast hash is correct
+# for 256-bit secrets and allows indexed lookup). Never used for passwords.
+sha2 = "0.10"
+# PostgreSQL driver + migration runner (Phase 23C: runtime account/verification
+# storage; promoted from dev-dependencies — the service now performs real,
+# parameterized database operations). Runtime queries only; no compile-time DB
+# access. TLS features deliberately omitted (loopback/dev posture; see docs).
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "migrate"] }
+# HTTPS client for the server-side Google code exchange (Phase 23F, plan §2.5:
+# "Code exchange: performed by the auth server"; the client secret lives only
+# in the server secret store). rustls avoids OpenSSL system dependencies;
+# `json` parses Google's token response.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Proper OIDC ID-token signature verification (Phase 23G step 6): RS256
+# against Google's JWKS (`DecodingKey::from_rsa_components`) plus registered
+# claim checks (iss/aud/exp). Unverified token payloads are never trusted.
+# (Phase 23F briefly used `base64` for payload-only decoding; step 6 replaced
+# that with full verification and the dependency was dropped.)
+jsonwebtoken = "9"
+
+[dev-dependencies]
+# In-process router tests (tower::ServiceExt::oneshot) — no sockets required.
+tower = { version = "0.5", features = ["util"] }
+# Read response bodies in tests.
+http-body-util = "0.1"
+# (sqlx moved to [dependencies] in Phase 23C — the service itself uses it now.)

@@ -434,3 +434,332 @@ mod tests {
         assert!(validate_instruction(&s).is_err());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Contract v2 — multi-file batches (mirror of patchContract.ts; additive)
+// ---------------------------------------------------------------------------
+//
+// v2: { "version": 2, "explanation"?: "...", "files": [ { "targetPath",
+//       "proposedContent", "explanation"? }, ... ] } — 1..=MAX_BATCH_FILES
+// entries, unique paths (case-insensitive). A v1 object parses as a 1-file
+// batch. Per-file rules are exactly the v1 rules.
+
+use std::collections::HashMap;
+
+pub const PATCH_CONTRACT_VERSION_V2: u8 = 2;
+pub const MAX_BATCH_FILES: usize = 20;
+
+#[derive(Debug, Clone)]
+pub struct ValidatedFileContract {
+    pub target_path: String,
+    pub proposed_content: String,
+    pub explanation: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatedPatchBatch {
+    pub version: u8,
+    pub files: Vec<ValidatedFileContract>,
+    pub explanation: Option<String>,
+}
+
+fn validate_file_fields(
+    target_raw: &str,
+    proposed: &str,
+    explanation: Option<&str>,
+    original: Option<&str>,
+) -> Result<ValidatedFileContract, String> {
+    let target = target_raw.trim();
+    if target.is_empty() {
+        return Err("Missing 'targetPath'.".to_string());
+    }
+    if let Err(e) = validate_relative_path(target) {
+        return Err(format!("Invalid target path '{}': {}", target, e.message));
+    }
+    if target.len() > MAX_PATH_CHARS {
+        return Err("Target path too long.".to_string());
+    }
+    if std::path::Path::new(target).is_absolute() {
+        return Err("Absolute target path not allowed.".to_string());
+    }
+    if is_sensitive_file(std::path::Path::new(target)) {
+        return Err("Sensitive file cannot be patched.".to_string());
+    }
+
+    if proposed.trim().is_empty() {
+        return Err("Missing 'proposedContent' — patch must contain replacement content.".to_string());
+    }
+    if proposed.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        return Err(format!(
+            "Proposed content too large ({} bytes, max {}).",
+            proposed.as_bytes().len(),
+            MAX_PREVIEW_BYTES
+        ));
+    }
+    if proposed.chars().count() > MAX_PROPOSED_CHARS {
+        return Err("Proposed content exceeds character limit.".to_string());
+    }
+    if proposed.contains('\0') {
+        return Err("Proposed content is binary (contains NUL).".to_string());
+    }
+    if let Some(original) = original {
+        if proposed == original {
+            return Err(format!(
+                "No changes detected in '{}' — proposed content equals original.",
+                target
+            ));
+        }
+    }
+
+    let explanation = explanation
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(exp) = &explanation {
+        if exp.chars().count() > MAX_EXPLANATION_CHARS {
+            return Err("Explanation too long (max 1000 chars).".to_string());
+        }
+    }
+
+    Ok(ValidatedFileContract {
+        target_path: target.to_string(),
+        proposed_content: proposed.to_string(),
+        explanation,
+    })
+}
+
+/// Strict parser for v2 batches. `originals` (path → content) enables the
+/// no-change check for known files; files the caller has not seen are checked
+/// against disk at batch creation instead.
+pub fn parse_and_validate_batch(
+    raw: &str,
+    originals: &HashMap<String, String>,
+) -> Result<ValidatedPatchBatch, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Model returned empty response.".to_string());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("Malformed patch JSON: {}", e))?;
+    let obj = parsed
+        .as_object()
+        .ok_or_else(|| "Patch response must be a JSON object.".to_string())?;
+
+    // v1 single-file object → 1-file batch.
+    if !obj.contains_key("files") {
+        let version = obj.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        if version != PATCH_CONTRACT_VERSION && version != PATCH_CONTRACT_VERSION_V2 {
+            return Err(format!(
+                "Unsupported contract version {} (expected 1 or 2).",
+                version
+            ));
+        }
+        for key in obj.keys() {
+            let allowed = matches!(
+                key.as_str(),
+                "version"
+                    | "targetPath"
+                    | "target_path"
+                    | "proposedContent"
+                    | "proposed_content"
+                    | "explanation"
+            );
+            if !allowed {
+                return Err(format!("Unexpected field in patch response: '{}'", key));
+            }
+        }
+        let target_raw = obj
+            .get("targetPath")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("target_path").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let proposed = obj
+            .get("proposedContent")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("proposed_content").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let explanation = obj.get("explanation").and_then(|v| v.as_str());
+        let original = originals.get(target_raw.trim()).map(|s| s.as_str());
+        let file = validate_file_fields(target_raw, proposed, explanation, original)?;
+        return Ok(ValidatedPatchBatch {
+            version: PATCH_CONTRACT_VERSION,
+            files: vec![file],
+            explanation: explanation
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        });
+    }
+
+    // v2 batch object.
+    let version = obj.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    if version != PATCH_CONTRACT_VERSION_V2 {
+        return Err(format!(
+            "Unsupported contract version {} (expected 2 for 'files').",
+            version
+        ));
+    }
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "version" | "files" | "explanation") {
+            return Err(format!("Unexpected field in patch response: '{}'", key));
+        }
+    }
+    let files = obj
+        .get("files")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Patch response 'files' must be a non-empty array.".to_string())?;
+    if files.is_empty() {
+        return Err("Patch response 'files' must be a non-empty array.".to_string());
+    }
+    if files.len() > MAX_BATCH_FILES {
+        return Err(format!(
+            "Too many files in patch response (max {}).",
+            MAX_BATCH_FILES
+        ));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut validated = Vec::with_capacity(files.len());
+    for entry in files {
+        let entry_obj = entry
+            .as_object()
+            .ok_or_else(|| "Each entry in 'files' must be a JSON object.".to_string())?;
+        for key in entry_obj.keys() {
+            let allowed = matches!(
+                key.as_str(),
+                "targetPath" | "target_path" | "proposedContent" | "proposed_content" | "explanation"
+            );
+            if !allowed {
+                return Err(format!("Unexpected field in file entry: '{}'", key));
+            }
+        }
+        let target_raw = entry_obj
+            .get("targetPath")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry_obj.get("target_path").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let proposed = entry_obj
+            .get("proposedContent")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry_obj.get("proposed_content").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let explanation = entry_obj.get("explanation").and_then(|v| v.as_str());
+        let original = originals.get(target_raw.trim()).map(|s| s.as_str());
+        let file = validate_file_fields(target_raw, proposed, explanation, original)?;
+        if !seen.insert(file.target_path.to_lowercase()) {
+            return Err(format!("Duplicate target path in patch response: '{}'", file.target_path));
+        }
+        validated.push(file);
+    }
+
+    let explanation = obj.get("explanation").and_then(|v| v.as_str());
+    if let Some(exp) = explanation {
+        if exp.trim().chars().count() > MAX_EXPLANATION_CHARS {
+            return Err("Explanation too long (max 1000 chars).".to_string());
+        }
+    }
+
+    Ok(ValidatedPatchBatch {
+        version: PATCH_CONTRACT_VERSION_V2,
+        files: validated,
+        explanation: explanation
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    })
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    fn originals(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_valid_multi_file_batch() {
+        let raw = r#"{"version":2,"explanation":"batch","files":[
+            {"targetPath":"src/a.ts","proposedContent":"a2\n","explanation":"part one"},
+            {"targetPath":"src/b.ts","proposedContent":"b2\n"}]}"#;
+        let batch = parse_and_validate_batch(raw, &originals(&[("src/a.ts", "a1\n"), ("src/b.ts", "b1\n")]))
+            .unwrap();
+        assert_eq!(batch.version, PATCH_CONTRACT_VERSION_V2);
+        assert_eq!(batch.files.len(), 2);
+        assert_eq!(batch.files[0].target_path, "src/a.ts");
+        assert_eq!(batch.files[0].explanation.as_deref(), Some("part one"));
+        assert_eq!(batch.explanation.as_deref(), Some("batch"));
+    }
+
+    #[test]
+    fn wraps_v1_object_as_one_file_batch() {
+        let raw = r#"{"version":1,"targetPath":"a.txt","proposedContent":"new"}"#;
+        let batch = parse_and_validate_batch(raw, &originals(&[("a.txt", "old")])).unwrap();
+        assert_eq!(batch.version, PATCH_CONTRACT_VERSION);
+        assert_eq!(batch.files.len(), 1);
+        assert_eq!(batch.files[0].target_path, "a.txt");
+    }
+
+    #[test]
+    fn rejects_duplicates_and_oversize_batches() {
+        let dup = r#"{"version":2,"files":[
+            {"targetPath":"src/A.ts","proposedContent":"x"},
+            {"targetPath":"src/a.ts","proposedContent":"y"}]}"#;
+        assert!(parse_and_validate_batch(dup, &HashMap::new()).is_err());
+
+        let empty = r#"{"version":2,"files":[]}"#;
+        assert!(parse_and_validate_batch(empty, &HashMap::new()).is_err());
+
+        let mut many = String::from("{\"version\":2,\"files\":[");
+        for i in 0..MAX_BATCH_FILES + 1 {
+            if i > 0 {
+                many.push(',');
+            }
+            many.push_str(&format!("{{\"targetPath\":\"f{i}.txt\",\"proposedContent\":\"x\"}}"));
+        }
+        many.push_str("]}");
+        assert!(parse_and_validate_batch(&many, &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn enforces_per_file_rules() {
+        let traversal = r#"{"version":2,"files":[
+            {"targetPath":"ok.txt","proposedContent":"x"},
+            {"targetPath":"../evil.txt","proposedContent":"x"}]}"#;
+        assert!(parse_and_validate_batch(traversal, &HashMap::new()).is_err());
+
+        let sensitive = r#"{"version":2,"files":[{"targetPath":"cfg/.env","proposedContent":"x"}]}"#;
+        assert!(parse_and_validate_batch(sensitive, &HashMap::new()).is_err());
+
+        let no_change = r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"same"}]}"#;
+        assert!(parse_and_validate_batch(no_change, &originals(&[("a.txt", "same")])).is_err());
+
+        let nul = "{\"version\":2,\"files\":[{\"targetPath\":\"a.bin\",\"proposedContent\":\"x\\u0000y\"}]}";
+        assert!(parse_and_validate_batch(nul, &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_versions_and_unknown_fields() {
+        let wrong_version = r#"{"version":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
+        assert!(parse_and_validate_batch(wrong_version, &HashMap::new()).is_err());
+
+        let unknown_top = r#"{"version":2,"extra":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
+        assert!(parse_and_validate_batch(unknown_top, &HashMap::new()).is_err());
+
+        let unknown_file =
+            r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"x","mode":"append"}]}"#;
+        assert!(parse_and_validate_batch(unknown_file, &HashMap::new()).is_err());
+
+        let array = r#"[{"targetPath":"a"}]"#;
+        assert!(parse_and_validate_batch(array, &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn allows_unseen_files_checked_later_against_disk() {
+        let raw = r#"{"version":2,"files":[
+            {"targetPath":"seen.txt","proposedContent":"new"},
+            {"targetPath":"unseen.txt","proposedContent":"anything"}]}"#;
+        let batch = parse_and_validate_batch(raw, &originals(&[("seen.txt", "old")])).unwrap();
+        assert_eq!(batch.files.len(), 2);
+    }
+}

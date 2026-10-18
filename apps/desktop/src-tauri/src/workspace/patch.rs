@@ -580,3 +580,354 @@ mod tests {
         assert!(summary.unchanged >= 2);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file patch batches — atomic all-or-nothing apply
+// ---------------------------------------------------------------------------
+//
+// A batch is 1..=MAX_BATCH_FILES per-file proposals applied fully or not at
+// all (Phase-1 agent protocol, doc 05 §14). Every file replace is individually
+// atomic (tempfile + persist, same as single-file apply). If any replace fails,
+// files already replaced in this batch are restored from their recorded
+// original content (atomic write) and the batch reports an error.
+//
+// Documented residual: a process crash mid-apply is not journaled; the next
+// validate/apply reports stale hashes per file and each file on disk is still
+// well-formed.
+
+pub const MAX_BATCH_FILES: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEdit {
+    pub relative_path: String,
+    pub proposed_content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchBatch {
+    pub id: String,
+    pub files: Vec<PatchProposal>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchFileValidation {
+    pub path: String,
+    pub validation: PatchValidation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchValidation {
+    pub ok: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub files: Vec<BatchFileValidation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchApplyResult {
+    pub applied: bool,
+    pub results: Vec<ApplyResult>,
+}
+
+/// Create per-file proposals for a batch. Each file goes through the exact
+/// single-file checks (path, traversal, sensitive, binary, size, hashes).
+pub fn create_patch_batch(root: &Path, edits: &[BatchEdit]) -> WorkspaceResult<PatchBatch> {
+    if edits.is_empty() {
+        return Err(WorkspaceError::invalid_request(
+            "Batch is empty — at least one file is required.",
+        ));
+    }
+    if edits.len() > MAX_BATCH_FILES {
+        return Err(WorkspaceError::invalid_request(format!(
+            "Too many files in patch batch (max {}).",
+            MAX_BATCH_FILES
+        )));
+    }
+
+    // Unique paths — case-insensitive because Windows paths are.
+    let mut seen = std::collections::HashSet::new();
+    for edit in edits {
+        if edit.relative_path.trim().is_empty() {
+            return Err(WorkspaceError::invalid_request(
+                "Batch contains an empty target path.",
+            ));
+        }
+        if !seen.insert(edit.relative_path.to_lowercase()) {
+            return Err(WorkspaceError::invalid_request(format!(
+                "Duplicate path in patch batch: '{}'.",
+                edit.relative_path
+            )));
+        }
+    }
+
+    let mut files = Vec::with_capacity(edits.len());
+    for edit in edits {
+        files.push(create_patch_proposal(root, &edit.relative_path, &edit.proposed_content)?);
+    }
+
+    Ok(PatchBatch {
+        id: generate_id(),
+        files,
+        created_at: now_millis(),
+    })
+}
+
+/// Validate every file in the batch and aggregate. Batch-level failures (any
+/// per-file error) make `ok` false; stale warnings keep their file paths.
+pub fn validate_patch_batch(root: &Path, batch: &PatchBatch) -> WorkspaceResult<BatchValidation> {
+    if batch.files.is_empty() {
+        return Ok(BatchValidation {
+            ok: false,
+            errors: vec!["Batch is empty — at least one file is required.".to_string()],
+            warnings: Vec::new(),
+            files: Vec::new(),
+        });
+    }
+    if batch.files.len() > MAX_BATCH_FILES {
+        return Ok(BatchValidation {
+            ok: false,
+            errors: vec![format!("Too many files in patch batch (max {}).", MAX_BATCH_FILES)],
+            warnings: Vec::new(),
+            files: Vec::new(),
+        });
+    }
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut per_file = Vec::new();
+
+    let mut seen = std::collections::HashSet::new();
+    for proposal in &batch.files {
+        if !seen.insert(proposal.path.to_lowercase()) {
+            errors.push(format!("Duplicate path in patch batch: '{}'.", proposal.path));
+        }
+    }
+
+    for proposal in &batch.files {
+        let validation = validate_patch_proposal(root, proposal)?;
+        if !validation.ok {
+            for error in &validation.errors {
+                errors.push(format!("{}: {}", proposal.path, error));
+            }
+        }
+        for warning in &validation.warnings {
+            warnings.push(format!("{}: {}", proposal.path, warning));
+        }
+        per_file.push(BatchFileValidation {
+            path: proposal.path.clone(),
+            validation,
+        });
+    }
+
+    Ok(BatchValidation {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        files: per_file,
+    })
+}
+
+/// Apply every file in the batch, or none. Validation and stale checks run for
+/// the whole batch before the first write.
+pub fn apply_patch_batch(root: &Path, batch: &PatchBatch) -> WorkspaceResult<BatchApplyResult> {
+    let validation = validate_patch_batch(root, batch)?;
+    if !validation.ok {
+        return Err(WorkspaceError::invalid_request(format!(
+            "Batch validation failed: {}",
+            validation.errors.join("; ")
+        )));
+    }
+    let stale: Vec<String> = validation
+        .warnings
+        .iter()
+        .filter(|w| w.to_lowercase().contains("stale"))
+        .cloned()
+        .collect();
+    if !stale.is_empty() {
+        return Err(WorkspaceError::invalid_request(format!(
+            "Files changed since the batch was created ({}). Reload and recreate the batch.",
+            stale.join("; ")
+        )));
+    }
+
+    let mut results = Vec::with_capacity(batch.files.len());
+    let mut replaced: Vec<&PatchProposal> = Vec::new();
+
+    for proposal in &batch.files {
+        match apply_patch_proposal(root, proposal) {
+            Ok(result) => {
+                replaced.push(proposal);
+                results.push(result);
+            }
+            Err(error) => {
+                // Roll back every file this batch already replaced by writing
+                // the recorded original content back atomically.
+                for done in replaced.iter().rev() {
+                    if let Err(restore_error) = restore_original(root, done) {
+                        return Err(WorkspaceError::storage(format!(
+                            "Batch apply failed ({}) and rollback also failed ({}). \
+                             Check the workspace before retrying.",
+                            error.message, restore_error.message
+                        )));
+                    }
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(BatchApplyResult {
+        applied: true,
+        results,
+    })
+}
+
+/// Restore a proposal's recorded original content with an atomic write.
+fn restore_original(root: &Path, proposal: &PatchProposal) -> WorkspaceResult<()> {
+    let canonical_root = super::scanner::canonicalize_root(root)?;
+    let joined = canonical_root.join(&proposal.path);
+    let canonical_file = fs::canonicalize(&joined)
+        .map_err(|_| WorkspaceError::storage("Could not resolve file for rollback."))?;
+    if !canonical_file.starts_with(&canonical_root) {
+        return Err(WorkspaceError::forbidden("File escapes workspace."));
+    }
+    let parent = canonical_file
+        .parent()
+        .ok_or_else(|| WorkspaceError::storage("Invalid file parent."))?;
+    use std::io::Write;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|_| WorkspaceError::storage("Could not create rollback file."))?;
+    tmp.write_all(proposal.original_content.as_bytes())
+        .and_then(|_| tmp.as_file().sync_all())
+        .map_err(|_| WorkspaceError::storage("Could not write rollback content."))?;
+    tmp.persist(&canonical_file)
+        .map_err(|_| WorkspaceError::storage("Could not restore file during rollback."))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn make_file(dir: &Path, rel: &str, content: &str) {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(p, content).unwrap();
+    }
+
+    fn edit(rel: &str, proposed: &str) -> BatchEdit {
+        BatchEdit {
+            relative_path: rel.to_string(),
+            proposed_content: proposed.to_string(),
+        }
+    }
+
+    #[test]
+    fn batch_create_validate_apply_happy_path() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+        make_file(dir.path(), "sub/b.txt", "b1\n");
+
+        let batch = create_patch_batch(
+            dir.path(),
+            &[edit("a.txt", "a2\n"), edit("sub/b.txt", "b2\n")],
+        )
+        .unwrap();
+        assert_eq!(batch.files.len(), 2);
+        assert_eq!(batch.files[0].path, "a.txt");
+        assert_eq!(batch.files[1].path, "sub/b.txt");
+
+        let validation = validate_patch_batch(dir.path(), &batch).unwrap();
+        assert!(validation.ok, "errors: {:?}", validation.errors);
+        assert!(validation.warnings.is_empty());
+
+        let result = apply_patch_batch(dir.path(), &batch).unwrap();
+        assert!(result.applied);
+        assert_eq!(result.results.len(), 2);
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a2\n");
+        assert_eq!(fs::read_to_string(dir.path().join("sub/b.txt")).unwrap(), "b2\n");
+    }
+
+    #[test]
+    fn batch_rejects_empty_oversized_and_duplicate_paths() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+
+        assert!(create_patch_batch(dir.path(), &[]).is_err());
+
+        let many: Vec<BatchEdit> = (0..MAX_BATCH_FILES + 1)
+            .map(|i| edit(&format!("f{i}.txt"), "x"))
+            .collect();
+        assert!(create_patch_batch(dir.path(), &many).is_err());
+
+        let dup = create_patch_batch(
+            dir.path(),
+            &[edit("a.txt", "x\n"), edit("A.TXT", "y\n")],
+        );
+        assert!(dup.is_err(), "case-insensitive duplicates must be rejected");
+    }
+
+    #[test]
+    fn batch_create_fails_when_any_file_is_missing() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+        let result = create_patch_batch(dir.path(), &[edit("a.txt", "x\n"), edit("missing.txt", "y\n")]);
+        assert!(result.is_err(), "one missing file fails the whole batch");
+    }
+
+    #[test]
+    fn batch_apply_refuses_stale_files_before_any_write() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+        make_file(dir.path(), "b.txt", "b1\n");
+        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")]).unwrap();
+
+        // Change b.txt after the batch was created.
+        make_file(dir.path(), "b.txt", "b-changed\n");
+
+        let error = apply_patch_batch(dir.path(), &batch).unwrap_err();
+        assert!(error.message.to_lowercase().contains("changed"), "got: {}", error.message);
+        // All-or-nothing: a.txt must be untouched.
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a1\n");
+    }
+
+    #[test]
+    fn batch_validate_reports_stale_per_file() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+        make_file(dir.path(), "b.txt", "b1\n");
+        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")]).unwrap();
+        make_file(dir.path(), "b.txt", "b-changed\n");
+
+        let validation = validate_patch_batch(dir.path(), &batch).unwrap();
+        let stale: Vec<&String> = validation
+            .warnings
+            .iter()
+            .filter(|w| w.contains("b.txt"))
+            .collect();
+        assert!(!stale.is_empty(), "warnings: {:?}", validation.warnings);
+        assert_eq!(validation.files.len(), 2);
+    }
+
+    #[test]
+    fn restore_original_writes_recorded_content_back() {
+        let dir = TempDir::new().unwrap();
+        make_file(dir.path(), "a.txt", "a1\n");
+        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n")]).unwrap();
+        apply_patch_batch(dir.path(), &batch).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a2\n");
+
+        restore_original(dir.path(), &batch.files[0]).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a1\n");
+    }
+}

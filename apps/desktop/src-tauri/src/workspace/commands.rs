@@ -298,6 +298,49 @@ pub fn get_patch_diff(
 }
 
 // ---------------------------------------------------------------------------
+// Multi-file patch batches — create, validate, atomic all-or-nothing apply
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn create_patch_batch(
+    _state: State<WorkspaceState>,
+    root: String,
+    edits: Vec<super::patch::BatchEdit>,
+) -> WorkspaceResult<super::patch::PatchBatch> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::create_patch_batch(&root_path, &edits)
+}
+
+#[tauri::command]
+pub fn validate_patch_batch(
+    _state: State<WorkspaceState>,
+    root: String,
+    batch: super::patch::PatchBatch,
+) -> WorkspaceResult<super::patch::BatchValidation> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::validate_patch_batch(&root_path, &batch)
+}
+
+#[tauri::command]
+pub fn apply_patch_batch(
+    _state: State<WorkspaceState>,
+    root: String,
+    batch: super::patch::PatchBatch,
+) -> WorkspaceResult<super::patch::BatchApplyResult> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    super::patch::apply_patch_batch(&root_path, &batch)
+}
+
+// ---------------------------------------------------------------------------
 // Validation — bounded, non-mutating, no exec
 // ---------------------------------------------------------------------------
 

@@ -1,11 +1,25 @@
 import type { AppStatus } from "../lib/ipc";
 import type { ConversationSummary } from "../lib/history";
+import type { AnyRouteId, RouteId } from "../lib/router";
 import { ApertureMark } from "./ApertureMark";
 import { EngineStatus } from "./EngineStatus";
 import { HistoryList } from "./HistoryList";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
+import { RouterLink } from "./RouterLink";
+
+/** Primary page navigation. Every item is a real link to a real page. */
+const NAV_ITEMS: Array<{ id: RouteId; label: string; icon: IconName }> = [
+  { id: "home", label: "Home", icon: "home" },
+  { id: "chat", label: "AI Chat", icon: "message" },
+  { id: "projects", label: "Projects", icon: "folder" },
+  { id: "code", label: "Code Intelligence", icon: "code" },
+  { id: "models", label: "Local Models", icon: "chip" },
+  { id: "settings", label: "Settings", icon: "settings" },
+];
 
 interface SidebarProps {
+  /** Active page, used for `aria-current` and the highlighted nav item. */
+  currentRoute: AnyRouteId;
   status: AppStatus | null;
   statusFailed: boolean;
   collapsed: boolean;
@@ -24,6 +38,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  currentRoute,
   status,
   statusFailed,
   collapsed,
@@ -50,6 +65,28 @@ export function Sidebar({
           <span className="sidebar__tagline">Local coding studio</span>
         </span>
       </div>
+
+      <nav className="sidebar__nav" aria-label="Primary">
+        <ul className="sidebar__nav-list">
+          {NAV_ITEMS.map((item) => {
+            const active = currentRoute === item.id;
+            return (
+              <li key={item.id}>
+                <RouterLink
+                  to={item.id}
+                  className={`nav-item${active ? " nav-item--active" : ""}`}
+                  aria-current={active ? "page" : undefined}
+                  aria-label={item.label}
+                  title={item.label}
+                >
+                  <Icon name={item.icon} size={15} />
+                  <span className="nav-item__label">{item.label}</span>
+                </RouterLink>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
 
       <button
         type="button"
