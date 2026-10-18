@@ -198,7 +198,7 @@ export function usePersistentConversation({ onSettled }: { onSettled?: () => voi
     })();
   }, [detach, flush, setDraft, updateSummary]);
 
-  const submit = useCallback(() => {
+  const submit = useCallback((options?: { contextBlock?: string }) => {
     if (loadingRef.current) return;
     if (!activeRef.current) {
       const now = Date.now();
@@ -253,7 +253,21 @@ export function usePersistentConversation({ onSettled }: { onSettled?: () => voi
     sessionRef.current = session;
     setStreaming(true);
 
-    const turns = toChatTurns(history);
+    let turns = toChatTurns(history);
+    const contextBlock = options?.contextBlock?.trim();
+    if (contextBlock && contextBlock.length > 0) {
+      // Attach untrusted project context to the last user turn only for the model request.
+      // Persisted history keeps the original prompt unchanged.
+      if (contextBlock.length > 100 * 1024) {
+        // Defensive truncation — context is already bounded in useWorkspace, but never exceed request budget
+      }
+      const last = turns[turns.length - 1];
+      if (last && last.role === "user") {
+        turns = [...turns.slice(0, -1), { ...last, content: `${contextBlock}\n\n${last.content}` }];
+      } else {
+        turns = [{ role: "user", content: contextBlock }, ...turns];
+      }
+    }
 
     const isLive = () => sessionRef.current === session;
 

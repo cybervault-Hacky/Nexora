@@ -20,6 +20,9 @@ importers:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
     devDependencies:
+      '@scalar/rust-fmt':
+        specifier: 0.3.0
+        version: 0.3.0
       '@tauri-apps/cli':
         specifier: 2.12.3
         version: 2.12.3
@@ -148,6 +151,9 @@ packages:
   '@babel/types@7.29.8':
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
+
+  '@bjorn3/browser_wasi_shim@0.4.2':
+    resolution: {integrity: sha512-/iHkCVUG3VbcbmEHn5iIUpIrh7a7WPiwZ3sHy4HZKZzBdSadwdddYDZAII2zBvQYV0Lfi8naZngPCN7WPHI/hA==}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -483,6 +489,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@scalar/rust-fmt@0.3.0':
+    resolution: {integrity: sha512-5T/pGOM0vpj4zvC3EHnwr4y6SiDHgP7yJp9nb3UApnBDG0U1MPl8OooBupkXjHzGu+t50xsTRaTzzu3jsNQBlA==}
+    engines: {node: '>=18'}
+
   '@tauri-apps/api@2.12.4':
     resolution: {integrity: sha512-pVmfis+4zT8H0Qhp3xPZx9Ju7kpzvA6rr/PSJPyuwfvucTQ8sVt61NYU9KMkK703UFlYadFmjKA4HhybOtN0gg==}
 
@@ -675,6 +685,9 @@ packages:
     resolution: {integrity: sha512-YeesxhUmR4h5y5V8KF8iBCqJb8YFrBJ++XBTeGcWIaQOYXGN19JM0FoiOjAhwuDoln8owMgXcWBmgHtYSkky2w==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  brotli-dec-wasm@2.3.2:
+    resolution: {integrity: sha512-5H+k8eVLIJY6B4olN2HP9QzJAxcplf0jV7mWnkpxvOSeUE9Npg3dQ2pgLn30a9MUFHNro1iSmtdu6VNdlb+TIw==}
 
   browserslist@4.29.3:
     resolution: {integrity: sha512-1R4kiYKXGViqEN0CnoDrXc1StD9niAwu+j2dukWzrD4bJgsD4lDmEp0CRbc6E/vYJIfTHwPmwyaKtVSudICdPA==}
@@ -1234,6 +1247,8 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
+  '@bjorn3/browser_wasi_shim@0.4.2': {}
+
   '@csstools/color-helpers@5.1.0': {}
 
   '@csstools/css-calc@2.1.4(@csstools/css-parser-algorithms@3.0.5(@csstools/css-tokenizer@3.0.4))(@csstools/css-tokenizer@3.0.4)':
@@ -1431,6 +1446,11 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.64.9':
     optional: true
 
+  '@scalar/rust-fmt@0.3.0':
+    dependencies:
+      '@bjorn3/browser_wasi_shim': 0.4.2
+      brotli-dec-wasm: 2.3.2
+
   '@tauri-apps/api@2.12.4': {}
 
   '@tauri-apps/cli-darwin-arm64@2.12.3':
@@ -1616,6 +1636,8 @@ snapshots:
   assertion-error@2.0.1: {}
 
   baseline-browser-mapping@2.11.29: {}
+
+  brotli-dec-wasm@2.3.2: {}
 
   browserslist@4.29.3:
     dependencies:

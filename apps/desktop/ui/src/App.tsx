@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
+import { FilePreview } from "./components/FilePreview";
 import { Icon } from "./components/Icon";
 import { MessageList } from "./components/MessageList";
 import { ModelSetup } from "./components/ModelSetup";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
+import { WorkspacePanel } from "./components/WorkspacePanel";
 import { usePersistentConversation } from "./features/chat/usePersistentConversation";
+import { useWorkspace } from "./features/workspace/useWorkspace";
 import {
   unloadModel,
   toInferenceError as describeFailure,
@@ -53,6 +56,8 @@ export default function App() {
     deleteConversationById,
   } = usePersistentConversation({ onSettled: handleSettled });
 
+  const workspace = useWorkspace();
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loadedStatus, setLoadedStatus] = useState<AppStatus | null>(null);
   const [unloading, setUnloading] = useState(false);
@@ -79,8 +84,20 @@ export default function App() {
 
   const handleSubmit = useCallback(() => {
     stickToBottomRef.current = true;
-    submit();
-  }, [submit]);
+    submit(workspace.contextFiles.length > 0 ? { contextBlock: workspace.contextBlock } : undefined);
+  }, [submit, workspace.contextBlock, workspace.contextFiles.length]);
+
+  // Handle manual path entry from WorkspacePanel (custom event)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (typeof detail === "string" && detail.trim()) {
+        void workspace.openWorkspace(detail.trim()).catch(() => {});
+      }
+    };
+    window.addEventListener("workspace:openManual" as never, handler as never);
+    return () => window.removeEventListener("workspace:openManual" as never, handler as never);
+  }, [workspace]);
 
   const handleStatus = useCallback(
     (next: AppStatus) => {
@@ -225,7 +242,39 @@ export default function App() {
       />
 
       <main className="workspace" aria-label="Conversation workspace">
-        <header className="conversation-header">
+        <div className="workspace__layout">
+          <aside className="workspace__explorer" aria-label="Project explorer">
+            <WorkspacePanel
+              workspacePath={workspace.workspacePath}
+              workspaceName={workspace.workspaceName}
+              inventory={workspace.inventory}
+              loading={workspace.loading}
+              error={workspace.error}
+              search={workspace.search}
+              onSearchChange={workspace.setSearch}
+              filteredEntries={workspace.filteredEntries}
+              selectedPaths={workspace.selectedPaths}
+              onToggleContext={workspace.toggleContext}
+              onClearContext={workspace.clearContext}
+              contextError={workspace.contextError}
+              onOpen={() => void workspace.openWorkspace().catch(() => {})}
+              onRefresh={() => void workspace.refresh().catch(() => {})}
+              onClose={() => void workspace.closeWorkspace()}
+              onPreview={workspace.loadPreview}
+              previewPath={workspace.previewPath}
+              collapsed={false}
+            />
+            <FilePreview
+              path={workspace.previewPath}
+              content={workspace.preview?.content ?? null}
+              size={workspace.preview?.size ?? null}
+              loading={workspace.previewLoading}
+              error={workspace.previewError}
+              onClose={workspace.clearPreview}
+            />
+          </aside>
+          <section className="workspace__chat" aria-label="Conversation">
+            <header className="conversation-header">
           <div className="conversation-header__titles">
             <p className="eyebrow">Conversation</p>
             {renameEditing && activeId ? (
@@ -450,17 +499,48 @@ export default function App() {
           )}
         </div>
 
-        <Composer
-          value={draft}
-          error={error}
-          textareaRef={textareaRef}
-          busy={streaming}
-          canGenerate={engineReady && !conversationLoading}
-          onChange={setDraft}
-          onSubmit={handleSubmit}
-          onStop={stop}
-          onDismissError={dismissError}
-        />
+            {workspace.contextFiles.length > 0 ? (
+              <div className="context-bar" role="status" aria-label="Selected project context">
+                <div className="context-bar__label">
+                  <Icon name="file" size={12} />
+                  <span>
+                    Context: {workspace.contextFiles.length} file{workspace.contextFiles.length !== 1 ? "s" : ""} — read-only, not modifying files
+                  </span>
+                </div>
+                <ul className="context-bar__list">
+                  {workspace.contextFiles.map((f) => (
+                    <li key={f.path} className="context-bar__item" title={f.path}>
+                      <span>{f.path}</span>
+                      <button
+                        type="button"
+                        className="context-bar__remove"
+                        aria-label={`Remove ${f.path} from context`}
+                        onClick={() => void workspace.toggleContext(f.path)}
+                      >
+                        <Icon name="x" size={10} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" className="context-bar__clear" onClick={workspace.clearContext}>
+                  Clear
+                </button>
+              </div>
+            ) : null}
+
+            <Composer
+              value={draft}
+              error={error}
+              textareaRef={textareaRef}
+              busy={streaming}
+              canGenerate={engineReady && !conversationLoading}
+              onChange={setDraft}
+              onSubmit={handleSubmit}
+              onStop={stop}
+              onDismissError={dismissError}
+            />
+          </section>
+        </div>
       </main>
     </div>
   );

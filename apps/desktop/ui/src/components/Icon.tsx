@@ -7,12 +7,17 @@ export type IconName =
   | "close"
   | "cloud-off"
   | "edit"
+  | "file"
+  | "folder"
   | "maximize"
   | "minimize"
   | "panel-left"
   | "plus"
+  | "refresh"
+  | "search"
   | "stop"
-  | "trash";
+  | "trash"
+  | "x";
 
 const ICONS: Record<IconName, ReactElement> = {
   alert: (
@@ -73,6 +78,35 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="M9 7V5h6v2" />
       <path d="M6 7l1 12h10l1-12" />
       <path d="M10 11v6M14 11v6" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M7 3.5h7l4 4v13H7z" />
+      <path d="M14 3.5v4h4" />
+    </>
+  ),
+  folder: (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="M15.5 15.5L20 20" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v6h-6" />
+    </>
+  ),
+  x: (
+    <>
+      <path d="M7 7l10 10" />
+      <path d="M17 7L7 17" />
     </>
   ),
 };

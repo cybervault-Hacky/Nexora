@@ -1,5 +1,6 @@
 mod history;
 mod inference;
+mod workspace;
 
 use tauri::Manager;
 
@@ -18,6 +19,7 @@ pub fn run() {
             app.manage(history::commands::HistoryState::new(
                 app.path().app_data_dir()?,
             ));
+            app.manage(workspace::commands::WorkspaceState::new());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -46,6 +48,14 @@ pub fn run() {
             history::commands::save_conversation,
             history::commands::rename_conversation,
             history::commands::delete_conversation,
+            workspace::commands::set_workspace,
+            workspace::commands::scan_workspace_command,
+            workspace::commands::scan_current_workspace,
+            workspace::commands::read_workspace_file_command,
+            workspace::commands::get_workspace_context,
+            workspace::commands::close_workspace,
+            workspace::commands::get_workspace,
+            workspace::commands::pick_workspace_dialog,
         ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");

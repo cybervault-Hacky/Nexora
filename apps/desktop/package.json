@@ -19,6 +19,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@scalar/rust-fmt": "0.3.0",
     "@tauri-apps/cli": "2.12.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
