@@ -23,6 +23,7 @@ tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
 getrandom = "0.2"
 sha2 = "0.10"
 similar = "2.7"
+regex = "1"
 
 tempfile = "3"
 

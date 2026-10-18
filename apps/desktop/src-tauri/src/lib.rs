@@ -23,6 +23,7 @@ pub fn run() {
             app.manage(workspace::commands::WorkspaceSettingsState::new(
                 config_dir.clone(),
             ));
+            app.manage(workspace::commands::SymbolIndexState::new());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -65,6 +66,10 @@ pub fn run() {
             workspace::commands::validate_patch_proposal,
             workspace::commands::apply_patch_proposal,
             workspace::commands::get_patch_diff,
+            workspace::commands::get_symbol_index,
+            workspace::commands::refresh_symbol_index,
+            workspace::commands::search_symbols,
+            workspace::commands::clear_symbol_index,
         ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");

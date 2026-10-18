@@ -297,6 +297,125 @@ pub fn get_patch_diff(
     Ok(super::patch::diff_summary(&original, &proposed))
 }
 
+// ---------------------------------------------------------------------------
+// Symbol index — bounded code intelligence
+// ---------------------------------------------------------------------------
+
+pub struct SymbolIndexState {
+    pub index: Mutex<Option<super::symbol_index::SymbolIndex>>,
+    pub root: Mutex<Option<PathBuf>>,
+}
+
+impl SymbolIndexState {
+    pub fn new() -> Self {
+        Self {
+            index: Mutex::new(None),
+            root: Mutex::new(None),
+        }
+    }
+}
+
+fn symbol_lock_err() -> WorkspaceError {
+    WorkspaceError::storage("Symbol index unavailable. Restart Nexora.")
+}
+
+#[tauri::command]
+pub fn get_symbol_index(
+    state: State<SymbolIndexState>,
+    root: String,
+) -> WorkspaceResult<super::symbol_index::SymbolIndex> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+
+    // Check cached
+    {
+        let guard_root = state.root.lock().map_err(|_| symbol_lock_err())?;
+        let guard_idx = state.index.lock().map_err(|_| symbol_lock_err())?;
+        if let (Some(cached_root), Some(idx)) = (guard_root.as_ref(), guard_idx.as_ref()) {
+            if cached_root == &canonical && idx.version == super::symbol_index::CURRENT_VERSION {
+                return Ok(idx.clone());
+            }
+        }
+    }
+
+    // Build fresh
+    let idx = super::symbol_index::build_symbol_index(&canonical)?;
+    {
+        let mut guard_root = state.root.lock().map_err(|_| symbol_lock_err())?;
+        let mut guard_idx = state.index.lock().map_err(|_| symbol_lock_err())?;
+        *guard_root = Some(canonical);
+        *guard_idx = Some(idx.clone());
+    }
+    Ok(idx)
+}
+
+#[tauri::command]
+pub fn refresh_symbol_index(
+    state: State<SymbolIndexState>,
+    root: String,
+) -> WorkspaceResult<super::symbol_index::SymbolIndex> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+    let idx = super::symbol_index::build_symbol_index(&canonical)?;
+    {
+        let mut guard_root = state.root.lock().map_err(|_| symbol_lock_err())?;
+        let mut guard_idx = state.index.lock().map_err(|_| symbol_lock_err())?;
+        *guard_root = Some(canonical);
+        *guard_idx = Some(idx.clone());
+    }
+    Ok(idx)
+}
+
+#[tauri::command]
+pub fn search_symbols(
+    state: State<SymbolIndexState>,
+    root: String,
+    query: String,
+    limit: Option<usize>,
+) -> WorkspaceResult<Vec<super::symbol_index::Symbol>> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    if query.chars().count() > 200 {
+        return Err(WorkspaceError::invalid_request("Search query too long."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+
+    let guard_root = state.root.lock().map_err(|_| symbol_lock_err())?;
+    let guard_idx = state.index.lock().map_err(|_| symbol_lock_err())?;
+    let Some(idx) = guard_idx.as_ref() else {
+        return Err(WorkspaceError::not_found("No index — build it first."));
+    };
+    let Some(cached_root) = guard_root.as_ref() else {
+        return Err(WorkspaceError::not_found("No index — build it first."));
+    };
+    if cached_root != &canonical {
+        return Err(WorkspaceError::invalid_request("Workspace changed — refresh the index."));
+    }
+    let lim = limit.unwrap_or(20).clamp(1, 50);
+    Ok(super::symbol_index::search_symbols(idx, &query, lim))
+}
+
+#[tauri::command]
+pub fn clear_symbol_index(state: State<SymbolIndexState>) -> WorkspaceResult<bool> {
+    let mut guard_root = state.root.lock().map_err(|_| symbol_lock_err())?;
+    let mut guard_idx = state.index.lock().map_err(|_| symbol_lock_err())?;
+    let had = guard_idx.is_some();
+    *guard_root = None;
+    *guard_idx = None;
+    Ok(had)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
