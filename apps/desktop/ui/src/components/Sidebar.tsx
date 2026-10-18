@@ -1,6 +1,8 @@
 import type { AppStatus } from "../lib/ipc";
+import type { ConversationSummary } from "../lib/history";
 import { ApertureMark } from "./ApertureMark";
 import { EngineStatus } from "./EngineStatus";
+import { HistoryList } from "./HistoryList";
 import { Icon } from "./Icon";
 
 interface SidebarProps {
@@ -10,6 +12,15 @@ interface SidebarProps {
   onNewChat: () => void;
   onUnload?: () => void;
   unloading?: boolean;
+  // History
+  conversations?: ConversationSummary[];
+  activeId?: string | null;
+  historyLoading?: boolean;
+  historyError?: string | null;
+  onSelectConversation?: (id: string) => void;
+  onRenameConversation?: (id: string, newTitle: string) => Promise<void>;
+  onDeleteConversation?: (id: string) => Promise<void>;
+  onRetryHistory?: () => void;
 }
 
 export function Sidebar({
@@ -19,6 +30,14 @@ export function Sidebar({
   onNewChat,
   onUnload,
   unloading = false,
+  conversations = [],
+  activeId = null,
+  historyLoading = false,
+  historyError = null,
+  onSelectConversation,
+  onRenameConversation,
+  onDeleteConversation,
+  onRetryHistory,
 }: SidebarProps) {
   return (
     <aside id="sidebar" className="sidebar" aria-label="Workspace">
@@ -44,12 +63,26 @@ export function Sidebar({
         <span className="new-chat__label">New chat</span>
       </button>
 
-      <div className="sidebar__section">
-        <h2 className="sidebar__label">Recent</h2>
-        <p className="sidebar__empty">
-          No conversations yet. History is kept for this session only.
-        </p>
-      </div>
+      {onSelectConversation ? (
+        <HistoryList
+          conversations={conversations}
+          activeId={activeId}
+          loading={historyLoading}
+          error={historyError}
+          collapsed={collapsed}
+          onSelect={onSelectConversation}
+          onRename={onRenameConversation ?? (async () => {})}
+          onDelete={onDeleteConversation ?? (async () => {})}
+          onRetry={onRetryHistory ?? (() => {})}
+        />
+      ) : (
+        <div className="sidebar__section">
+          <h2 className="sidebar__label">Recent</h2>
+          <p className="sidebar__empty">
+            No conversations yet. History is kept for this session only.
+          </p>
+        </div>
+      )}
 
       <div className="sidebar__footer">
         <EngineStatus

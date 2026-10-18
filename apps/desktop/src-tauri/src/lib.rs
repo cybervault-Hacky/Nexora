@@ -1,3 +1,4 @@
+mod history;
 mod inference;
 
 use tauri::Manager;
@@ -13,7 +14,8 @@ pub fn run() {
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&config_dir)?;
-            app.manage(inference::InferenceState::load(config_dir));
+            app.manage(inference::InferenceState::load(config_dir.clone()));
+            app.manage(history::commands::HistoryState::new(config_dir));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -36,6 +38,12 @@ pub fn run() {
             inference::commands::unload_model,
             inference::commands::start_generation,
             inference::commands::cancel_generation,
+            history::commands::list_conversations,
+            history::commands::load_conversation,
+            history::commands::create_conversation,
+            history::commands::save_conversation,
+            history::commands::rename_conversation,
+            history::commands::delete_conversation,
         ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");

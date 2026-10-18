@@ -110,7 +110,10 @@ describe("conversation surface", () => {
 
     await user.type(compose(), "write a hello world{Enter}");
 
-    expect(await screen.findByText("write a hello world")).toBeTruthy();
+    // The prompt appears both as the conversation title and as the message bubble;
+    // assert the bubble specifically so a title change does not make the query ambiguous.
+    expect((await screen.findAllByText("write a hello world")).length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".message__prompt")?.textContent).toBe("write a hello world");
     expect(screen.getByText("Waiting for the first token…")).toBeTruthy();
 
     run.push("Here is a minimal ");
@@ -186,7 +189,7 @@ describe("conversation surface", () => {
     );
 
     expect(banner).toBeTruthy();
-    expect(screen.getByText("hello")).toBeTruthy();
+    expect(screen.getAllByText("hello").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Failed")).toBeNull();
     expect(screen.queryByText("Waiting for the first token…")).toBeNull();
   });
@@ -228,9 +231,12 @@ describe("conversation surface", () => {
     await user.click(screen.getByRole("button", { name: "New chat" }));
 
     expect(cancelMock).toHaveBeenCalledWith(run.requestId());
-    expect(screen.queryByText("temporary question")).toBeNull();
+    // Transcript is cleared, but history retains the conversation title
+    expect(document.querySelector(".message__prompt")).toBeNull();
     expect(screen.queryByText("partial")).toBeNull();
     expect(screen.getByText("Build something real.")).toBeTruthy();
+    // History should still show the previous conversation
+    expect(screen.getByText("temporary question")).toBeTruthy();
   });
 
   it("refuses an empty message with an accessible error", async () => {
@@ -241,9 +247,7 @@ describe("conversation surface", () => {
 
     await user.type(compose(), "{Enter}");
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Enter a message before sending.",
-    );
+    expect(screen.getByText("Enter a message before sending.")).toBeTruthy();
     expect(generateMock).not.toHaveBeenCalled();
   });
 

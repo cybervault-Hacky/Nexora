@@ -6,7 +6,7 @@ import { MessageList } from "./components/MessageList";
 import { ModelSetup } from "./components/ModelSetup";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
-import { useConversation } from "./features/chat/useConversation";
+import { usePersistentConversation } from "./features/chat/usePersistentConversation";
 import {
   unloadModel,
   toInferenceError as describeFailure,
@@ -23,6 +23,14 @@ export default function App() {
   }, [reload]);
 
   const {
+    conversations,
+    activeId,
+    activeTitle,
+    listLoading,
+    listError,
+    saveStatus,
+    saveError,
+    loadError,
     messages,
     draft,
     error,
@@ -31,15 +39,24 @@ export default function App() {
     setDraft,
     dismissError,
     dismissRuntimeError,
+    dismissSaveError,
+    dismissLoadError,
+    refreshList,
     submit,
     stop,
     newChat,
-  } = useConversation({ onSettled: handleSettled });
+    selectConversation,
+    renameActive,
+    deleteActive,
+    deleteConversationById,
+  } = usePersistentConversation({ onSettled: handleSettled });
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loadedStatus, setLoadedStatus] = useState<AppStatus | null>(null);
   const [unloading, setUnloading] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
+  const [renameEditing, setRenameEditing] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -150,14 +167,40 @@ export default function App() {
   const desktop = isDesktopShell();
   const hasMessages = messages.length > 0;
   const engineChip = describeEngineChip(engineStatus, statusError, engineReady);
-  const conversationTitle = hasMessages ? "Local conversation" : "New conversation";
+  // TitleBar keeps a generic label to avoid duplicating the prompt in a second
+  // heading (accessibility / test stability). The conversation header shows the
+  // derived title.
+  const titleBarLabel = hasMessages ? "Local conversation" : "New conversation";
+  const conversationTitle = activeId ? activeTitle : hasMessages ? "Local conversation" : "New conversation";
   // An unreadable status is "unknown", not "no model": never show setup then.
   const showSetup = !engineReady && !hasMessages && statusError === null;
+
+  const handleRenameSubmit = useCallback(async () => {
+    if (!renameValue.trim() || !activeId) return;
+    try {
+      await renameActive(renameValue.trim());
+      setRenameEditing(false);
+    } catch {
+      // error surfaced via saveError
+    }
+  }, [renameValue, activeId, renameActive]);
+
+  const handleDeleteWithConfirm = useCallback(async () => {
+    if (!activeId) return;
+    // Simple confirm dialog — explicit UI confirmation required
+    const confirmed = window.confirm(`Delete conversation "${activeTitle}"? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await deleteActive();
+    } catch {
+      // surfaced
+    }
+  }, [activeId, activeTitle, deleteActive]);
 
   return (
     <div className={`app ${sidebarCollapsed ? "app--collapsed" : ""}`}>
       <TitleBar
-        conversationTitle={conversationTitle}
+        conversationTitle={titleBarLabel}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       />
@@ -169,16 +212,88 @@ export default function App() {
         onNewChat={startNewChat}
         onUnload={desktop ? handleUnload : undefined}
         unloading={unloading}
+        conversations={conversations}
+        activeId={activeId}
+        historyLoading={listLoading}
+        historyError={listError}
+        onSelectConversation={selectConversation}
+        onRenameConversation={async (id, title) => {
+          // If renaming active, use renameActive; otherwise call generic
+          if (id === activeId) {
+            await renameActive(title);
+          } else {
+            // For non-active we can still call renameActive path via history lib directly
+            // Use the same store path: call deleteConversationById's sibling — we need to handle generically
+            // For now delegate to renameActive if active, else use direct invoke via historyList's own logic
+            // HistoryList calls onRename which should handle any id; we implement fallback here
+            const { renameConversation } = await import("./lib/history");
+            await renameConversation(id, title);
+            refreshList();
+          }
+        }}
+        onDeleteConversation={deleteConversationById}
+        onRetryHistory={refreshList}
       />
 
       <main className="workspace" aria-label="Conversation workspace">
         <header className="conversation-header">
           <div className="conversation-header__titles">
             <p className="eyebrow">Conversation</p>
-            <h1 className="conversation-header__title">{conversationTitle}</h1>
+            {renameEditing && activeId ? (
+              <div className="conversation-header__rename">
+                <input
+                  className="conversation-header__rename-input"
+                  value={renameValue}
+                  maxLength={200}
+                  aria-label="Conversation title"
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleRenameSubmit();
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenameEditing(false);
+                      setRenameValue(activeTitle);
+                    }
+                  }}
+                  autoFocus
+                />
+                <button type="button" className="button button--ghost button--sm" onClick={() => void handleRenameSubmit()}>
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  onClick={() => {
+                    setRenameEditing(false);
+                    setRenameValue(activeTitle);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <h1 className="conversation-header__title">{conversationTitle}</h1>
+            )}
           </div>
 
           <div className="conversation-header__chips">
+            {saveStatus === "saving" ? (
+              <span className="chip chip--live" title="Saving to local storage">
+                <span className="pulse" aria-hidden="true" />
+                Saving…
+              </span>
+            ) : saveStatus === "saved" ? (
+              <span className="chip chip--ok" title="All changes saved locally">
+                Saved
+              </span>
+            ) : saveStatus === "error" ? (
+              <span className="chip chip--unknown" title={saveError ?? "Save failed"}>
+                Save failed
+              </span>
+            ) : null}
             <span className="chip" title="Inference runs on this machine">
               <Icon name="cloud-off" size={13} />
               Local-only
@@ -190,6 +305,31 @@ export default function App() {
               <span className="status-dot status-dot--sm" aria-hidden="true" />
               {engineChip.label}
             </span>
+            {activeId ? (
+              <>
+                <button
+                  type="button"
+                  className="chip chip--action"
+                  aria-label="Rename conversation"
+                  title="Rename conversation"
+                  onClick={() => {
+                    setRenameValue(activeTitle);
+                    setRenameEditing(true);
+                  }}
+                >
+                  <Icon name="edit" size={12} /> Rename
+                </button>
+                <button
+                  type="button"
+                  className="chip chip--action chip--danger"
+                  aria-label="Delete conversation"
+                  title="Delete conversation"
+                  onClick={() => void handleDeleteWithConfirm()}
+                >
+                  <Icon name="trash" size={12} /> Delete
+                </button>
+              </>
+            ) : null}
           </div>
         </header>
 
@@ -234,6 +374,26 @@ export default function App() {
               className="notice__action"
               onClick={dismissRuntimeError}
             >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {saveError ? (
+          <div className="notice notice--danger" role="alert">
+            <Icon name="alert" size={14} />
+            <span>Failed to save conversation: {saveError}</span>
+            <button type="button" className="notice__action" onClick={dismissSaveError}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {loadError ? (
+          <div className="notice notice--danger" role="alert">
+            <Icon name="alert" size={14} />
+            <span>Could not load conversation: {loadError}</span>
+            <button type="button" className="notice__action" onClick={dismissLoadError}>
               Dismiss
             </button>
           </div>

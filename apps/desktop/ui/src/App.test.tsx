@@ -24,6 +24,8 @@ vi.mock("./lib/inference", async (importOriginal) => {
   };
 });
 
+
+
 import App from "./App";
 import { fetchSettings, fetchStatus, fetchSystemInfo } from "./lib/inference";
 import { previewStatus } from "./lib/ipc";
@@ -193,7 +195,9 @@ describe("desktop status routing", () => {
 
     render(<App />);
 
-    const retry = await screen.findByRole("button", { name: "Retry" });
+    const retry = await screen.findByRole("button", { name: "Retry", hidden: false });
+    // Ensure we click the status retry, not a history retry (history is mocked to empty)
+    expect(retry.className).toContain("notice__action");
     await userEvent.setup().click(retry);
 
     expect(await screen.findByText("Engine ready")).toBeTruthy();

@@ -3,13 +3,16 @@ import type { ReactElement } from "react";
 export type IconName =
   | "alert"
   | "arrow-up"
+  | "check"
   | "close"
   | "cloud-off"
+  | "edit"
   | "maximize"
   | "minimize"
   | "panel-left"
   | "plus"
-  | "stop";
+  | "stop"
+  | "trash";
 
 const ICONS: Record<IconName, ReactElement> = {
   alert: (
@@ -53,6 +56,25 @@ const ICONS: Record<IconName, ReactElement> = {
     </>
   ),
   stop: <rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor" stroke="none" />,
+  check: (
+    <>
+      <path d="M6 12.5l4 4 8-8.5" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M4 20l5-1 10-10a1.8 1.8 0 0 0-3-3L6 16l-1 5z" />
+      <path d="M13.5 6.5l3 3" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M4 7h16" />
+      <path d="M9 7V5h6v2" />
+      <path d="M6 7l1 12h10l1-12" />
+      <path d="M10 11v6M14 11v6" />
+    </>
+  ),
 };
 
 interface IconProps {

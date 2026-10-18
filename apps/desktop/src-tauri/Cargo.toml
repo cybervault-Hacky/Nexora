@@ -22,6 +22,9 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
 getrandom = "0.2"
 
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
