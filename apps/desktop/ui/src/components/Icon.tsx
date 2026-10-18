@@ -3,7 +3,9 @@ import type { ReactElement } from "react";
 export type IconName =
   | "alert"
   | "arrow-up"
+  | "branch"
   | "check"
+  | "circle"
   | "close"
   | "cloud-off"
   | "edit"
@@ -15,6 +17,7 @@ export type IconName =
   | "plus"
   | "refresh"
   | "search"
+  | "shield"
   | "stop"
   | "trash"
   | "x";
@@ -97,6 +100,22 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="M15.5 15.5L20 20" />
     </>
   ),
+  shield: (
+    <>
+      <path d="M12 3.5l6 2.2v5.6a7 7 0 0 1-6 6.9 7 7 0 0 1-6-6.9V5.7l6-2.2z" />
+      <path d="M9.5 12l1.7 1.7 3.3-3.8" />
+    </>
+  ),
+  branch: (
+    <>
+      <circle cx="7.5" cy="6.5" r="2.2" />
+      <circle cx="7.5" cy="17.5" r="2.2" />
+      <circle cx="16.5" cy="12" r="2.2" />
+      <path d="M7.5 8.7v6.6" />
+      <path d="M7.5 8.7c2.5 0 5 1.5 9 3.3" />
+    </>
+  ),
+  circle: <circle cx="12" cy="12" r="8" />,
   refresh: (
     <>
       <path d="M20 12a8 8 0 1 1-2.34-5.66" />

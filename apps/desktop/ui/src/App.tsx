@@ -25,6 +25,8 @@ import { retrieveRelevantFiles, retrieveRelevantFilesSmart, type RetrievalResult
 import { getSymbolIndex, clearSymbolIndex, type SymbolIndex } from "./lib/symbolIndex";
 import { getDependencyGraph, clearAnalysisGraph, type AnalysisGraph } from "./lib/analysis";
 import { AnalysisPanel } from "./components/AnalysisPanel";
+import { EvidencePanel } from "./components/EvidencePanel";
+import { buildEvidenceReport, formatEvidenceForPrompt, getPatchMissingEvidence } from "./lib/evidence";
 import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
 import {
   unloadModel,
@@ -241,6 +243,48 @@ export default function App() {
     }
   }, [draft, workspace.contextFiles, symbolIndex, analysisGraph]);
 
+  const manualValidation = useValidation(workspace.workspacePath);
+  const manualRepair = usePatchRepair({
+    workspacePath: workspace.workspacePath,
+    engineStatus,
+    symbolIndex,
+    contextFiles: workspace.contextFiles,
+  });
+
+  // Evidence-first: bounded report for prompt grounding + UI transparency (reuses index/graph/retrieval/budget)
+  const evidenceReport = useMemo(() => {
+    try {
+      return buildEvidenceReport({
+        symbolIndex,
+        analysisGraph,
+        retrievalResult,
+        contextPlan,
+        selectedPaths: Array.from(workspace.selectedPaths),
+        verificationPerformed: manualValidation.validationState.status === "validated",
+      });
+    } catch {
+      return null;
+    }
+  }, [symbolIndex, analysisGraph, retrievalResult, contextPlan, workspace.selectedPaths, manualValidation.validationState.status]);
+
+  const evidenceManifest = useMemo(() => {
+    if (!evidenceReport) return null;
+    try {
+      return formatEvidenceForPrompt(evidenceReport);
+    } catch {
+      return null;
+    }
+  }, [evidenceReport]);
+
+  const patchMissing = useMemo(() => {
+    if (!generationTargetPath || !evidenceReport) return null;
+    try {
+      return getPatchMissingEvidence(generationTargetPath, evidenceReport, retrievalResult, contextPlan);
+    } catch {
+      return null;
+    }
+  }, [generationTargetPath, evidenceReport, retrievalResult, contextPlan]);
+
   const groundedContextBlock = useMemo(() => {
     const base = filteredContextBlock ?? workspace.contextBlock;
     if (!base || base.length === 0) return base;
@@ -274,8 +318,10 @@ export default function App() {
         retrievalSummaryShort +
         graphSummary +
         ".\n";
-    return groundedHeader + "\n" + base;
-  }, [filteredContextBlock, workspace.contextBlock, symbolIndex, retrievalResult]);
+    // Evidence manifest adds per-query verified/inferred/unavailable + limitations + reliability instructions (never invent tests/builds, separate observations/hypotheses, note partial)
+    const manifestBlock = evidenceManifest ? "\n" + evidenceManifest + "\n" : "";
+    return groundedHeader + manifestBlock + "\n" + base;
+  }, [filteredContextBlock, workspace.contextBlock, symbolIndex, retrievalResult, evidenceManifest, analysisGraph]);
 
   const handleSubmit = useCallback(() => {
     stickToBottomRef.current = true;
@@ -283,14 +329,6 @@ export default function App() {
     const hasContext = block !== null && block.length > 0;
     submit(hasContext ? { contextBlock: block } : undefined);
   }, [submit, groundedContextBlock, filteredContextBlock, workspace.contextBlock]);
-
-  const manualValidation = useValidation(workspace.workspacePath);
-  const manualRepair = usePatchRepair({
-    workspacePath: workspace.workspacePath,
-    engineStatus,
-    symbolIndex,
-    contextFiles: workspace.contextFiles,
-  });
 
   // Phase 15: auto-validate manual patch proposals (non-mutating, bounded, cancellable)
   useEffect(() => {
@@ -523,11 +561,31 @@ export default function App() {
             {contextPlan ? (
               <ContextBudgetBar plan={contextPlan} />
             ) : null}
+            {evidenceReport ? (
+              <EvidencePanel report={evidenceReport} isStreaming={streaming} />
+            ) : null}
             <AnalysisPanel
               workspacePath={workspace.workspacePath}
               targetPath={generationTargetPath ?? workspace.previewPath ?? (workspace.contextFiles[0]?.path ?? null)}
               onPreview={workspace.loadPreview}
             />
+            {patchMissing && (patchMissing.missing.length > 0 || patchMissing.warnings.length > 0) ? (
+              <div className="patch-generate__missing" role="note" aria-label="Patch evidence warning">
+                <Icon name="alert" size={12} />
+                <div>
+                  <strong>Required source may be incomplete — patch may be based on partial context.</strong>
+                  <ul>
+                    {patchMissing.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                    {patchMissing.missing.length > 0 ? (
+                      <li>Missing: {patchMissing.missing.join(", ")}</li>
+                    ) : null}
+                  </ul>
+                  <span style={{ color: "var(--text-tertiary)", fontSize: "10px" }}>Add the missing files to context or enlarge the budget for a more grounded patch. Never auto-apply — review preview and validation.</span>
+                </div>
+              </div>
+            ) : null}
             <PatchGenerateBar
               workspacePath={workspace.workspacePath}
               targetPath={generationTargetPath}
@@ -925,6 +983,13 @@ export default function App() {
                 <button type="button" className="context-bar__clear" onClick={workspace.clearContext}>
                   Clear
                 </button>
+              </div>
+            ) : null}
+
+            {/* Phase 17: concise evidence transparency near composer — reuses tokens, not noisy, shows for current draft */}
+            {evidenceReport && (draft.trim().length > 0 || workspace.contextFiles.length > 0 || streaming) ? (
+              <div style={{ padding: "0 10px" }}>
+                <EvidencePanel report={evidenceReport} isStreaming={streaming} />
               </div>
             ) : null}
 
