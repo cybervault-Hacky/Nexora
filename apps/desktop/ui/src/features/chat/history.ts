@@ -23,14 +23,14 @@ export function deriveTitle(messages: ChatMessage[], fallback = "New conversatio
 export function truncateTitle(title: string, maxLen: number = MAX_TITLE_LENGTH): string {
   const trimmed = title.trim();
   if (trimmed.length === 0) return "New conversation";
-  if (trimmed.length <= maxLen) return trimmed;
-  return trimmed.slice(0, maxLen - 1).trimEnd() + "…";
+  if (Array.from(trimmed).length <= maxLen) return trimmed;
+  return Array.from(trimmed).slice(0, maxLen - 1).join("").trimEnd() + "…";
 }
 
 export function sanitizeTitle(title: string): string {
   const t = title.trim().replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
   if (t.length === 0) return "New conversation";
-  return t.slice(0, MAX_TITLE_CHARS);
+  return Array.from(t).slice(0, MAX_TITLE_CHARS).join("");
 }
 
 export function isValidTitle(title: string): boolean {

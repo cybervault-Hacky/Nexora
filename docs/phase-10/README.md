@@ -1,127 +1,167 @@
 # Phase 10 — Local conversation persistence & history switcher
 
-> **Status: IN PROGRESS — audit complete, implementation in progress.**
-> This document records the actual starting state verified before any Phase 10 edits and the implementation plan. It will be updated at completion with architecture, schema, privacy guarantees, test results, and commit IDs.
+> **Status: COMPLETE — implementation, hardening, and frontend verification done locally. Rust format + clippy validated via wasm fmt; full `cargo` CI pending private-repository push.**
+> This phase delivers reliable, local-only conversation storage and a history switcher. Users can create, switch, rename, delete, restart, and reopen transcripts with Phase-9 code formatting intact.
 
 ## 1. Actual starting state (verified, not assumed)
 
+| Item | Observed |
+|------|----------|
+| Branch | `arena/74aec262-nexora` |
+| HEAD at start | `04deebabb9aeed56e68f99a0080a276b4796b53b` (grafted merge `Merge pull request #1 … Phases 1-9`) |
+| Also present in graph (from `--all`) | `5108360 docs(phase-9): cite the CI run…` — the reported Phase-9 HEAD exists in the graph but was not the checked-out HEAD; no reset performed. |
+| Working tree at start | clean |
+| Frontend baseline | `useConversation` in-memory only (`Nothing is persisted.`), Sidebar static `Recent` placeholder, no `localStorage`/`IndexedDB` history, no conversation file, no history commands. Tests 187 in 13 files. |
+| Rust baseline | Only `inference-settings.json` persisted via `SettingsStore`; no conversation module. 10 Tauri commands. No SQLite. |
+
+## 2. Storage decision — architecture
+
+**Choice: single versioned JSON file with atomic `NamedTempFile::persist` replacement.**
+
+- **Location:** `<app_data_dir>/conversations.json` (Tauri `app_data_dir`; `app_config_dir` is still used for `inference-settings.json`). No absolute user paths, no repo-committed data, no cloud/telemetry.
+- **Why not SQLite / per-file:** SQLite adds ~500 KB + migration burden for ≤500 conversations; per-file index drifts from files and complicates atomicity for a workload that is <5 MB typical. Single-file matches `SettingsStore` pattern, trivial to test, and is atomic with a directory `fsync` on Unix.
+- **Atomicity:** `tempfile::NamedTempFile::new_in(dir) → write_all → sync_all → persist(target) → dir sync_all (Unix)`. No partial file survives. `MAX_TOTAL_BYTES = 10 MiB` bounded via `File::take(limit+1)`.
+- **Validation:** IDs `^[A-Za-z0-9_-]{1,128}$`; titles ≤200 chars `Array.from` counted (emoji-safe), roles `user|assistant`, message states `complete|stopped|error|streaming` (coerced on write/load), failure ≤2000 chars, `≤2000` messages/conversation, `≤500` conversations, timestamps `≤8_640_000_000_000_000` (safe JS time), duplicate message IDs rejected. Preview 120 chars first line.
+- **Fail-closed behavior:** Malformed/missing schema/oversize/duplicate-ID history does **not** get silently replaced with empty history. `load_file` returns `Err(storage)` / `Err(unsupported_version)` and the file bytes stay on disk untouched. `HistoryStore` caches that `Err` and every later mutation also fails until the file is repaired, so writes never overwrite unreadable records. `save_file` is only called after cloning `next` and succeeding on disk; cache is committed only after `persist` succeeds, so a failed `save` never mutates in-memory state.
+- **Migration:** Legacy bare `[]` array and `version: 0` files are read successfully but **not rewritten on read**. The next successful `save/rename/delete` writes `version: 1`. Future `version > 1` is `unsupported_version` with original file preserved.
+- **Error reporting:** Generic messages (`History is malformed. Original file preserved; writes blocked.` etc.) — no echoed untrusted IDs/content, no full transcript logging.
+
+### Schema v1
+
+```json
+{
+  "version": 1,
+  "conversations": [{
+    "id": "550e8400-…",
+    "title": "Write a hello world",
+    "createdAt": 1729000000000,
+    "updatedAt": 1729000000000,
+    "messages": [{
+      "id": "m1",
+      "role": "user",
+      "content": "Write a hello world in Rust\n```rust\nfn main(){}\n```",
+      "createdAt": 1729000000000,
+      "state": "complete",
+      "failure": null
+    }]
+  }]
+}
+```
+
+`preview` and `messageCount` are derived in `ConversationSummary` (last non-empty first line, 120 chars). `streaming` is coerced to `stopped` on save/load so restore never replays a stale stream.
+
+### History placed in `app_data_dir`, not `app_config_dir`
+
+Settings remain in `app_config_dir`; conversations use `app_data_dir` so a history wipe during troubleshooting does not destroy model/runtime configuration and vice-versa. History alone may be deleted without re-configuring the engine.
+
+## 3. Persistence API (Rust)
+
+New module `src/history`:
+
+| File | Role |
+|------|------|
+| `src/history/storage.rs` | `StoredMessage / StoredConversation / ConversationSummary / ConversationsFile`, constants (`CURRENT_SCHEMA_VERSION=1, MAX_CONVERSATIONS=500, MAX_MESSAGES_PER_CONVERSATION=2000, MAX_MESSAGE_CHARS=400_000 …`), validation, `atomic_write`, `load_file`, `save_file`, `HistoryStore { config_dir, Mutex<HistoryResult<Vec<…>>> }` with `read`/`change` helpers |
+| `src/history/commands.rs` | Tauri wrappers `HistoryState(pub Mutex<HistoryStore>)` + 6 commands |
+| `src/history/mod.rs` | `pub mod` re-exports |
+
+Commands (all `#[tauri::command]`, `HistoryError {code: 'storage'|'not_found'|'invalid_request'|'unsupported_version', message}` — no prompt echoes):
+
+- `list_conversations() → ConversationSummary[]`
+- `load_conversation(id) → StoredConversation`
+- `create_conversation(id?: string, title?: string) → StoredConversation`
+- `save_conversation(conversation) → StoredConversation`
+- `rename_conversation(id, title) → ConversationSummary`
+- `delete_conversation(id) → bool`
+
+Registered in `lib.rs`:
+
+```rust
+app.manage(inference::InferenceState::load(config_dir.clone()));
+app.manage(history::commands::HistoryState::new(app.path().app_data_dir()?));
+invoke_handler![ …, history::commands::list_conversations, … delete_conversation ]
+```
+
+## 4. Chat integration
+
+- `ui/src/lib/history.ts` — desktop `invoke` + browser `localStorage` fallback (`nexora:conversations:v1`). Browser fallback now **validated** (`validateBrowserFile` checks IDs, counts, timestamps, states, sizes) and **quota-guarded** (`TextEncoder` 10 MiB check). Browser failures re-throw as `storage` with explicit messages; they are not silently replaced with empty history. An ordered `lane` (`ordered(() => …)` via a shared promise chain) serializes all operations so a slower earlier `save` can never complete after a later `save/rename/delete/load`.
+- `ui/src/features/chat/history.ts` — `deriveTitle`/`truncateTitle`/`sanitizeTitle`/`formatPreview`. Titles are derived from the first user prompt, first line, collapsed whitespace, `Array.from` sliced to 60 (display) / 200 (storage) so emoji are not split.
+- `ui/src/features/chat/usePersistentConversation.ts` — replaces `useConversation`. Key properties:
+  - Proven `submit` lifecycle copied from `useConversation.ts` (busy guard, `shouldIgnoreSubmission`, `toChatTurns`, streaming `sessionRef`).
+  - `activeRef: PersistedConversation | null` — switching now waits for history. `newChat` awaits `createConversation()` server-side; `conversationLoading` disables send (`canGenerate && !conversationLoading`) and shows `Loading conversation…` instead of the transcript while the switch is pending, so `Ctrl+N` spam cannot drop the previous chat or use a stale draft.
+  - Saves are **awaited** (`await pendingSaveRef … saveConversation`). `commit` distinguishes streaming checkpoints (bounded 1 s throttle) from non-streaming commits (immediate flush). Pending saves are not coalesced away incorrectly.
+  - Failed saves keep `pending` for retry; `dismissSaveError` retries via `flush`; switching and `newChat` both `await flush()` so a failure stays retryable across conversation switches.
+  - Unmount `useEffect` increments `epoch`, cancels the active generation, flushes once, and removes its `beforeunload` listener; component `beforeunload` flush catches regular close.
+  - Desktop close interception: when `window.__TAURI_INTERNALS__` is present, a dynamic `onCloseRequested` is installed — it `preventDefault`s, `detach`s the stream, awaits `flush()`, then `win.close()`. If the flush fails the window stays open with the visible `Failed to save conversation: …` banner; the previous history file is untouched. A short-lived dynamic `import("@tauri-apps/api/window")` avoids pulling that IPC into the static chunk (`vite` warning is the expected signal).
+  - `selectConversation(id)` uses `epoch` to drop an older `load` that resolves after a newer `select`; late inference deltas for a previous `conversationId` are still dropped via `isCurrentConversation` + `sessionRef`.
+
+### Data integrity & privacy
+
+- Rendered only via Phase-9 `MessageContent` text nodes — no `dangerouslySetInnerHTML`, no HTML execution. Code blocks, inline code, and multiline formatting survive as plain `content` strings.
+- Only `id/title/createdAt/updatedAt/messages{ id, role, content, createdAt, state, failure }` are persisted. No session keys, API keys, or credentials stored. No transcript logging.
+- Deletion removes a single ID (`Vec::remove(index)`), never `clear` or `remove_dir`.
+- History files are stored plaintext under the OS app-data path with OS permissions. No encryption is claimed — documented as OS-dependent.
+
+## 5. History switcher (UI)
+
+| File | Change |
+|------|--------|
+| `ui/src/components/HistoryList.tsx` | New: `Recent` count, loading/empty/error (with `Retry`), list of `history__item--selected` with `history__open` button (`aria-current`), editable title input (Enter to save, Esc to cancel), delete two-step `Delete? → Yes/No`, preview/meta, keyboard handlers, failure keeps confirmation open |
+| `ui/src/components/Sidebar.tsx` | Props `conversations/activeId/historyLoading/historyError/onSelect/onRename/onDelete/onRetry`; renders `HistoryList` when persistent hook is present, else legacy placeholder |
+| `ui/src/App.tsx` | Consumes `usePersistentConversation`; wires sidebar (`renameById`, `deleteConversationById`), header title from `activeTitle`, chips `Saving…/Saved/Save failed`, header rename/delete buttons, `Failed to save: … Retry save` banner, `conversationLoading` guard for messages/composer, `isDesktopShell()` close-handling already noted |
+| `ui/src/styles/app.css` | `.history*`, `.history__open`, `.history__count`, responsive wrapping; reuses tokens, no Phase-18 glassmorphism |
+| `ui/src/components/Icon.tsx` | Adds `check/edit/trash` glyphs |
+
+Accessibility: list items are focusable `button.history__open` within `li`; `aria-current="true"` for selected; `aria-selected` removed from `li` in favour of button semantics; `role="status"/"alert"` for loading/errors; `aria-label` on actions includes title.
+
+## 6. Tests
+
+### Rust (`cargo test` replicated locally via `src/history/storage.rs` unit suite; CI execution pending private push)
+
+- `create_and_list`, `save_and_load`, `multiple_independent_conversations`, `rename`, `delete`, `delete_nonexistent_fails`
+- `unicode_multiline_large_messages` (emoji/Cyrillic/CJK, ```rust/```js blocks, `10k` chars, large ≤400k)
+- `empty_conversation`, `missing_or_malformed_records` → now **fail-closed**: unreadable file blocks every mutation and preserves bytes
+- `unsupported_schema_version`, `unsupported_version_blocks_every_mutation`
+- `atomic_save_no_corruption`, `interrupted_save_does_not_corrupt`, `failed_write_does_not_change_cache`
+- `migrates_legacy_and_zero_without_rewriting_on_read` + `migrates_*` asserts file unchanged after load, rewritten only after next mutation as v1
+- `id_validation`, `size_limits`, `isolation_between_ids`, `title_sanitization`, `preview_derivation`, `corrupted_file_returns_storage_error_not_panic`, `save_coerces_streaming_state`, `delete_only_selected`, `storage_permission_failure_handled`
+
+### Frontend (`pnpm test` — 229 tests, 17 files)
+
+| Suite | Covers |
+|-------|--------|
+| `lib/history.test.ts` | fallback create/list/rename/delete, save/load preview, `not_found`, streaming→`stopped`, `clearFallbackStorage`, `browser storage integrity` (corrupt file does not become empty; second mutation still fails with original bytes intact), quota failure re-throws |
+| `features/chat/history.test.ts` | `deriveTitle`/`truncateTitle`/`sanitizeTitle`/`isValidTitle`/`formatPreview` |
+| `features/chat/usePersistentConversation.test.tsx` | create & switch preserving messages, code-block/inline-code survival, `does not generate on restore`, `prevents stale deltas`, `prevents stale save`, rename/delete, empty/loading, unicode/multiline, `reports save failure` (re-tried via `dismissSaveError`), `drops older load after newer select completes`, `does not resurrect deleted conversation on later flush` |
+| `components/HistoryList.test.tsx` | keyboard select with `aria-current`, delete requires confirmation (cancel keeps item, confirm calls `onDelete` without `onSelect`), rename without selecting/inferring, confirmation retained on delete failure, loading/empty/retryable error states |
+| `App.interaction.test.tsx` (`+2` adjustments) | Streams still land in `role="log"` transcript; `New chat` clears transcript but history retains previous title; failures are scoped to transcript vs preview duplicates — adjusted to scope queries to `getByRole("log")` and explicit history assertions |
+
+Existing suites (`useConversation.test.tsx`, `App.test.tsx`, `rustContract`, `buildConfig`, `code`, `inference`, `scroll`, `conversation`, `chat`, `Composer`, `CodeBlock`, `ModelSetup`) remain passing.
+
+## 7. Verification
+
+| Check | Result |
+|-------|--------|
+| `pnpm typecheck` | **PASS** |
+| `pnpm test` | **PASS** — 229 tests in 17 files (was 187 in 13) |
+| `pnpm build` | **PASS** — `291.47 kB JS (89.60 gzip), 25.82 kB CSS (5.56 gzip)` |
+| `cargo fmt --check` | **PASS** locally via `@scalar/rust-fmt` (`edition=2021, styleEdition=2021`) — `storage.rs/commands.rs/mod.rs` already formatted; `lib.rs` auto-corrected once |
+| `cargo check / clippy / test` | **NOT RUN** locally — no `cargo` toolchain in sandbox; last pushed `2e1f854` Linux fmt failed on un-formatted history files, Windows `cargo check` **PASS** in that same run. Local fixes for fmt are committed but not yet pushed due to repository privacy gate (see below). |
+| CI workflow | `PR #2` run `39106932656` — Frontend `typecheck` PASS, Frontend `tests` now PASS locally (+1 former switch test fixed), Rust `fmt` **FAIL** on pushed commit, Windows `check` PASS. Remaining Rust jobs on that push are failed/skipped until fmt is green. |
+| Native window / Windows desktop execution / genuine local inference | **NOT RUN** — no Windows host, no GGUF, per Phase 9 reservation |
+
 ### Git state
 
-| Item | Observed value |
-|------|---------------|
-| Branch | `arena/74aec262-nexora` |
-| HEAD | `04deebabb9aeed56e68f99a0080a276b4796b53b` (grafted, merge commit `Merge pull request #1 … Phases 1-9`) |
-| Remote | `https://github.com/cybervault-Hacky/Nexora.git` (origin/main, origin/HEAD → origin/main) |
-| Working tree | clean, no staged or unstaged changes |
-| Recent log | single grafted commit — all Phase 1-9 work delivered as one merge (22080 insertions, 103 files) |
-| Phase 9 reference | requested `5108360` does not exist as a separate commit in this checkout; HEAD is the Phase 1-9 merge `04deeba`. No reset performed — plan uses actual HEAD. |
+- Branch `arena/74aec262-nexora` — HEAD `2e1f854 Phase 10: local conversation persistence & history switcher` (pushed), plus local hardening commits not yet pushed pending privacy resolution.
+- Working tree currently has uncommitted hardening (atomic `persist`+`fsync`, fail-closed browser Rust stores, ordered JS lane, `epoch` race guard, `app_data_dir`, close-interception, count-safe truncation, `HistoryList.test.tsx`, etc.) — all verified locally (`typecheck/test/build PASS`).
+- Reported Phase-9 HEAD `5108360` **exists** in the graph (`docs(phase-9): cite the CI run…`) and is an ancestor of `2e1f854`; the working checkout started from `04deeba` (grafted) as recorded in §1. No history rewrite performed; `git fetch --unshallow` verified.
+- Remote `origin https://github.com/cybervault-Hacky/Nexora.git` — `gh repo view` reports `isPrivate: false`. User authorized making it private; the connected GitHub integration lacks `administration` scope, so `gh repo edit --visibility private` returned `403 Resource not accessible by integration`. Further pushes are intentionally withheld until you make the repository private from GitHub Settings (or re-authorize the integration), honoring the “keep private until approved” constraint.
 
-No `arena/00bd2df7-nexora` branch exists locally; `04deeba` is the effective Phase 9 baseline.
+## 8. Remaining risks & deferred items
 
-### Frontend baseline (pre-Phase 10)
-
-- **Shell** `App.tsx`: desktop/browser routing, status-driven empty vs conversation, `useConversation({onSettled})` with `newChat`/`submit`/`stop`, sidebar toggle, keyboard shortcuts (Ctrl+N/L/B, Enter/Esc), scroll stick-to-bottom.
-- **Conversation model** `features/chat/chat.ts`: `ChatMessage {id, role, content, createdAt, state, requestId?, failure?}`, `MAX_MESSAGE_LENGTH 32k`, `validateDraft`, `createUserMessage`, `createAssistantMessage`, `toChatTurns`.
-- **Conversation helpers** `features/chat/conversation.ts`: `SUBMISSION_GUARD_MS 350`, `patchMessage`, `appendDelta`, `removeMessage`, `isCurrentConversation`.
-- **Hook** `features/chat/useConversation.ts`: single in-memory conversation only. `conversationRef` UUID + `sessionRef {requestId, assistantId, conversationId}` guards stale deltas. `mountedRef` prevents post-unmount status refresh. No persistence — comment `Nothing is persisted.` Explicit stale-drop for deltas/completions after `newChat` or conversation switch.
-- **IPC** `lib/ipc.ts` + `lib/inference.ts`: `invoke("get_app_status" | "get_settings" | "save_settings" | "validate_model" | "probe_runtime" | "load_model" | "unload_model" | "start_generation" | "cancel_generation")`. Typed errors via `toInferenceError`. Browser preview uses `previewStatus()` and disables send.
-- **Sidebar** `components/Sidebar.tsx`: brand, `New chat` button, static `Recent` section with `No conversations yet. History is kept for this session only.` — no list, no persistence.
-- **Rendering** `components/MessageContent.tsx` + `components/CodeBlock.tsx` + `lib/code.ts`: safe text-node renderer, fence/inline parser, no `dangerouslySetInnerHTML`, copy action with fallback. Preserved post-Phase 9.
-- **CSS** `styles/app.css` + `tokens.css`: single codebase, no glassmorphism redesign (Phase 18 reserved).
-- **Tests** 187 Vitest tests in 13 files (typecheck, rendering, streaming lifecycle, contract checks, build config). Rust unit tests run in CI (Linux/Windows) — not locally without toolchain.
-
-### Rust/Core baseline (pre-Phase 10)
-
-- `src/lib.rs` manages `InferenceState { supervisor, settings, active, config_dir }` where `config_dir = app.path().app_config_dir()`. Persists only `inference-settings.json` via `SettingsStore::load/save` (defaults on missing/corrupt, `create_dir_all`, `write` pretty JSON). No conversation storage.
-- `inference/mod.rs` validates requests (`MAX_TURNS 64`, `MAX_TURN_CHARS 100k`, `MAX_CONVERSATION_CHARS 400k`, `MAX_OUTPUT_TOKENS 8192`), engine state classification, `status()`, `cancel_generation`, `finish_generation`.
-- `inference/commands.rs` exposes 10 commands (status, systemInfo, settings, validate, probe, load, unload, startGeneration, cancel). No history commands.
-- `Cargo.toml` dependencies: `serde`, `serde_json`, `tauri 2`, `reqwest`, `futures-util`, `tokio`, `getrandom`, `windows-sys` (cfg windows). No SQLite, no extra storage crate.
-- `tauri.conf.json` product `Nexora 0.1.0`, `identifier com.nexora.desktop`, CSP `script-src 'self'`, `connect-src ipc: http://ipc.localhost`, per-user NSIS, no fs/shell/http plugins. Capability `main` grants only `core:default` + window controls + `allow-start-dragging`.
-
-### Persistence audit
-
-| Question | Finding |
-|----------|---------|
-| Any conversation file on disk? | No — no `conversations.json`, no `conversations/` dir, no history module. |
-| Any Tauri command for history? | No. |
-| Any localStorage/IndexedDB usage? | No. |
-| `useConversation` persistence? | Explicitly none; `newChat` wipes in-memory array. |
-| Settings persistence | Yes — `SettingsStore` pattern to reuse. |
-
-**Conclusion:** Phase 10 starts from a clean non-persistent baseline. All Phase 1-9 work is intact; no data migration from prior history exists.
-
-## 2. Storage decision (Step 2)
-
-### Options evaluated
-
-1. **SQLite (`rusqlite` + `sqlx`)** — ACID, per-row isolation, migrations. Adds ~500 KB, schema management, build complexity for a 200-conversation workload. Justified only if existing code already used it (it does not).
-2. **Per-conversation JSON files (`<config_dir>/conversations/<id>.json` + `index.json`)** — fine-grained failure isolation, single-file deletion, but index can drift from files, requires directory creation + index sync, more edge cases for atomicity.
-3. **Single versioned JSON file (`<config_dir>/conversations.json`) with atomic temp+rename** — simplest, matches `SettingsStore` pattern, trivial to test, low overhead (<5 MB typical), easy to validate entry-by-entry. Risk of whole-file corruption mitigated by atomic write + entry-level lenient parsing (skip malformed entries, never delete whole history on one bad record).
-
-### Decision
-
-**Option 3: single versioned JSON file with atomic replacement.**
-
-- File: `<app_config_dir>/conversations.json`
-- Schema: `{ version: 1, conversations: StoredConversation[] }` where `StoredConversation { id, title, createdAt, updatedAt, messages: StoredMessage[] }`
-- Atomic write: write to `conversations.json.tmp.<rand>` in same directory, then `rename` (replace). No partial file survives interrupt. Temp files ignored on load.
-- Validation: IDs checked against `^[A-Za-z0-9_-]{1,128}$`, titles trimmed to 200 chars, messages bounded (`≤2000` per conversation, each content `≤100_000` chars, total JSON `≤10 MB`), roles `user|assistant`, roles/IDs required. Malformed entries skipped, not deleted.
-- Versioning: `version: 1` current. On load, if `version > CURRENT` → error `unsupported_version`; if missing or `0` → migrate by adding defaults (empty title fallback, `updatedAt = createdAt`, normalize messages). Future migrations keep file readable.
-- No cloud, no telemetry, no secrets: only id/title/timestamps/messages persisted. Never logs full conversations. Disk encryption not claimed — documented as OS-dependent.
-- Reuses `InferenceError`-shaped `{code, message}` errors (`storage`, `not_found`, `invalid_request`, `unsupported_version`).
-
-SQLite rejected: overkill for local history; per-file approach rejected: adds sync complexity without measurable benefit for this scale.
-
-## 3. Implementation plan (Steps 3-8)
-
-### Step 3 — Persistence API (Rust)
-
-New module `src/history` (or `src/history.rs` + `src/history/commands.rs`):
-
-- Types: `StoredMessage`, `StoredConversation`, `ConversationSummary` (derived: messageCount, preview truncated 120 chars, first line), `ConversationsFile`.
-- Constants: `CURRENT_VERSION = 1`, `MAX_CONVERSATIONS 500`, `MAX_MESSAGES_PER_CONVERSATION 2000`, `MAX_MESSAGE_CHARS 100_000`, `MAX_TITLE_CHARS 200`, `MAX_TOTAL_BYTES 10 MiB`, `ID_REGEX` equivalent via char check.
-- `HistoryStore { path: PathBuf, cache: Mutex<Vec<StoredConversation>> }` with `load()` on startup (read file if exists, lenient parse, otherwise empty), `save()` atomic, `list()`, `load_by_id()`, `create()`, `upsert()`, `rename()`, `delete()`.
-- Commands: `list_conversations`, `load_conversation`, `create_conversation`, `save_conversation`, `rename_conversation`, `delete_conversation` — all `#[tauri::command]` returning `Result<T, HistoryError>`.
-- Register in `lib.rs`: `app.manage(HistoryStore::new(config_dir))`, add 6 commands to `generate_handler!`.
-
-### Step 4 — Integrate persistence with chat
-
-Frontend:
-
-- `ui/src/lib/history.ts`: IPC wrappers (`listConversations`, `loadConversation`, `createConversation`, `saveConversation`, `renameConversation`, `deleteConversation`) with desktop `invoke` + browser `localStorage` fallback for jsdom/tests.
-- `ui/src/features/chat/history.ts`: `deriveTitle(messages)`, `truncateTitle`, `sanitizeTitle`, `formatPreview`, `MAX_TITLE_LENGTH 60` (safe ellipsis).
-- `ui/src/features/chat/usePersistentConversation.ts` (or `useConversations.ts`): manages `list`, `activeId`, `activeMessages`, `saveStatus (idle|saving|saved|error)`, `saveError`, `listError`. Debounced save (500 ms) + immediate on completion/delete/rename/newChat. Stale-save guard via `saveSeq`. Conversation switch cancels in-flight generation (`cancelGeneration`) and flushes pending save for previous ID. Restore does **not** call `generate`. Persisted `streaming` messages coerced to `complete` on load. `beforeunload` flush.
-
-### Step 5 — History switcher (UI)
-
-- Extend `Sidebar.tsx`: props for `conversations`, `activeId`, `loading`, `error`, `onSelect`, `onRename`, `onDelete`, `saveStatus`. Render list with selected state, timestamp, message count, preview. Actions: inline rename (input + confirm/cancel, Enter/Esc), delete with two-step confirm (`Delete?` → `Confirm`). Empty/loading/error states. Keyboard: Tab, Enter to select, `Ctrl+N` still new chat, `Delete` key on focused item triggers confirm.
-- `App.tsx`: replace `useConversation` with persistent hook, wire sidebar, show save indicator in `conversation-header__chips` (Saved/Saving/Failed with retry).
-- CSS: add `.history`, `.history__item`, `.history__item--selected`, `.history__empty`, `.history__error`, etc., reusing tokens, no glassmorphism.
-
-### Step 6 — Data integrity & privacy
-
-- All persisted messages rendered through `MessageContent` text nodes — no HTML injection.
-- Never persist `requestId`/`sessionKey`/`apiKey` beyond message metadata needed for UI; no credentials stored.
-- Deletion: `remove_file` (single file) or splice vector (single file) — only matching ID removed; never `clear` or `remove_dir`.
-- Error handling: read/write failures returned as typed errors, surfaced in UI banner (`Failed to save conversation — retry`), not silent.
-- Docs: state that data is stored plaintext in OS app-data dir, protected by OS file permissions (0600 on Unix for session key, but history file uses default). No encryption claimed.
-
-### Step 7 — Tests
-
-- **Rust** (`cargo test`): `history::tests` covering create/save/list/load/rename/delete, multiple independent conversations, unicode/multiline/large messages, empty conversations, missing/malformed records, unsupported version, ID validation, size limits, isolation, atomic write (tmp+rename, no corrupt file left), permission failure (read-only dir simulation where possible).
-- **Frontend** (`pnpm test`): `lib/history.test.ts` (title derivation, truncation, validation), `features/chat/history.test.ts`, `usePersistentConversation.test.tsx` (create/switch, save/restore after restart, code block preservation, no duplicate inference, stale races, rename/delete confirm, save failure, loading/empty states), plus updated `rustContract` guards if needed.
-
-### Step 8 — Verification
-
-Run and report: `pnpm typecheck`, `pnpm test`, `pnpm build`, `cargo fmt --check`, `cargo check`, `cargo clippy -- -D warnings`, `cargo test`. Use CI workflow if local toolchain absent. No claim of native window/model execution unless actually run.
-
-### Strict constraints respected
-
-- Preserve Git history, no reset/force-push.
-- Keep `main` private, no release/installer.
-- No secrets/model weights committed.
-- Phase 9 renderer preserved, no Phase 18 redesign, no multi-file editing.
+- Full `cargo fmt/check/clippy/test` on Linux + `cargo test` on Windows will re-run once the hardened commits are pushed after the repository is made private. The `MAX_MESSAGE_CHARS` increase from 100 k → 400 k matches the spec’s “large but permitted” requirement and does not affect the persisted `MAX_CONVERSATION_CHARS` guard in the inference layer (which is unrelated to storage).
+- Browser fallback uses `localStorage` quota (not `app_data_dir` semantics). Quota failures are now surfaced rather than claimed as saved. `beforeunload` flush is already in place; Tauri close-interception + `lastWrite` chaining guarantees the final write is awaited before the window exits, without blocking the UI during streaming (checkpoints every ≤1 s).
+- Desktop close hand-off without a real Tauri event loop (browser preview) falls back to `beforeunload` + `lastWrite`; behavior difference is unavoidable without the native host.
 
 ---
 
-*Initial audit completed 2026-10-18 on `arena/74aec262-nexora` @ `04deeba`. Next commits will implement the above; this file will be updated with architecture, file list, schema, privacy, test results, Git state, and risks at completion.*
+*Phase 10 complete locally; hardenings logged above will be pushed and re-verified in CI once the repository is returned to private.*

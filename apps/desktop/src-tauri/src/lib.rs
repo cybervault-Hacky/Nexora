@@ -15,7 +15,9 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&config_dir)?;
             app.manage(inference::InferenceState::load(config_dir.clone()));
-            app.manage(history::commands::HistoryState::new(config_dir));
+            app.manage(history::commands::HistoryState::new(
+                app.path().app_data_dir()?,
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {

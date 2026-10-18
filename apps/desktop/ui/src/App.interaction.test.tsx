@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +23,16 @@ vi.mock("./lib/inference", async (importOriginal) => {
     unloadModel: vi.fn(),
   };
 });
+
+// These engine/shell tests isolate the new history IPC boundary as well.
+vi.mock("./lib/history", () => ({
+  listConversations: async () => [],
+  createConversation: async () => ({ id: "new-chat-id", title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [] }),
+  saveConversation: async (c: import("./lib/history").PersistedConversation) => c,
+  loadConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  renameConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  deleteConversation: async () => true,
+}));
 
 import App from "./App";
 import {
@@ -169,7 +179,7 @@ describe("conversation surface", () => {
     });
 
     expect(await screen.findByText("Stopped")).toBeTruthy();
-    expect(screen.getByText(/A closure captures/)).toBeTruthy();
+    expect(within(screen.getByRole("log")).getByText(/A closure captures/)).toBeTruthy();
   });
 
   it("reports a runtime failure honestly and keeps no invented answer", async () => {
@@ -211,7 +221,7 @@ describe("conversation surface", () => {
     });
 
     expect(await screen.findByText("Failed")).toBeTruthy();
-    expect(screen.getByText("partial answer")).toBeTruthy();
+    expect(within(screen.getByRole("log")).getByText("partial answer")).toBeTruthy();
     expect(
       screen.getAllByText("The model stopped responding.").length,
     ).toBeGreaterThan(0);
@@ -233,7 +243,7 @@ describe("conversation surface", () => {
     expect(cancelMock).toHaveBeenCalledWith(run.requestId());
     // Transcript is cleared, but history retains the conversation title
     expect(document.querySelector(".message__prompt")).toBeNull();
-    expect(screen.queryByText("partial")).toBeNull();
+    expect(screen.queryByRole("log")).toBeNull();
     expect(screen.getByText("Build something real.")).toBeTruthy();
     // History should still show the previous conversation
     expect(screen.getByText("temporary question")).toBeTruthy();

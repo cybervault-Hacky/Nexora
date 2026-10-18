@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { markDesktop } from "../test/fixtures";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearFallbackStorage } from "./history";
 
 describe("history lib fallback", () => {
@@ -74,7 +77,7 @@ describe("history lib fallback", () => {
       ],
     });
     const loaded = await loadConversation(conv.id);
-    expect(loaded.messages[0]!.state).toBe("complete");
+    expect(loaded.messages[0]!.state).toBe("stopped");
     expect(loaded.messages[1]!.state).toBe("stopped");
   });
 
@@ -84,5 +87,46 @@ describe("history lib fallback", () => {
     clearFallbackStorage();
     const list = await listConversations();
     expect(list.length).toBe(0);
+  });
+});
+
+describe("browser storage integrity", () => {
+  beforeEach(() => { markDesktop(false); clearFallbackStorage(); });
+  it("does not replace corrupt records with empty history", async () => {
+    const {listConversations,createConversation} = await import("./history");
+    localStorage.setItem("nexora:conversations:v1", "not-json");
+    await expect(listConversations()).rejects.toMatchObject({code:"storage"});
+    await expect(createConversation("No overwrite")).rejects.toMatchObject({code:"storage"});
+    expect(localStorage.getItem("nexora:conversations:v1")).toBe("not-json");
+    clearFallbackStorage();
+  });
+  it("reports quota failures instead of claiming a save", async () => {
+    const {createConversation} = await import("./history");
+    const spy = vi.spyOn(Storage.prototype,"setItem").mockImplementation(() => { throw new Error("Quota"); });
+    await expect(createConversation("Not saved")).rejects.toMatchObject({code:"storage"});
+    spy.mockRestore();
+  });
+});
+
+describe("desktop storage boundary", () => {
+  beforeEach(() => { markDesktop(); vi.mocked(invoke).mockReset(); });
+  afterEach(() => markDesktop(false));
+  it("propagates save and load errors without a localStorage fallback", async () => {
+    const { listConversations, saveConversation } = await import("./history");
+    vi.mocked(invoke).mockRejectedValue({code:"storage", message:"Disk full"});
+    await expect(listConversations()).rejects.toMatchObject({code:"storage"});
+    await expect(saveConversation({id:"one",title:"One",createdAt:1,updatedAt:1,messages:[]}))
+      .rejects.toMatchObject({message:"Disk full"});
+  });
+  it("orders saves before a later read or deletion", async () => {
+    const { saveConversation, loadConversation, deleteConversation } = await import("./history");
+    let release!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    vi.mocked(invoke).mockResolvedValueOnce({id:"one"}).mockResolvedValueOnce(true);
+    const save = saveConversation({id:"one",title:"One",createdAt:1,updatedAt:1,messages:[]});
+    const load = loadConversation("one"); const del = deleteConversation("one");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    release({id:"one"}); await save; await load; await del;
+    expect(vi.mocked(invoke).mock.calls.map(c => c[0])).toEqual(["save_conversation","load_conversation","delete_conversation"]);
   });
 });

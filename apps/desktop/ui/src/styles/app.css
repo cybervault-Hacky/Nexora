@@ -1753,3 +1753,8 @@ button:disabled {
     backdrop-filter: none;
   }
 }
+
+.history__open { display: flex; flex-direction: column; width: 100%; min-width: 0; text-align: left; padding: 0; }
+.history__open > span { max-width: 100%; }
+.conversation-header__chips { flex-wrap: wrap; justify-content: flex-end; }
+.conversation-header__title { overflow-wrap: anywhere; }

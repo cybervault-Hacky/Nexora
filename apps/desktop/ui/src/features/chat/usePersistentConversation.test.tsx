@@ -85,8 +85,8 @@ describe("usePersistentConversation", () => {
 
     // Start new chat
     act(() => result.current.newChat());
-    expect(result.current.activeId).toBeNull();
-    expect(result.current.messages).toHaveLength(0);
+    await waitFor(() => expect(result.current.messages).toHaveLength(0));
+    expect(result.current.activeId).not.toBe(firstId);
 
     // Second conversation
     const run2 = session();
@@ -105,8 +105,8 @@ describe("usePersistentConversation", () => {
     // Switch back to first — should restore without duplicate inference
     expect(generateMock).toHaveBeenCalledTimes(2);
     act(() => result.current.selectConversation(firstId));
-    await waitFor(() => expect(result.current.messages.length).toBe(2));
-    expect(result.current.messages[0]!.content).toBe("hello first");
+    await waitFor(() => expect(result.current.messages[0]?.content).toBe("hello first"));
+    expect(result.current.messages.length).toBe(2);
     expect(result.current.messages[1]!.content).toBe("answer one");
     expect(generateMock).toHaveBeenCalledTimes(2); // no new call on restore
 
@@ -178,8 +178,8 @@ describe("usePersistentConversation", () => {
     await act(async () => {
       run.settle();
     });
-    await waitFor(() => expect(result.current.streaming).toBe(false));
-    expect(result.current.messages).toHaveLength(0);
+    await waitFor(() => expect(result.current.messages).toHaveLength(0));
+    expect(result.current.streaming).toBe(false);
   });
 
   it("prevents stale save from overwriting newer state", async () => {
@@ -292,4 +292,39 @@ describe("usePersistentConversation", () => {
 
     spy.mockRestore();
   });
+  it("drops an older load after a newer selection completes", async () => {
+    const history = await import("../../lib/history");
+    let finishOld!: (c: import("../../lib/history").PersistedConversation) => void;
+    const snapshot = (id: string) => ({ id, title:id, createdAt:1,updatedAt:1,messages:[
+      {id:"m1",role:"user" as const,content:id,createdAt:1,state:"complete"},
+    ] });
+    const spy = vi.spyOn(history,"loadConversation")
+      .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+      .mockResolvedValueOnce(snapshot("newer"));
+    const {result} = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+    act(() => result.current.selectConversation("older"));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    act(() => result.current.selectConversation("newer"));
+    await waitFor(() => expect(result.current.activeId).toBe("newer"));
+    await act(async () => finishOld(snapshot("older")));
+    expect(result.current.messages[0]?.content).toBe("newer");
+    expect(generateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect a deleted conversation on later flush", async () => {
+    const history = await import("../../lib/history");
+    const run = session();
+    const {result} = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+    act(() => result.current.setDraft("Delete me"));
+    act(() => result.current.submit());
+    act(() => run.send("partial"));
+    const id = result.current.activeId!;
+    await act(async () => result.current.deleteActive());
+    await act(async () => run.settle());
+    await expect(history.loadConversation(id)).rejects.toMatchObject({code:"not_found"});
+    expect(await history.listConversations()).toHaveLength(0);
+  });
+
 });

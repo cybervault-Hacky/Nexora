@@ -23,6 +23,8 @@ export default function App() {
   }, [reload]);
 
   const {
+    conversationLoading,
+    renameById,
     conversations,
     activeId,
     activeTitle,
@@ -217,20 +219,7 @@ export default function App() {
         historyLoading={listLoading}
         historyError={listError}
         onSelectConversation={selectConversation}
-        onRenameConversation={async (id, title) => {
-          // If renaming active, use renameActive; otherwise call generic
-          if (id === activeId) {
-            await renameActive(title);
-          } else {
-            // For non-active we can still call renameActive path via history lib directly
-            // Use the same store path: call deleteConversationById's sibling — we need to handle generically
-            // For now delegate to renameActive if active, else use direct invoke via historyList's own logic
-            // HistoryList calls onRename which should handle any id; we implement fallback here
-            const { renameConversation } = await import("./lib/history");
-            await renameConversation(id, title);
-            refreshList();
-          }
-        }}
+        onRenameConversation={renameById}
         onDeleteConversation={deleteConversationById}
         onRetryHistory={refreshList}
       />
@@ -384,7 +373,7 @@ export default function App() {
             <Icon name="alert" size={14} />
             <span>Failed to save conversation: {saveError}</span>
             <button type="button" className="notice__action" onClick={dismissSaveError}>
-              Dismiss
+              Retry save
             </button>
           </div>
         ) : null}
@@ -400,7 +389,7 @@ export default function App() {
         ) : null}
 
         <div className="conversation" ref={scrollRef} onScroll={handleScroll}>
-          {hasMessages ? (
+          {conversationLoading ? <p role="status">Loading conversation…</p> : hasMessages ? (
             <MessageList messages={messages} />
           ) : showSetup ? (
             <div className="empty">
@@ -466,7 +455,7 @@ export default function App() {
           error={error}
           textareaRef={textareaRef}
           busy={streaming}
-          canGenerate={engineReady}
+          canGenerate={engineReady && !conversationLoading}
           onChange={setDraft}
           onSubmit={handleSubmit}
           onStop={stop}

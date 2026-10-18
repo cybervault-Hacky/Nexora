@@ -26,6 +26,16 @@ vi.mock("./lib/inference", async (importOriginal) => {
 
 
 
+// These engine/shell tests isolate the new history IPC boundary as well.
+vi.mock("./lib/history", () => ({
+  listConversations: async () => [],
+  createConversation: async () => ({ id: "new-chat-id", title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [] }),
+  saveConversation: async (c: import("./lib/history").PersistedConversation) => c,
+  loadConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  renameConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  deleteConversation: async () => true,
+}));
+
 import App from "./App";
 import { fetchSettings, fetchStatus, fetchSystemInfo } from "./lib/inference";
 import { previewStatus } from "./lib/ipc";

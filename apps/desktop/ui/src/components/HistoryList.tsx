@@ -155,11 +155,7 @@ function HistoryItem({ conversation, selected, onSelect, onRename, onDelete }: H
     <li
       className={`history__item ${selected ? "history__item--selected" : ""}`}
       role="listitem"
-      tabIndex={0}
-      aria-selected={selected}
       aria-label={`${conversation.title}, ${conversation.messageCount} messages`}
-      onClick={handleSelect}
-      onKeyDown={handleKeyDown}
     >
       <div className="history__item-main">
         {editing ? (
@@ -192,14 +188,16 @@ function HistoryItem({ conversation, selected, onSelect, onRename, onDelete }: H
             }}
           />
         ) : (
-          <>
+          <button type="button" className="history__open"
+            aria-current={selected ? "true" : undefined}
+            onClick={handleSelect} onKeyDown={handleKeyDown}>
             <span className="history__title" title={conversation.title}>
               {conversation.title}
             </span>
             <span className="history__preview" title={preview}>
               {preview}
             </span>
-          </>
+          </button>
         )}
         <span className="history__meta">
           {conversation.messageCount > 0 ? `${conversation.messageCount} msg` : "Empty"} ·{" "}
