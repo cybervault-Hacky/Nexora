@@ -10,6 +10,7 @@ import { TitleBar } from "./components/TitleBar";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { ContextBudgetBar } from "./components/ContextBudgetBar";
 import { PatchEditor } from "./components/PatchEditor";
+import { PatchGenerateBar } from "./components/PatchGenerateBar";
 import { PatchPreview } from "./components/PatchPreview";
 import { usePersistentConversation } from "./features/chat/usePersistentConversation";
 import { useWorkspace } from "./features/workspace/useWorkspace";
@@ -140,6 +141,19 @@ export default function App() {
     block += "\nUse the context above only as background for your answer.\n";
     return block;
   }, [contextPlan, workspace.contextBlock, workspace.contextFiles]);
+
+  const generationTargetPath = useMemo(() => {
+    if (workspace.selectedPaths.size === 1) return Array.from(workspace.selectedPaths)[0]!;
+    if (workspace.previewPath && !workspace.previewError && workspace.preview?.content) return workspace.previewPath;
+    return null;
+  }, [workspace.selectedPaths, workspace.previewPath, workspace.preview, workspace.previewError]);
+
+  const generationOriginalContent = useMemo(() => {
+    if (!generationTargetPath) return null;
+    if (workspace.previewPath === generationTargetPath && workspace.preview?.content) return workspace.preview.content;
+    const file = workspace.contextFiles.find((f) => f.path === generationTargetPath);
+    return file?.content ?? null;
+  }, [generationTargetPath, workspace.previewPath, workspace.preview, workspace.contextFiles]);
 
   const focusComposer = useCallback(() => {
     textareaRef.current?.focus();
@@ -368,7 +382,21 @@ export default function App() {
             {contextPlan ? (
               <ContextBudgetBar plan={contextPlan} />
             ) : null}
-            {/* Patch workflow — read-only until explicit apply */}
+            <PatchGenerateBar
+              workspacePath={workspace.workspacePath}
+              targetPath={generationTargetPath}
+              originalContent={generationOriginalContent}
+              filteredContextBlock={filteredContextBlock}
+              engineStatus={engineStatus}
+              onApplied={() => {
+                void workspace.refresh();
+                if (workspace.previewPath) void workspace.loadPreview(workspace.previewPath);
+              }}
+              onInvalidate={() => {
+                // generation bar handles its own invalidation; manual patch invalidated via workspace switch effect
+              }}
+            />
+            {/* Manual patch workflow — read-only until explicit apply */}
             {workspace.previewPath && workspace.preview?.content !== undefined && !workspace.previewLoading && !workspace.previewError ? (
               <div className="workspace__patch" aria-label="Patch workflow">
                 {patch.patchState.status === "idle" ? (
