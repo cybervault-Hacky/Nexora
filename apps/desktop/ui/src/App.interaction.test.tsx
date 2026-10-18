@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +23,16 @@ vi.mock("./lib/inference", async (importOriginal) => {
     unloadModel: vi.fn(),
   };
 });
+
+// These engine/shell tests isolate the new history IPC boundary as well.
+vi.mock("./lib/history", () => ({
+  listConversations: async () => [],
+  createConversation: async () => ({ id: "new-chat-id", title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [] }),
+  saveConversation: async (c: import("./lib/history").PersistedConversation) => c,
+  loadConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  renameConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  deleteConversation: async () => true,
+}));
 
 import App from "./App";
 import {
@@ -110,7 +120,10 @@ describe("conversation surface", () => {
 
     await user.type(compose(), "write a hello world{Enter}");
 
-    expect(await screen.findByText("write a hello world")).toBeTruthy();
+    // The prompt appears both as the conversation title and as the message bubble;
+    // assert the bubble specifically so a title change does not make the query ambiguous.
+    expect((await screen.findAllByText("write a hello world")).length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".message__prompt")?.textContent).toBe("write a hello world");
     expect(screen.getByText("Waiting for the first token…")).toBeTruthy();
 
     run.push("Here is a minimal ");
@@ -166,7 +179,7 @@ describe("conversation surface", () => {
     });
 
     expect(await screen.findByText("Stopped")).toBeTruthy();
-    expect(screen.getByText(/A closure captures/)).toBeTruthy();
+    expect(within(screen.getByRole("log")).getByText(/A closure captures/)).toBeTruthy();
   });
 
   it("reports a runtime failure honestly and keeps no invented answer", async () => {
@@ -186,7 +199,7 @@ describe("conversation surface", () => {
     );
 
     expect(banner).toBeTruthy();
-    expect(screen.getByText("hello")).toBeTruthy();
+    expect(screen.getAllByText("hello").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Failed")).toBeNull();
     expect(screen.queryByText("Waiting for the first token…")).toBeNull();
   });
@@ -208,7 +221,7 @@ describe("conversation surface", () => {
     });
 
     expect(await screen.findByText("Failed")).toBeTruthy();
-    expect(screen.getByText("partial answer")).toBeTruthy();
+    expect(within(screen.getByRole("log")).getByText("partial answer")).toBeTruthy();
     expect(
       screen.getAllByText("The model stopped responding.").length,
     ).toBeGreaterThan(0);
@@ -228,9 +241,12 @@ describe("conversation surface", () => {
     await user.click(screen.getByRole("button", { name: "New chat" }));
 
     expect(cancelMock).toHaveBeenCalledWith(run.requestId());
-    expect(screen.queryByText("temporary question")).toBeNull();
-    expect(screen.queryByText("partial")).toBeNull();
+    // Transcript is cleared, but history retains the conversation title
+    expect(document.querySelector(".message__prompt")).toBeNull();
+    expect(screen.queryByRole("log")).toBeNull();
     expect(screen.getByText("Build something real.")).toBeTruthy();
+    // History should still show the previous conversation
+    expect(screen.getByText("temporary question")).toBeTruthy();
   });
 
   it("refuses an empty message with an accessible error", async () => {
@@ -241,9 +257,7 @@ describe("conversation surface", () => {
 
     await user.type(compose(), "{Enter}");
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Enter a message before sending.",
-    );
+    expect(screen.getByText("Enter a message before sending.")).toBeTruthy();
     expect(generateMock).not.toHaveBeenCalled();
   });
 

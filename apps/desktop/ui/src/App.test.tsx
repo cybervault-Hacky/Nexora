@@ -24,6 +24,18 @@ vi.mock("./lib/inference", async (importOriginal) => {
   };
 });
 
+
+
+// These engine/shell tests isolate the new history IPC boundary as well.
+vi.mock("./lib/history", () => ({
+  listConversations: async () => [],
+  createConversation: async () => ({ id: "new-chat-id", title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [] }),
+  saveConversation: async (c: import("./lib/history").PersistedConversation) => c,
+  loadConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  renameConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  deleteConversation: async () => true,
+}));
+
 import App from "./App";
 import { fetchSettings, fetchStatus, fetchSystemInfo } from "./lib/inference";
 import { previewStatus } from "./lib/ipc";
@@ -97,7 +109,7 @@ describe("browser preview", () => {
 
     expect(screen.getAllByText(/Nexora/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
-    expect(screen.getByRole("textbox")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Message Nexora" })).toBeTruthy();
   });
 });
 
@@ -193,7 +205,9 @@ describe("desktop status routing", () => {
 
     render(<App />);
 
-    const retry = await screen.findByRole("button", { name: "Retry" });
+    const retry = await screen.findByRole("button", { name: "Retry", hidden: false });
+    // Ensure we click the status retry, not a history retry (history is mocked to empty)
+    expect(retry.className).toContain("notice__action");
     await userEvent.setup().click(retry);
 
     expect(await screen.findByText("Engine ready")).toBeTruthy();
