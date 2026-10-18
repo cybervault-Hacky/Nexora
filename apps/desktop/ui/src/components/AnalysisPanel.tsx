@@ -59,7 +59,7 @@ export function AnalysisPanel({ workspacePath, targetPath, onPreview }: Props) {
     <div className="analysis" aria-label="Deep analysis">
       <header className="analysis__header">
         <div className="analysis__title">
-          <Icon name="search" size={12} />
+          <Icon name="branch" size={14} />
           <span>Deep Analysis</span>
           {analysisState.status === "loaded" ? (
             <span className="analysis__badge" title="Graph built">
@@ -125,8 +125,8 @@ export function AnalysisPanel({ workspacePath, targetPath, onPreview }: Props) {
             ) : (
               <p className="analysis__hint">No circular dependencies detected among verified imports (inferred edges excluded).</p>
             )}
-            <p className="analysis__meta">
-              Last analyzed: {new Date(analysisState.graph.generatedAt).toLocaleTimeString()} — {analysisState.graph.root}
+            <p className="analysis__meta" title={analysisState.graph.root}>
+              Last analyzed {new Date(analysisState.graph.generatedAt).toLocaleTimeString()}
             </p>
           </div>
 

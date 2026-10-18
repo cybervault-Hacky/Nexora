@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { getSymbolIndex, refreshSymbolIndex, searchSymbols, type Symbol, type SymbolIndex } from "../lib/symbolIndex";
 
@@ -24,6 +24,8 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
   const [results, setResults] = useState<Symbol[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchedQuery, setSearchedQuery] = useState("");
+  const searchSequence = useRef(0);
 
   const load = useCallback(async (refresh = false) => {
     if (isControlled) {
@@ -56,9 +58,12 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
   }, [workspacePath, isControlled, onExternalRefresh, externalIndex]);
 
   useEffect(() => {
+    searchSequence.current += 1;
     setQuery("");
     setResults([]);
+    setSearching(false);
     setSearchError(null);
+    setSearchedQuery("");
     if (isControlled) {
       // Parent's effect already loads; just ensure query reset
       return;
@@ -72,27 +77,47 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
   }, [workspacePath, load, isControlled]);
 
   const handleSearch = useCallback(async () => {
-    if (!workspacePath || !query.trim()) {
+    const normalizedQuery = query.trim();
+    if (!workspacePath || !normalizedQuery) {
+      searchSequence.current += 1;
       setResults([]);
       setSearchError(null);
+      setSearching(false);
+      setSearchedQuery("");
       return;
     }
+
+    const requestId = ++searchSequence.current;
+    setSearchedQuery(normalizedQuery);
+    setResults([]);
     setSearching(true);
     setSearchError(null);
     try {
-      const res = await searchSymbols(workspacePath, query.trim(), 20);
-      setResults(res);
-      if (res.length === 0) {
-        setSearchError(null);
+      const res = await searchSymbols(workspacePath, normalizedQuery, 20);
+      if (requestId === searchSequence.current) {
+        setResults(res);
       }
     } catch (cause) {
-      const msg = (cause as { message?: string })?.message ?? String(cause);
-      setSearchError(msg);
-      setResults([]);
+      if (requestId === searchSequence.current) {
+        const msg = (cause as { message?: string })?.message ?? String(cause);
+        setSearchError(msg);
+        setResults([]);
+      }
     } finally {
-      setSearching(false);
+      if (requestId === searchSequence.current) {
+        setSearching(false);
+      }
     }
   }, [workspacePath, query]);
+
+  const handleQueryChange = (value: string) => {
+    searchSequence.current += 1;
+    setQuery(value);
+    setResults([]);
+    setSearching(false);
+    setSearchError(null);
+    setSearchedQuery("");
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -125,7 +150,7 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
     <div className="code-intel" aria-label="Code intelligence">
       <header className="code-intel__header">
         <div className="code-intel__title">
-          <Icon name="search" size={12} />
+          <Icon name="file" size={14} />
           <span>Code Intelligence</span>
         </div>
         <button
@@ -170,39 +195,58 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
               ))}
             </ul>
           ) : null}
-          <p className="code-intel__meta">
-            Last indexed: {new Date(index.generatedAt).toLocaleTimeString()} — {index.root}
+          <p className="code-intel__meta" title={index.root}>
+            Indexed {new Date(index.generatedAt).toLocaleTimeString()}
           </p>
           <p className="code-intel__hint">
-            Supported: Rust, TypeScript, JavaScript, Python via regex. Others marked unsupported — no symbols invented.
+            Rust, TypeScript, JavaScript, and Python via regex; others are unsupported, with no symbols invented.
           </p>
         </div>
       ) : (
-        <p className="code-intel__hint">No index — click Refresh to build.</p>
+        <p className="code-intel__hint">No index yet.</p>
       )}
 
-      <div className="code-intel__search">
+      <div className="code-intel__search" role="search" aria-label="Search symbols">
         <label htmlFor="symbol-search" className="code-intel__label">
           Search symbols
         </label>
-        <div className="code-intel__search-row">
-          <input
-            id="symbol-search"
-            className="code-intel__input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="e.g., hello, MyClass, usePatch"
-            aria-label="Search symbols by name"
-            maxLength={200}
-          />
+        <div className="code-intel__search-row" aria-busy={searching}>
+          <div className="search-field code-intel__field">
+            <Icon className="search-field__icon" name="search" size={15} />
+            <input
+              id="symbol-search"
+              className="code-intel__input search-field__input"
+              type="text"
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Name a symbol…"
+              aria-label="Search symbols by name"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={200}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="search-field__clear"
+                aria-label="Clear symbol search"
+                title="Clear search"
+                onClick={() => handleQueryChange("")}
+              >
+                <Icon name="x" size={13} />
+              </button>
+            ) : null}
+          </div>
           <button
             type="button"
-            className="button button--primary button--sm"
+            className="button button--primary button--sm code-intel__submit"
             onClick={() => void handleSearch()}
             disabled={searching || !query.trim()}
+            aria-label={searching ? "Searching symbols" : "Search symbols"}
+            title={searching ? "Searching symbols" : "Search symbols"}
           >
-            {searching ? "Searching…" : "Search"}
+            {searching ? "Searching…" : <><Icon name="search" size={13} /> Search</>}
           </button>
         </div>
         {searchError ? (
@@ -211,7 +255,7 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
           </p>
         ) : null}
         {results.length > 0 ? (
-          <ul className="code-intel__results" role="list" aria-label="Search results">
+          <ul className="code-intel__results" role="list" aria-label="Search results" aria-live="polite">
             {results.map((sym) => (
               <li key={`${sym.path}:${sym.name}:${sym.startLine}`} className="code-intel__result" role="listitem">
                 <button
@@ -231,8 +275,11 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
               </li>
             ))}
           </ul>
-        ) : query.trim() && !searching && !searchError ? (
-          <p className="code-intel__hint">No symbols found for “{query}”. Try a different name or refresh the index. Unsupported languages return no symbols.</p>
+        ) : searchedQuery === query.trim() && searchedQuery && !searching && !searchError ? (
+          <p className="code-intel__hint" role="status">
+            No symbols found for “{searchedQuery}”. Try another name or refresh the index.
+            Unsupported languages return no symbols.
+          </p>
         ) : null}
       </div>
     </div>

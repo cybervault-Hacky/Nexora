@@ -110,6 +110,9 @@ describe("browser preview", () => {
     expect(screen.getAllByText(/Nexora/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Message Nexora" })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Conversation messages" }).getAttribute("tabindex"),
+    ).toBe("0");
   });
 });
 

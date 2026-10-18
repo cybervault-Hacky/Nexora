@@ -1,34 +1,49 @@
 :root {
-  /* Surfaces */
-  --bg-base: #0a0c0f;
+  /* Graphite surfaces — each step is a small, deliberate lift in luminance. */
+  --bg-base: #0b0d10;
   --bg-panel: #111419;
-  --bg-elevated: #171b21;
-  --bg-raised: #1d232b;
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.12);
+  --bg-elevated: #171a21;
+  --bg-raised: #1d222a;
+  --bg-hover: #242a33;
+  --bg-code: #0d0f14;
 
-  /* Text */
-  --text-primary: #f4f2ec;
-  --text-secondary: #a8afb9;
-  --text-tertiary: #7d8692;
-  --text-inverse: #0a0c0f;
+  /* Borders stay quiet until interaction or selection gives them meaning. */
+  --border-subtle: rgba(238, 235, 246, 0.075);
+  --border-strong: rgba(238, 235, 246, 0.14);
+  --border-focus: rgba(170, 145, 241, 0.72);
 
-  /* Accent and semantics */
-  --accent: #8fa7ff;
-  --accent-hover: #a7b8ff;
-  --accent-pressed: #738df0;
-  --accent-subtle: rgba(143, 167, 255, 0.12);
-  --success: #63c98d;
-  --warning: #e3b36a;
-  --danger: #e07575;
-  --info: #7cc7e8;
+  /* Text colors are tuned for long sessions and small technical labels. */
+  --text-primary: #f1eef6;
+  --text-secondary: #b9b5c3;
+  --text-tertiary: #96919f;
+  --text-inverse: #0b0d10;
 
-  /* Radii */
-  --radius-chip: 4px;
+  /* Restrained violet is reserved for actions, focus, and active selection. */
+  --accent: #aa91f1;
+  --accent-hover: #baa7f5;
+  --accent-pressed: #9478dd;
+  --accent-rgb: 170, 145, 241;
+  --accent-subtle: rgba(var(--accent-rgb), 0.12);
+  --accent-wash: rgba(var(--accent-rgb), 0.06);
+  --accent-border: rgba(var(--accent-rgb), 0.28);
+  --accent-selection: rgba(var(--accent-rgb), 0.25);
+
+  /* Status colors are paired with non-color labels/icons in the UI. */
+  --success: #69d5a0;
+  --success-rgb: 105, 213, 160;
+  --warning: #e8c078;
+  --warning-rgb: 232, 192, 120;
+  --danger: #ef858c;
+  --danger-rgb: 239, 133, 140;
+  --info: #8dc7df;
+  --info-rgb: 141, 199, 223;
+
+  /* Consistent geometry: compact controls, restrained panels, soft composer. */
+  --radius-chip: 5px;
   --radius-input: 8px;
-  --radius-card: 12px;
-  --radius-panel: 16px;
-  --radius-composer: 24px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-composer: 18px;
 
   /* Spacing rhythm */
   --space-1: 4px;
@@ -40,22 +55,38 @@
   --space-8: 32px;
   --space-12: 48px;
 
-  /* Motion */
-  --motion-fast: 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  --motion-base: 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Window and workspace proportions */
+  --titlebar-height: 42px;
+  --sidebar-width: 256px;
+  --sidebar-collapsed-width: 68px;
+  --explorer-width: 340px;
+  --content-max: 820px;
 
-  /* Elevation */
-  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.32);
-  --shadow-high: 0 24px 64px rgba(0, 0, 0, 0.45);
+  /* Motion is short and consistent; reduced-motion overrides are below. */
+  --ease-standard: cubic-bezier(0.2, 0.75, 0.2, 1);
+  --motion-fast: 140ms var(--ease-standard);
+  --motion-base: 190ms var(--ease-standard);
 
-  /* Glass */
-  --glass-panel: rgba(17, 20, 25, 0.78);
-  --glass-raised: rgba(24, 28, 35, 0.84);
+  /* Quiet depth; borders do most of the work on the graphite surfaces. */
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.28);
 
-  color-scheme: dark;
+  /* Selective glass: legible graphite tints with a shared low-contrast edge. */
+  --glass-chrome: rgba(13, 15, 19, 0.78);
+  --glass-sidebar: rgba(18, 21, 26, 0.84);
+  --glass-panel: rgba(20, 23, 29, 0.84);
+  --glass-control: rgba(31, 35, 43, 0.62);
+  --glass-control-focus: rgba(37, 41, 50, 0.78);
+  --glass-border: rgba(238, 235, 246, 0.12);
+  --glass-highlight: rgba(255, 255, 255, 0.045);
+  --glass-blur: blur(18px) saturate(125%);
+  --shadow-glass: 0 12px 30px rgba(0, 0, 0, 0.2);
 
-  /* Monospace stack for code. System faces only, so nothing is downloaded. */
+  /* System faces only; Nexora never downloads fonts. */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui,
+    -apple-system, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+
+  color-scheme: dark;
 }

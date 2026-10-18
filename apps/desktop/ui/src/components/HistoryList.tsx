@@ -149,7 +149,7 @@ function HistoryItem({ conversation, selected, onSelect, onRename, onDelete }: H
     }
   };
 
-  const preview = conversation.preview || `${conversation.messageCount} message${conversation.messageCount !== 1 ? "s" : ""}`;
+  const preview = conversation.preview?.trim() ?? "";
 
   return (
     <li
@@ -194,9 +194,11 @@ function HistoryItem({ conversation, selected, onSelect, onRename, onDelete }: H
             <span className="history__title" title={conversation.title}>
               {conversation.title}
             </span>
-            <span className="history__preview" title={preview}>
-              {preview}
-            </span>
+            {preview ? (
+              <span className="history__preview" title={preview}>
+                {preview}
+              </span>
+            ) : null}
           </button>
         )}
         <span className="history__meta">

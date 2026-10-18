@@ -10,6 +10,13 @@ function props() {
     onDelete: vi.fn().mockResolvedValue(undefined), onRetry: vi.fn() };
 }
 describe("history switcher", () => {
+  it("does not repeat message count when a conversation has no preview", () => {
+    const p = props();
+    const { container } = render(<HistoryList {...p} conversations={[{ ...conv, preview: "" }]} />);
+    expect(container.querySelector(".history__preview")).toBeNull();
+    expect(screen.getByText(/2 msg/)).toBeTruthy();
+  });
+
   it("selects by keyboard with a current state", async () => {
     const p = props(); render(<HistoryList {...p}/>);
     const item = screen.getByRole("button", {name: "A chat Hello"});

@@ -43,7 +43,7 @@ describe("WorkspacePanel", () => {
       previewPath: null,
     };
     render(<WorkspacePanel {...props} />);
-    expect(screen.getByText(/No project selected/)).toBeTruthy();
+    expect(screen.getByText(/Open a local folder/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open project" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Open project" }));
     expect(props.onOpen).toHaveBeenCalled();
@@ -107,14 +107,18 @@ describe("WorkspacePanel", () => {
     expect(screen.getByRole("button", { name: "Preview src/main.rs" })).toBeTruthy();
 
     // search filtering
-    const searchInput = screen.getByRole("textbox", { name: "Search files" });
+    expect(screen.getByRole("search", { name: "Project file paths" })).toBeTruthy();
+    const searchInput = screen.getByRole("textbox", { name: "Filter project paths" });
+    expect(searchInput.getAttribute("placeholder")).toBe("Filter project paths…");
     await userEvent.type(searchInput, "README");
     expect(props.onSearchChange).toHaveBeenCalled();
 
-    // simulate filtered entries
+    // Filtering remains a live relative-path match, with an explicit clear action.
     rerender(<WorkspacePanel {...props} filteredEntries={baseEntries.filter((e) => e.path.includes("README"))} search="README" />);
     expect(screen.getByRole("button", { name: "Preview README.md" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Preview src/main.rs" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Clear path filter" }));
+    expect(props.onSearchChange).toHaveBeenLastCalledWith("");
   });
 
   it("handles loading, empty, error, and truncated states", () => {
@@ -143,6 +147,8 @@ describe("WorkspacePanel", () => {
     const emptyProps = { ...loadingProps, loading: false, filteredEntries: [], inventory: makeInventory([]) };
     rerender(<WorkspacePanel {...emptyProps} />);
     expect(screen.getByText(/No files to display/)).toBeTruthy();
+    rerender(<WorkspacePanel {...emptyProps} search="unmatched" />);
+    expect(screen.getByRole("status").textContent).toContain("No paths match");
 
     const errorProps = { ...emptyProps, error: "Project directory not found" };
     rerender(<WorkspacePanel {...errorProps} />);
