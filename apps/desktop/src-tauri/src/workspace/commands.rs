@@ -436,6 +436,127 @@ pub fn clear_symbol_index(state: State<SymbolIndexState>) -> WorkspaceResult<boo
     Ok(had)
 }
 
+// ---------------------------------------------------------------------------
+// Analysis — dependency graph, relationships, impact (Phase 16)
+// ---------------------------------------------------------------------------
+
+pub struct AnalysisState {
+    pub graph: Mutex<Option<super::analysis::AnalysisGraph>>,
+    pub root: Mutex<Option<PathBuf>>,
+}
+
+impl AnalysisState {
+    pub fn new() -> Self {
+        Self {
+            graph: Mutex::new(None),
+            root: Mutex::new(None),
+        }
+    }
+}
+
+fn analysis_lock_err() -> WorkspaceError {
+    WorkspaceError::storage("Analysis state unavailable. Restart Nexora.")
+}
+
+#[tauri::command]
+pub fn get_dependency_graph(
+    state: State<AnalysisState>,
+    root: String,
+) -> WorkspaceResult<super::analysis::AnalysisGraph> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+    {
+        let guard_root = state.root.lock().map_err(|_| analysis_lock_err())?;
+        let guard_graph = state.graph.lock().map_err(|_| analysis_lock_err())?;
+        if let (Some(cached_root), Some(g)) = (guard_root.as_ref(), guard_graph.as_ref()) {
+            if cached_root == &canonical && g.version == super::analysis::CURRENT_VERSION {
+                return Ok(g.clone());
+            }
+        }
+    }
+    let graph = super::analysis::build_dependency_graph(&canonical)?;
+    {
+        let mut guard_root = state.root.lock().map_err(|_| analysis_lock_err())?;
+        let mut guard_graph = state.graph.lock().map_err(|_| analysis_lock_err())?;
+        *guard_root = Some(canonical);
+        *guard_graph = Some(graph.clone());
+    }
+    Ok(graph)
+}
+
+#[tauri::command]
+pub fn refresh_dependency_graph(
+    state: State<AnalysisState>,
+    root: String,
+) -> WorkspaceResult<super::analysis::AnalysisGraph> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+    let graph = super::analysis::build_dependency_graph(&canonical)?;
+    {
+        let mut guard_root = state.root.lock().map_err(|_| analysis_lock_err())?;
+        let mut guard_graph = state.graph.lock().map_err(|_| analysis_lock_err())?;
+        *guard_root = Some(canonical);
+        *guard_graph = Some(graph.clone());
+    }
+    Ok(graph)
+}
+
+#[tauri::command]
+pub fn get_file_relationships(
+    _state: State<AnalysisState>,
+    root: String,
+    path: String,
+) -> WorkspaceResult<super::analysis::FileRelationships> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    if path.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("File path is empty."));
+    }
+    if path.chars().count() > 4096 {
+        return Err(WorkspaceError::invalid_request("Path too long."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+    super::analysis::file_relationships(&canonical, &path)
+}
+
+#[tauri::command]
+pub fn get_change_impact(
+    _state: State<AnalysisState>,
+    root: String,
+    path: String,
+) -> WorkspaceResult<super::analysis::ImpactReport> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    if path.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("File path is empty."));
+    }
+    if path.chars().count() > 4096 {
+        return Err(WorkspaceError::invalid_request("Path too long."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    let canonical = super::scanner::canonicalize_root(&root_path)?;
+    super::analysis::change_impact(&canonical, &path)
+}
+
+#[tauri::command]
+pub fn clear_analysis_graph(state: State<AnalysisState>) -> WorkspaceResult<bool> {
+    let mut guard_root = state.root.lock().map_err(|_| analysis_lock_err())?;
+    let mut guard_graph = state.graph.lock().map_err(|_| analysis_lock_err())?;
+    let had = guard_graph.is_some();
+    *guard_root = None;
+    *guard_graph = None;
+    Ok(had)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

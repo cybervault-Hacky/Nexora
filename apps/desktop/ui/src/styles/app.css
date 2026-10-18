@@ -3356,3 +3356,286 @@ button:disabled {
   margin-top: 8px;
 }
 
+
+/* Phase 16: Deep analysis */
+.analysis {
+  margin: 8px 10px;
+  padding: 10px;
+  border: 1px solid rgba(143, 167, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.analysis__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.analysis__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.analysis__badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(143, 167, 255, 0.12);
+  border: 1px solid rgba(143, 167, 255, 0.18);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.analysis__actions {
+  display: flex;
+  gap: 6px;
+}
+.analysis__status {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.analysis__hint {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.analysis__meta {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  margin-top: 6px;
+}
+.analysis__error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.18);
+  color: #fca5a5;
+}
+.analysis__overview {
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(143, 167, 255, 0.04);
+  border: 1px solid rgba(143, 167, 255, 0.10);
+  margin-bottom: 8px;
+}
+.analysis__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.analysis__stats span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.analysis__warn {
+  color: #fbbf24 !important;
+  background: rgba(251, 191, 36, 0.10) !important;
+  border-color: rgba(251, 191, 36, 0.22) !important;
+}
+.analysis__cycles {
+  margin-top: 8px;
+}
+.analysis__cycle {
+  margin: 2px 0;
+}
+.analysis__cycle-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #fca5a5;
+}
+.analysis__cycle-note {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.analysis__tabs {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 6px;
+}
+.analysis__tab {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.analysis__tab--active {
+  background: rgba(143, 167, 255, 0.12);
+  border-color: rgba(143, 167, 255, 0.18);
+  color: var(--text-primary);
+}
+.analysis__tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.analysis__section {
+  padding: 6px 0;
+}
+.analysis__nodelist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.analysis__node {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.analysis__node:last-child {
+  border-bottom: none;
+}
+.analysis__node-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  text-align: left;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.analysis__node-button:hover {
+  background: rgba(143, 167, 255, 0.06);
+  border-color: rgba(143, 167, 255, 0.12);
+}
+.analysis__node-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-primary);
+}
+.analysis__node-meta {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.analysis__edgelist {
+  list-style: none;
+  padding: 2px 0 2px 12px;
+  margin: 0;
+}
+.analysis__edge {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin: 1px 0;
+}
+.analysis__edge--verified {
+  color: var(--text-secondary);
+}
+.analysis__edge--unresolved {
+  color: #fbbf24;
+}
+.analysis__edge-raw {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.analysis__edge-to {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.analysis__confidence {
+  padding: 1px 4px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+}
+.analysis__confidence--verified {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  color: #86efac;
+}
+.analysis__confidence--inferred {
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  color: #fde68a;
+}
+.analysis__edge-line {
+  color: var(--text-tertiary);
+}
+.analysis__edge-note {
+  color: var(--text-tertiary);
+}
+.analysis__subtitle {
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 4px 0;
+}
+.analysis__list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0;
+}
+.analysis__item {
+  padding: 3px 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.analysis__item--warn {
+  color: #fbbf24;
+}
+.analysis__item--risk {
+  color: #fca5a5;
+}
+.analysis__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(255,255,255,0.04);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+.analysis__link {
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.analysis__link:hover {
+  color: #bfdbfe;
+}
+.analysis__line {
+  color: var(--text-tertiary);
+}
+.analysis__note {
+  color: var(--text-tertiary);
+}
+.analysis__detail {
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.analysis__snippet {
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.analysis__notes {
+  margin: 6px 0 0;
+  padding-left: 14px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.analysis__risk {
+  color: #fca5a5;
+  font-style: italic;
+}

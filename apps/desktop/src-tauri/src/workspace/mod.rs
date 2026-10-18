@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod commands;
 pub mod patch;
 pub mod patch_contract;

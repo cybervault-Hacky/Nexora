@@ -181,6 +181,121 @@ export function retrieveRelevantFiles(args: RetrieveArgs): RetrievalResult {
   };
 }
 
+export interface SmartRetrieveArgs extends RetrieveArgs {
+  graph?: { nodes: Array<{ path: string; imports: Array<{ to: string; verified: boolean }>; importedBy: string[] }>; edges: Array<{ from: string; to: string; verified: boolean }> } | null;
+}
+
+/**
+ * Phase 16: dependency-aware retrieval.
+ * Extends retrieveRelevantFiles by prioritizing files related via the dependency graph:
+ * - files imported by selected files (dependencies) — verified edges first
+ * - files that import selected files (dependents)
+ * - for symbol queries, files that import the defining file of the top-ranked symbol
+ * All are bounded by maxFiles/maxBytes, sensitive excluded, never duplicate, never whole-repo.
+ */
+export function retrieveRelevantFilesSmart(args: SmartRetrieveArgs): RetrievalResult {
+  // Start with baseline
+  const base = retrieveRelevantFiles(args);
+  if (!args.graph || !args.graph.nodes.length) return base;
+
+  const graph = args.graph;
+  const seen = new Set<string>(base.included.map((r) => r.path));
+  const selectedPaths = args.selectedFiles.map((f) => f.path);
+  // Build quick lookup: path -> node
+  const nodeMap = new Map<string, { imports: Array<{ to: string; verified: boolean }>; importedBy: string[] }>();
+  for (const n of graph.nodes) {
+    nodeMap.set(n.path, n);
+  }
+
+  // Collect candidate related paths with reason
+  const candidates: Array<{ path: string; reason: string; priority: number }> = [];
+
+  // 1) For each selected file, add its verified dependencies and its dependents
+  for (const sel of selectedPaths) {
+    const node = nodeMap.get(sel);
+    if (!node) continue;
+    for (const imp of node.imports) {
+      if (!imp.verified) continue;
+      if (seen.has(imp.to)) continue;
+      if (isSensitivePath(imp.to)) continue;
+      candidates.push({ path: imp.to, reason: `dependency of ${sel} (verified import)`, priority: 1 });
+    }
+    for (const depBy of node.importedBy) {
+      if (seen.has(depBy)) continue;
+      if (isSensitivePath(depBy)) continue;
+      candidates.push({ path: depBy, reason: `dependent of ${sel} (imports it)`, priority: 1 });
+    }
+  }
+
+  // 2) For symbol-based inclusions already in base, also pull their dependents (impact)
+  // Find top symbol defining file(s) and add files that import them
+  const symbolDefPaths = new Set<string>();
+  for (const inc of base.included) {
+    if (inc.symbol) symbolDefPaths.add(inc.symbol.path);
+  }
+  for (const defPath of symbolDefPaths) {
+    const node = nodeMap.get(defPath);
+    if (!node) continue;
+    for (const depBy of node.importedBy) {
+      if (seen.has(depBy)) continue;
+      if (isSensitivePath(depBy)) continue;
+      // Already in candidates? dedup later
+      candidates.push({ path: depBy, reason: `imports ${defPath} which defines queried symbol`, priority: 2 });
+    }
+  }
+
+  // Deduplicate candidates preserving priority order (verified first)
+  candidates.sort((a, b) => a.priority - b.priority || a.path.localeCompare(b.path));
+  const unique = new Map<string, { path: string; reason: string }>();
+  for (const c of candidates) {
+    if (!unique.has(c.path) && !seen.has(c.path)) {
+      unique.set(c.path, { path: c.path, reason: c.reason });
+    }
+  }
+
+  // Merge into base respecting budget (use same maxFiles/maxBytes logic as base)
+  const maxFiles = args.maxFiles ?? MAX_RETRIEVED_FILES;
+  const maxBytes = args.maxBytes ?? MAX_RETRIEVED_BYTES;
+  let totalBytes = base.included.reduce((sum, r) => {
+    const sel = args.selectedFiles.find((f) => f.path === r.path);
+    return sum + (sel ? sel.size : 4000);
+  }, 0);
+
+  const mergedIncluded = [...base.included];
+  const mergedOmitted = [...base.omitted];
+  const mergedWarnings = [...base.warnings];
+
+  for (const [path, info] of unique) {
+    if (mergedIncluded.length >= maxFiles) {
+      mergedOmitted.push({ path, reason: `${info.reason} — omitted (budget)` });
+      continue;
+    }
+    const estimatedSize = 4000;
+    if (totalBytes + estimatedSize > maxBytes) {
+      mergedOmitted.push({ path, reason: `${info.reason} — omitted (budget)` });
+      continue;
+    }
+    mergedIncluded.push({ path, reason: info.reason });
+    totalBytes += estimatedSize;
+    seen.add(path);
+  }
+
+  // If we added graph-informed files, add a note about verified vs inferred
+  if (mergedIncluded.length > base.included.length) {
+    mergedWarnings.push(
+      `Graph-aware: added ${mergedIncluded.length - base.included.length} related file(s) via verified imports`,
+    );
+  }
+
+  return {
+    included: mergedIncluded,
+    omitted: mergedOmitted,
+    warnings: mergedWarnings,
+    includedPaths: mergedIncluded.map((r) => r.path),
+    omittedPaths: mergedOmitted.map((r) => r.path),
+  };
+}
+
 export function buildGroundedContext(
   retrieved: RetrievalResult,
   fileContents: Map<string, string>,
