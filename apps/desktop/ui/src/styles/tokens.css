@@ -54,4 +54,8 @@
   --glass-raised: rgba(24, 28, 35, 0.84);
 
   color-scheme: dark;
+
+  /* Monospace stack for code. System faces only, so nothing is downloaded. */
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 }

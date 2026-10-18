@@ -1,6 +1,7 @@
 import { memo } from "react";
 import type { ChatMessage } from "../features/chat/chat";
 import { ApertureMark } from "./ApertureMark";
+import { AssistantContent, UserContent } from "./MessageContent";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -15,7 +16,7 @@ const UserMessage = memo(function UserMessage({ message }: { message: ChatMessag
   return (
     <article className="message message--user">
       <div className="message__bubble">
-        <p>{message.content}</p>
+        <UserContent content={message.content} />
       </div>
       <span className="message__meta">
         You · {formatTime(message.createdAt)}
@@ -29,7 +30,8 @@ const AssistantMessage = memo(function AssistantMessage({
 }: {
   message: ChatMessage;
 }) {
-  const paragraphs = message.content.split("\n\n").filter(Boolean);
+  const hasContent = message.content.trim().length > 0;
+  const streaming = message.state === "streaming";
 
   return (
     <article className="message message--assistant">
@@ -41,7 +43,7 @@ const AssistantMessage = memo(function AssistantMessage({
         <div className="message__head">
           <span className="message__author">Nexora</span>
 
-          {message.state === "streaming" ? (
+          {streaming ? (
             <span className="chip chip--live">
               <span className="pulse" aria-hidden="true" />
               Generating
@@ -59,15 +61,8 @@ const AssistantMessage = memo(function AssistantMessage({
           <span className="message__meta">{formatTime(message.createdAt)}</span>
         </div>
 
-        {paragraphs.length > 0 ? (
-          paragraphs.map((paragraph, index) => (
-            <p key={`${message.id}-p${index}`}>
-              {paragraph}
-              {message.state === "streaming" && index === paragraphs.length - 1 ? (
-                <span className="caret" aria-hidden="true" />
-              ) : null}
-            </p>
-          ))
+        {hasContent ? (
+          <AssistantContent content={message.content} streaming={streaming} />
         ) : message.state === "stopped" ? (
           <p className="message__pending">Stopped before any text arrived.</p>
         ) : (

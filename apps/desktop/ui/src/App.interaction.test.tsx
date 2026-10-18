@@ -290,6 +290,108 @@ describe("conversation surface", () => {
     ).toBeTruthy();
   });
 
+  it("renders a streamed code block with its language", async () => {
+    const run = streamHarness();
+
+    render(<App />);
+
+    await userEvent.type(compose(), "write a function{Enter}");
+
+    act(() => run.push("Here is one:\n\n```ts\nconst add = (a: number) => a;\n```\n"));
+
+    // The fence closes as the final chunk arrives, so the block is complete.
+    expect(await screen.findByText("ts")).toBeDefined();
+    expect(screen.getByRole("code").textContent).toBe("const add = (a: number) => a;");
+    expect(screen.getByRole("button", { name: "Copy ts code" })).toBeDefined();
+
+    await act(async () => {
+      run.settle();
+      await Promise.resolve();
+    });
+
+    // Completion must not discard the code that already arrived.
+    expect(screen.getByRole("code").textContent).toBe("const add = (a: number) => a;");
+    expect(screen.queryByText(/streaming/)).toBeNull();
+  });
+
+  it("shows a half-streamed fence as code while tokens are still arriving", async () => {
+    const run = streamHarness();
+
+    render(<App />);
+
+    await userEvent.type(compose(), "show me{Enter}");
+    act(() => run.push("```py\nprint("));
+
+    const code = await screen.findByRole("code");
+
+    expect(code.textContent).toBe("print(");
+    expect(screen.getByText(/streaming/)).toBeDefined();
+    // Both the message chip and the engine strip report the busy state.
+    expect(screen.getAllByText(/Generating/).length).toBeGreaterThan(0);
+  });
+
+  it("renders inline code without turning the rest into code", async () => {
+    const run = streamHarness();
+
+    render(<App />);
+
+    await userEvent.type(compose(), "how do I test{Enter}");
+    act(() => run.push("Run `pnpm test` to see results."));
+
+    const inline = screen.getByText("pnpm test");
+
+    expect(inline.tagName).toBe("CODE");
+    expect(screen.getByText(/to see results/)).toBeDefined();
+  });
+
+  it("displays model markup literally instead of executing it", async () => {
+    const run = streamHarness();
+    const payload = '<img src=x onerror="window.__pwned=1">';
+
+    render(<App />);
+
+    await userEvent.type(compose(), "html please{Enter}");
+    act(() => run.push(payload));
+
+    const { container } = render(<div />);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText(payload)).toBeDefined();
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+
+    await act(async () => {
+      run.settle();
+      await Promise.resolve();
+    });
+  });
+
+  it("copies fenced code straight from the transcript", async () => {
+    const run = streamHarness();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(<App />);
+
+    await userEvent.type(compose(), "give me json{Enter}");
+    act(() => run.push('```json\n{"ok":true}\n```'));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy json code" }));
+
+    expect(writeText).toHaveBeenCalledWith('{"ok":true}');
+    expect(await screen.findByText("Copied")).toBeDefined();
+
+    Reflect.deleteProperty(navigator, "clipboard");
+
+    await act(async () => {
+      run.settle();
+      await Promise.resolve();
+    });
+  });
+
   it("collapses and expands the sidebar from the title bar", async () => {
     const user = userEvent.setup();
 
