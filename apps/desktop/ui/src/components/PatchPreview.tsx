@@ -7,6 +7,8 @@ import type { PatchProposal, PatchValidation } from "../lib/patch";
 interface Props {
   proposal: PatchProposal | null;
   validation: PatchValidation | null;
+  /** Multi-file batch: renders one diff section per file (atomic apply-all). */
+  files?: PatchProposal[] | null;
   loading?: boolean;
   error?: string | null;
   onCancel: () => void;
@@ -15,23 +17,45 @@ interface Props {
   applied?: boolean;
 }
 
-export function PatchPreview({ proposal, validation, loading, error, onCancel, onApply, applying, applied }: Props) {
+function computeHunks(proposal: PatchProposal): Array<{ type: "added" | "removed" | "unchanged"; text: string }> {
+  const changes = diffLines(proposal.originalContent, proposal.proposedContent);
+  const result: Array<{ type: "added" | "removed" | "unchanged"; text: string }> = [];
+  for (const part of changes) {
+    const lines = part.value.split("\n");
+    // diffLines includes trailing newline as empty last line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (i === lines.length - 1 && line === "") continue;
+      if (part.added) result.push({ type: "added", text: line });
+      else if (part.removed) result.push({ type: "removed", text: line });
+      else result.push({ type: "unchanged", text: line });
+    }
+  }
+  return result;
+}
+
+function DiffBody({ hunks }: { hunks: Array<{ type: "added" | "removed" | "unchanged"; text: string }> }) {
+  return (
+    <div className="patch-preview__diff" role="region" aria-label="Diff">
+      <pre className="patch-preview__code" tabIndex={0}>
+        {hunks.map((h, idx) => (
+          <span key={idx} className={`patch-line patch-line--${h.type}`}>
+            <span className="patch-line__gutter" aria-hidden="true">
+              {h.type === "added" ? "+" : h.type === "removed" ? "-" : " "}
+            </span>
+            <code>{h.text || " "}</code>
+          </span>
+        ))}
+        {hunks.length === 0 ? <span className="patch-line patch-line--unchanged"><code>(no changes)</code></span> : null}
+      </pre>
+    </div>
+  );
+}
+
+export function PatchPreview({ proposal, validation, files, loading, error, onCancel, onApply, applying, applied }: Props) {
   const hunks = useMemo(() => {
     if (!proposal) return [];
-    const changes = diffLines(proposal.originalContent, proposal.proposedContent);
-    const result: Array<{ type: "added" | "removed" | "unchanged"; text: string }> = [];
-    for (const part of changes) {
-      const lines = part.value.split("\n");
-      // diffLines includes trailing newline as empty last line
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]!;
-        if (i === lines.length - 1 && line === "") continue;
-        if (part.added) result.push({ type: "added", text: line });
-        else if (part.removed) result.push({ type: "removed", text: line });
-        else result.push({ type: "unchanged", text: line });
-      }
-    }
-    return result;
+    return computeHunks(proposal);
   }, [proposal]);
 
   if (loading) {
@@ -74,7 +98,58 @@ export function PatchPreview({ proposal, validation, loading, error, onCancel, o
             <Icon name="x" size={12} />
           </button>
         </header>
-        <p className="patch-preview__message">File {proposal?.path} was updated. Only the intended file was changed.</p>
+        <p className="patch-preview__message">
+          {files && files.length > 0
+            ? `All ${files.length} files were updated together — the batch applied atomically.`
+            : `File ${proposal?.path} was updated. Only the intended file was changed.`}
+        </p>
+      </div>
+    );
+  }
+
+  if (files && files.length > 0) {
+    return (
+      <div className="patch-preview" aria-label="Patch batch preview">
+        <header className="patch-preview__header">
+          <div className="patch-preview__title">
+            <Icon name="file" size={13} />
+            <span>
+              {files.length} {files.length === 1 ? "file" : "files"} in this batch
+            </span>
+          </div>
+          <button type="button" className="patch-preview__close" onClick={onCancel} aria-label="Cancel">
+            <Icon name="x" size={13} />
+          </button>
+        </header>
+        <p className="patch-preview__note">
+          All files apply together or not at all. Reviewing diffs does not modify any file.
+        </p>
+        {files.map((file) => (
+          <section key={file.id} className="patch-preview__file">
+            <header className="patch-preview__header">
+              <div className="patch-preview__title">
+                <Icon name="file" size={13} />
+                <span title={file.path}>{file.path}</span>
+              </div>
+            </header>
+            <DiffBody hunks={computeHunks(file)} />
+          </section>
+        ))}
+        <div className="patch-preview__actions">
+          <button type="button" className="button button--ghost" onClick={onCancel} disabled={!!applying}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={onApply}
+            disabled={!!applying}
+            aria-label="Apply all files in batch"
+            title="Apply every file in this batch atomically"
+          >
+            {applying ? "Applying…" : `Apply ${files.length} ${files.length === 1 ? "file" : "files"}`}
+          </button>
+        </div>
       </div>
     );
   }

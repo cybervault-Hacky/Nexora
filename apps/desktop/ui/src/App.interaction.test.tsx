@@ -100,6 +100,8 @@ beforeEach(() => {
   cancelMock.mockResolvedValue(true);
   unloadMock.mockReset();
   unloadMock.mockResolvedValue(makeStatus({ state: "stopped" }));
+  // Phase 19: the app opens on Home; these suites cover the AI Chat page.
+  window.location.hash = "#/chat";
 });
 
 afterEach(() => {

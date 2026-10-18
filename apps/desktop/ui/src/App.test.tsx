@@ -55,6 +55,8 @@ beforeEach(() => {
     platform: "windows",
   });
   markDesktop(false);
+  // Phase 19: the app opens on Home; these suites cover the AI Chat page.
+  window.location.hash = "#/chat";
 });
 
 afterEach(() => {
@@ -124,8 +126,13 @@ describe("desktop status routing", () => {
     render(<App />);
 
     expect(await screen.findByText("Bring your own model.")).toBeTruthy();
+    // Model setup moved to the Local Models page in Phase 19; the chat empty
+    // state links there with a real navigation target.
+    await userEvent.setup().click(
+      screen.getByRole("link", { name: /Open local model manager/i }),
+    );
     expect(
-      screen.getByRole("textbox", { name: "Runtime executable" }),
+      await screen.findByRole("textbox", { name: "Runtime executable" }),
     ).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Model file (.gguf)" }),

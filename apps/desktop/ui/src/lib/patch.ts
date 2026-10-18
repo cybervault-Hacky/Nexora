@@ -87,3 +87,50 @@ export async function getPatchDiff(original: string, proposed: string): Promise<
     return { added: Math.max(0, p - o), removed: Math.max(0, o - p), unchanged: Math.min(o, p), originalLines: o, proposedLines: p, truncated: false };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file patch batches — atomic all-or-nothing (mirrors workspace/patch.rs)
+// ---------------------------------------------------------------------------
+
+export interface BatchEdit {
+  relativePath: string;
+  proposedContent: string;
+}
+
+export interface PatchBatch {
+  id: string;
+  files: PatchProposal[];
+  createdAt: number;
+}
+
+export interface BatchFileValidation {
+  path: string;
+  validation: PatchValidation;
+}
+
+export interface BatchValidation {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  files: BatchFileValidation[];
+}
+
+export interface BatchApplyResult {
+  applied: boolean;
+  results: ApplyResult[];
+}
+
+export async function createPatchBatch(root: string, edits: BatchEdit[]): Promise<PatchBatch> {
+  if (!isDesktopShell()) throw toPatchError({ code: "desktop_only", message: "Patch batches are only available in the desktop app." });
+  return call<PatchBatch>("create_patch_batch", { root, edits });
+}
+
+export async function validatePatchBatch(root: string, batch: PatchBatch): Promise<BatchValidation> {
+  if (!isDesktopShell()) throw toPatchError({ code: "desktop_only", message: "Patch batch validation is only available in the desktop app." });
+  return call<BatchValidation>("validate_patch_batch", { root, batch });
+}
+
+export async function applyPatchBatch(root: string, batch: PatchBatch): Promise<BatchApplyResult> {
+  if (!isDesktopShell()) throw toPatchError({ code: "desktop_only", message: "Patch batch apply is only available in the desktop app." });
+  return call<BatchApplyResult>("apply_patch_batch", { root, batch });
+}

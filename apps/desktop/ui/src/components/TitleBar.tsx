@@ -8,9 +8,12 @@ import {
 } from "../lib/window";
 
 interface TitleBarProps {
-  conversationTitle: string;
+  /** Name of the active page — shown as the window's context, not the conversation title. */
+  pageLabel: string;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  /** Hidden on the welcome flow, which renders without the workspace sidebar. */
+  showSidebarToggle?: boolean;
 }
 
 /**
@@ -22,32 +25,37 @@ interface TitleBarProps {
  * manual handler is attached (doing both toggled the window twice).
  */
 export function TitleBar({
-  conversationTitle,
+  pageLabel,
   sidebarCollapsed,
   onToggleSidebar,
+  showSidebarToggle = true,
 }: TitleBarProps) {
   const desktop = isDesktopShell();
 
   return (
     <header className="titlebar">
-      <button
-        type="button"
-        className="titlebar__toggle"
-        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        aria-expanded={!sidebarCollapsed}
-        aria-controls="sidebar"
-        aria-keyshortcuts="Control+B"
-        title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (Ctrl+B)`}
-        onClick={onToggleSidebar}
-      >
-        <Icon name="panel-left" size={15} />
-      </button>
+      {showSidebarToggle ? (
+        <button
+          type="button"
+          className="titlebar__toggle"
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!sidebarCollapsed}
+          aria-controls="sidebar"
+          aria-keyshortcuts="Control+B"
+          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (Ctrl+B)`}
+          onClick={onToggleSidebar}
+        >
+          <Icon name="panel-left" size={15} />
+        </button>
+      ) : (
+        <span className="titlebar__toggle titlebar__toggle--hidden" aria-hidden="true" />
+      )}
 
       <div className="titlebar__drag" data-tauri-drag-region>
         <ApertureMark size={16} className="titlebar__mark" />
         <span className="titlebar__wordmark">nexora</span>
         <span className="titlebar__rule" aria-hidden="true" />
-        <span className="titlebar__context">{conversationTitle}</span>
+        <span className="titlebar__context">{pageLabel}</span>
       </div>
 
       <div className="titlebar__spacer" data-tauri-drag-region />

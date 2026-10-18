@@ -320,3 +320,216 @@ export function parseAndValidatePatchResponse(
 
   return { ok: false, error: "Model did not return valid JSON. Try a more specific instruction." };
 }
+
+// ---------------------------------------------------------------------------
+// Contract v2 — multi-file batches (additive; v1 single-file stays unchanged)
+// ---------------------------------------------------------------------------
+//
+// v2 response shape (strict):
+//   { "version": 2, "explanation"?: "...",
+//     "files": [ { "targetPath": "...", "proposedContent": "...",
+//                  "explanation"?: "..." }, ... ] }
+// A v1 single-file object is accepted too and becomes a 1-file batch.
+// Batches hold 1..=MAX_BATCH_FILES entries with unique target paths. Per-file
+// rules are exactly the v1 rules (traversal, sensitive, size, NUL, no-change).
+
+export const PATCH_CONTRACT_VERSION_V2 = 2 as const;
+export const MAX_BATCH_FILES = 20;
+
+export interface ValidatedFileContract {
+  targetPath: string;
+  proposedContent: string;
+  explanation?: string;
+}
+
+export interface ValidatedPatchBatch {
+  version: number;
+  files: ValidatedFileContract[];
+  explanation?: string;
+}
+
+const BATCH_ALLOWED_KEYS = new Set(["version", "files", "explanation"]);
+const FILE_ALLOWED_KEYS = new Set([
+  "targetPath",
+  "target_path",
+  "proposedContent",
+  "proposed_content",
+  "explanation",
+]);
+
+function validateFileFields(
+  entry: Record<string, unknown>,
+  originals: Record<string, string> | undefined,
+): { ok: true; file: ValidatedFileContract } | { ok: false; error: string } {
+  const targetPath = (entry["targetPath"] as string) ?? (entry["target_path"] as string);
+  const proposedContent =
+    (entry["proposedContent"] as string) ?? (entry["proposed_content"] as string);
+  const explanation = entry["explanation"] as string | undefined;
+
+  if (typeof targetPath !== "string" || !targetPath.trim()) {
+    return { ok: false, error: "Missing 'targetPath'." };
+  }
+  const target = targetPath.trim();
+  const pathError = validateRelativePath(target);
+  if (pathError) return { ok: false, error: `Invalid target path '${target}': ${pathError}` };
+  if (target.length > MAX_PATH_CHARS) return { ok: false, error: "Target path too long." };
+
+  if (typeof proposedContent !== "string" || !proposedContent.trim()) {
+    return { ok: false, error: "Missing 'proposedContent' — patch must contain replacement content." };
+  }
+  if (BufferlessByteLength(proposedContent) > MAX_PREVIEW_BYTES) {
+    return { ok: false, error: "Proposed content too large." };
+  }
+  if (proposedContent.length > MAX_PROPOSED_CHARS) {
+    return { ok: false, error: "Proposed content exceeds character limit." };
+  }
+  if (proposedContent.includes("\u0000")) {
+    return { ok: false, error: "Proposed content is binary (contains NUL)." };
+  }
+  const original = originals?.[target];
+  if (typeof original === "string" && proposedContent === original) {
+    return { ok: false, error: `No changes detected in '${target}' — proposed content equals original.` };
+  }
+
+  if (explanation !== undefined) {
+    if (typeof explanation !== "string") return { ok: false, error: "Explanation must be a string." };
+    if (explanation.trim().length > MAX_EXPLANATION_CHARS) {
+      return { ok: false, error: "Explanation too long (max 1000 chars)." };
+    }
+  }
+
+  return {
+    ok: true,
+    file: {
+      targetPath: target,
+      proposedContent,
+      explanation: typeof explanation === "string" && explanation.trim() ? explanation.trim() : undefined,
+    },
+  };
+}
+
+/** UTF-8 byte length without depending on Node Buffer in the WebView. */
+function BufferlessByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.codePointAt(i)!;
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else {
+      bytes += 4;
+      i++;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * Strict parser for v2 batches (and v1 single-file objects as 1-file batches).
+ * `originals` (optional) enables the no-change check for known files; files the
+ * caller has not seen are checked against disk at batch creation instead.
+ */
+export function parseAndValidatePatchBatch(
+  raw: string,
+  originals?: Record<string, string>,
+): { ok: true; batch: ValidatedPatchBatch } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: false, error: "Model returned empty response." };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Malformed patch JSON: ${msg}` };
+  }
+
+  if (Array.isArray(parsed)) {
+    return { ok: false, error: "Patch response must be a JSON object with a 'files' array." };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return { ok: false, error: "Patch response must be a JSON object." };
+  }
+  const obj = parsed as Record<string, unknown>;
+
+  // v1 single-file object → 1-file batch (same field rules as v1).
+  if (!("files" in obj)) {
+    const version = obj["version"];
+    if (version !== PATCH_CONTRACT_VERSION && version !== PATCH_CONTRACT_VERSION_V2) {
+      return { ok: false, error: `Unsupported contract version ${String(version)} (expected 1 or 2).` };
+    }
+    const v1Allowed = new Set([...FILE_ALLOWED_KEYS, "version"]);
+    for (const key of Object.keys(obj)) {
+      if (!v1Allowed.has(key)) {
+        return { ok: false, error: `Unexpected field in patch response: '${key}'` };
+      }
+    }
+    const single = validateFileFields(obj, originals);
+    if (!single.ok) return single;
+    const explanation = obj["explanation"] as string | undefined;
+    return {
+      ok: true,
+      batch: {
+        version: PATCH_CONTRACT_VERSION,
+        files: [single.file],
+        explanation: typeof explanation === "string" && explanation.trim() ? explanation.trim() : undefined,
+      },
+    };
+  }
+
+  // v2 batch object.
+  if (obj["version"] !== PATCH_CONTRACT_VERSION_V2) {
+    return { ok: false, error: `Unsupported contract version ${String(obj["version"])} (expected 2 for 'files').` };
+  }
+  for (const key of Object.keys(obj)) {
+    if (!BATCH_ALLOWED_KEYS.has(key)) {
+      return { ok: false, error: `Unexpected field in patch response: '${key}'` };
+    }
+  }
+  const files = obj["files"];
+  if (!Array.isArray(files) || files.length === 0) {
+    return { ok: false, error: "Patch response 'files' must be a non-empty array." };
+  }
+  if (files.length > MAX_BATCH_FILES) {
+    return { ok: false, error: `Too many files in patch response (max ${MAX_BATCH_FILES}).` };
+  }
+
+  const seen = new Set<string>();
+  const validated: ValidatedFileContract[] = [];
+  for (const entry of files) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, error: "Each entry in 'files' must be a JSON object." };
+    }
+    const record = entry as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!FILE_ALLOWED_KEYS.has(key)) {
+        return { ok: false, error: `Unexpected field in file entry: '${key}'` };
+      }
+    }
+    const one = validateFileFields(record, originals);
+    if (!one.ok) return one;
+    const folded = one.file.targetPath.toLowerCase();
+    if (seen.has(folded)) {
+      return { ok: false, error: `Duplicate target path in patch response: '${one.file.targetPath}'` };
+    }
+    seen.add(folded);
+    validated.push(one.file);
+  }
+
+  const explanation = obj["explanation"] as string | undefined;
+  if (explanation !== undefined) {
+    if (typeof explanation !== "string") return { ok: false, error: "Explanation must be a string." };
+    if (explanation.trim().length > MAX_EXPLANATION_CHARS) {
+      return { ok: false, error: "Explanation too long (max 1000 chars)." };
+    }
+  }
+
+  return {
+    ok: true,
+    batch: {
+      version: PATCH_CONTRACT_VERSION_V2,
+      files: validated,
+      explanation: typeof explanation === "string" && explanation.trim() ? explanation.trim() : undefined,
+    },
+  };
+}
