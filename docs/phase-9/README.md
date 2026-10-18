@@ -120,6 +120,7 @@ Executed locally:
 | `pnpm test` | **PASS** — 187 tests in 13 files (was 152 in 11) |
 | `pnpm build` | **PASS** — 271.60 kB JS (83.70 gzip), 22.04 kB CSS (5.02 gzip) |
 | `cargo fmt/check/clippy/test` | **PASS** in CI (no toolchain locally) |
+| CI workflow | **PASS** — run `39104963810`: frontend, Linux Rust, and Windows compile+link+test all green |
 | Native window / installer | **NOT RUN** |
 | Genuine inference with a real model | **NOT RUN** |
 
