@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { PatchPreview } from "./PatchPreview";
+import { ValidationPanel } from "./ValidationPanel";
 import { usePatchGeneration } from "../features/workspace/usePatchGeneration";
+import { useValidation } from "../features/workspace/useValidation";
+import { usePatchRepair } from "../features/workspace/usePatchRepair";
 import type { AppStatus } from "../lib/ipc";
+import type { SymbolIndex } from "../lib/symbolIndex";
 
 interface Props {
   workspacePath: string | null;
@@ -10,6 +14,8 @@ interface Props {
   originalContent: string | null;
   filteredContextBlock: string | null;
   engineStatus: AppStatus | null;
+  symbolIndex?: SymbolIndex | null;
+  contextFiles?: Array<{ path: string; content: string; size: number }>;
   onApplied?: () => void;
   onInvalidate?: () => void;
 }
@@ -20,11 +26,21 @@ export function PatchGenerateBar({
   originalContent,
   filteredContextBlock,
   engineStatus,
+  symbolIndex,
+  contextFiles,
   onApplied,
   onInvalidate,
 }: Props) {
   const [instruction, setInstruction] = useState("");
   const generation = usePatchGeneration({ workspacePath, engineStatus });
+  const validation = useValidation(workspacePath);
+  const repair = usePatchRepair({
+    workspacePath,
+    engineStatus,
+    symbolIndex: symbolIndex ?? null,
+    contextFiles: contextFiles ?? [],
+    originalInstruction: instruction,
+  });
 
   // Invalidate when target changes
   useEffect(() => {
@@ -40,6 +56,17 @@ export function PatchGenerateBar({
       onApplied?.();
     }
   }, [generation.generationState.status, onApplied]);
+
+  // Phase 15: detailed validation for generated proposal (bounded, non-mutating)
+  useEffect(() => {
+    const s = generation.generationState;
+    if (s.status === "preview" && s.proposal) {
+      void validation.validate(s.proposal);
+    } else if (s.status === "idle" || s.status === "error" || s.status === "cancelled") {
+      validation.reset();
+      if (s.status === "idle") repair.reset();
+    }
+  }, [generation.generationState]);
 
   const engineState = engineStatus?.engine.state ?? "not_configured";
   const isGenerating = generation.generationState.status === "generating" || generation.generationState.status === "parsing";
@@ -96,8 +123,11 @@ export function PatchGenerateBar({
   // Render generation UI + preview when needed
   const state = generation.generationState;
 
-  // If preview or applied, show explanation + PatchPreview
+  // If preview or applied, show explanation + PatchPreview + detailed validation
   if (state.status === "preview") {
+    const isRevised = repair.repairState.status === "revised";
+    const revised = isRevised ? (repair.repairState as any).proposal : null;
+    const revisedValidation = isRevised ? (repair.repairState as any).validation : null;
     return (
       <div className="patch-generate" aria-label="Patch generation">
         {state.explanation ? (
@@ -112,6 +142,51 @@ export function PatchGenerateBar({
           onCancel={handleDismiss}
           onApply={handleApply}
         />
+        <ValidationPanel
+          proposal={state.proposal}
+          report={validation.validationState.status === "validated" ? validation.validationState.report : null}
+          validating={validation.validationState.status === "validating"}
+          error={validation.validationState.status === "error" ? validation.validationState.message : null}
+          onValidate={() => void validation.validate(state.proposal)}
+          onCancelValidate={validation.cancel}
+          repairState={repair.repairState as any}
+          onExplain={() => {
+            const rep = validation.validationState.status === "validated" ? validation.validationState.report : null;
+            if (rep) void repair.explain(state.proposal, rep);
+          }}
+          onRepair={() => {
+            const rep = validation.validationState.status === "validated" ? validation.validationState.report : null;
+            if (rep) void repair.repair(state.proposal, rep);
+          }}
+          onCancelRepair={repair.cancel}
+          maxAttempts={repair.maxAttempts}
+          revisedProposal={revised}
+        />
+        {isRevised && revised ? (
+          <div className="patch-generate__revised" aria-label="Revised patch">
+            <h4 className="validation__revised-header">Revised proposal (not yet applied)</h4>
+            <PatchPreview
+              proposal={revised}
+              validation={revisedValidation}
+              onCancel={repair.reset}
+              onApply={async () => {
+                // Apply revised explicitly — reuse generated apply path with new proposal
+                // We create a temporary generation state for revised and call apply via direct patch apply
+                const { applyPatchProposal } = await import("../lib/patch");
+                if (!workspacePath) return;
+                try {
+                  await applyPatchProposal(workspacePath, revised);
+                  repair.reset();
+                  generation.dismiss();
+                  onApplied?.();
+                } catch {
+                  // keep revised preview
+                }
+              }}
+            />
+            <p className="patch-generate__note">Revised proposal — not auto-applied. Review diff and validation above, then Apply revised.</p>
+          </div>
+        ) : null}
         <p className="patch-generate__note">Generated via local model — untrusted until validated. Original file unchanged until you apply.</p>
       </div>
     );

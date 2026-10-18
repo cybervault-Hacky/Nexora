@@ -66,6 +66,7 @@ pub fn run() {
             workspace::commands::validate_patch_proposal,
             workspace::commands::apply_patch_proposal,
             workspace::commands::get_patch_diff,
+            workspace::commands::validate_patch_detailed,
             workspace::commands::get_symbol_index,
             workspace::commands::refresh_symbol_index,
             workspace::commands::search_symbols,

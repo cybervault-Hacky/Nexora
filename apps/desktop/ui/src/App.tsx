@@ -14,9 +14,12 @@ import { RetrievalBar } from "./components/RetrievalBar";
 import { PatchEditor } from "./components/PatchEditor";
 import { PatchGenerateBar } from "./components/PatchGenerateBar";
 import { PatchPreview } from "./components/PatchPreview";
+import { ValidationPanel } from "./components/ValidationPanel";
 import { usePersistentConversation } from "./features/chat/usePersistentConversation";
 import { useWorkspace } from "./features/workspace/useWorkspace";
 import { usePatch } from "./features/workspace/usePatch";
+import { useValidation } from "./features/workspace/useValidation";
+import { usePatchRepair } from "./features/workspace/usePatchRepair";
 import { planContextBudget } from "./features/workspace/contextBudget";
 import { retrieveRelevantFiles, type RetrievalResult } from "./features/workspace/retrieval";
 import { getSymbolIndex, clearSymbolIndex, type SymbolIndex } from "./lib/symbolIndex";
@@ -243,7 +246,26 @@ export default function App() {
     submit(hasContext ? { contextBlock: block } : undefined);
   }, [submit, groundedContextBlock, filteredContextBlock, workspace.contextBlock]);
 
+  const manualValidation = useValidation(workspace.workspacePath);
+  const manualRepair = usePatchRepair({
+    workspacePath: workspace.workspacePath,
+    engineStatus,
+    symbolIndex,
+    contextFiles: workspace.contextFiles,
+  });
 
+  // Phase 15: auto-validate manual patch proposals (non-mutating, bounded, cancellable)
+  useEffect(() => {
+    if (patch.patchState.status === "preview" && patch.patchState.proposal) {
+      void manualValidation.validate(patch.patchState.proposal);
+    } else if (patch.patchState.status === "idle" || patch.patchState.status === "editing" || patch.patchState.status === "error") {
+      // Reset validation when not in preview; keep repair state for error inspection unless explicitly reset
+      if (patch.patchState.status === "idle" || patch.patchState.status === "editing") {
+        manualValidation.reset();
+        manualRepair.reset();
+      }
+    }
+  }, [patch.patchState]);
 
   // Handle manual path entry from WorkspacePanel (custom event)
   useEffect(() => {
@@ -469,6 +491,8 @@ export default function App() {
               originalContent={generationOriginalContent}
               filteredContextBlock={groundedContextBlock ?? filteredContextBlock}
               engineStatus={engineStatus}
+              symbolIndex={symbolIndex}
+              contextFiles={workspace.contextFiles}
               onApplied={() => {
                 void workspace.refresh();
                 if (workspace.previewPath) void workspace.loadPreview(workspace.previewPath);
@@ -508,14 +532,66 @@ export default function App() {
                     <p className="patch-preview__status">Creating proposal… Validating single file, checking traversal, sensitive, binary, size…</p>
                   </div>
                 ) : patch.patchState.status === "preview" ? (
-                  <PatchPreview
-                    proposal={patch.patchState.proposal}
-                    validation={patch.patchState.validation}
-                    onCancel={patch.cancel}
-                    onApply={() => void patch.apply()}
-                    applying={false}
-                    applied={false}
-                  />
+                  <>
+                    <PatchPreview
+                      proposal={patch.patchState.proposal}
+                      validation={patch.patchState.validation}
+                      onCancel={patch.cancel}
+                      onApply={() => void patch.apply()}
+                      applying={false}
+                      applied={false}
+                    />
+                    <ValidationPanel
+                      proposal={patch.patchState.proposal}
+                      report={manualValidation.validationState.status === "validated" ? manualValidation.validationState.report : null}
+                      validating={manualValidation.validationState.status === "validating"}
+                      error={manualValidation.validationState.status === "error" ? manualValidation.validationState.message : null}
+                      onValidate={() => void manualValidation.validate((patch.patchState as any).proposal)}
+                      onCancelValidate={manualValidation.cancel}
+                      repairState={manualRepair.repairState as any}
+                      onExplain={() => {
+                        const rep = manualValidation.validationState.status === "validated" ? manualValidation.validationState.report : null;
+                        if (rep) void manualRepair.explain((patch.patchState as any).proposal, rep);
+                      }}
+                      onRepair={() => {
+                        const rep = manualValidation.validationState.status === "validated" ? manualValidation.validationState.report : null;
+                        if (rep) void manualRepair.repair((patch.patchState as any).proposal, rep);
+                      }}
+                      onCancelRepair={manualRepair.cancel}
+                      maxAttempts={manualRepair.maxAttempts}
+                      revisedProposal={manualRepair.repairState.status === "revised" ? manualRepair.repairState.proposal : null}
+                    />
+                    {manualRepair.repairState.status === "revised" ? (
+                      <div className="workspace__revised" aria-label="Revised patch preview">
+                        <h4 className="validation__revised-header" style={{ marginTop: 8 }}>Revised proposal (not yet applied)</h4>
+                        <PatchPreview
+                          proposal={manualRepair.repairState.proposal}
+                          validation={manualRepair.repairState.validation}
+                          onCancel={manualRepair.reset}
+                          onApply={async () => {
+                            // Apply revised via patch proposal apply (reuse manual patch apply path)
+                            // Create a new manual proposal from revised? Instead we can directly call applyPatchProposal via patch hook? For Phase 15 we require explicit Apply revised.
+                            // Use the existing patch proposal apply but need to switch patch state to revised proposal.
+                            // We'll create a temporary apply via direct invoke and then refresh.
+                            const { applyPatchProposal } = await import("./lib/patch");
+                            if (!workspace.workspacePath) return;
+                            try {
+                              await applyPatchProposal(workspace.workspacePath, (manualRepair.repairState as any).proposal);
+                              manualRepair.reset();
+                              patch.cancel();
+                              void workspace.refresh();
+                              if (workspace.previewPath) void workspace.loadPreview(workspace.previewPath);
+                            } catch (cause) {
+                              // stay on revised preview, show error via repairState error? For simplicity, set repair error
+                              // eslint-disable-next-line no-console
+                              console.error(cause);
+                            }
+                          }}
+                        />
+                        <p className="validation__hint">Apply revised explicitly — does not auto-apply. Original proposal remains unchanged above.</p>
+                      </div>
+                    ) : null}
+                  </>
                 ) : patch.patchState.status === "validating" ? (
                   <PatchPreview proposal={patch.patchState.proposal} validation={null} loading onCancel={patch.cancel} onApply={() => {}} />
                 ) : patch.patchState.status === "applying" ? (

@@ -298,6 +298,26 @@ pub fn get_patch_diff(
 }
 
 // ---------------------------------------------------------------------------
+// Validation — bounded, non-mutating, no exec
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn validate_patch_detailed(
+    _state: State<WorkspaceState>,
+    root: String,
+    proposal: super::patch::PatchProposal,
+) -> WorkspaceResult<super::validation::ValidationReport> {
+    if root.trim().is_empty() {
+        return Err(WorkspaceError::invalid_request("Project path is empty."));
+    }
+    let root_path = PathBuf::from(root.trim());
+    // Reuse patch validation's root canonicalization internally; here just delegate
+    // Do not write into root; validation.rs is in-memory only (plus reads for stale).
+    // Timeout guard: if validation takes >3000 ms, we still return but marks Inconclusive? For now we trust it is fast (<100 ms).
+    Ok(super::validation::validate_detailed(&root_path, &proposal))
+}
+
+// ---------------------------------------------------------------------------
 // Symbol index — bounded code intelligence
 // ---------------------------------------------------------------------------
 
