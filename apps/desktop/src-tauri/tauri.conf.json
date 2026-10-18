@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexora",
+  "version": "0.1.0",
+  "identifier": "com.nexora.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Nexora",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Nexora",
+    "copyright": "Copyright \u00a9 2026 Nexora",
+    "category": "DeveloperTool",
+    "shortDescription": "Local-first AI coding studio",
+    "longDescription": "Nexora is a Windows desktop studio for coding with a model that runs on your machine.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

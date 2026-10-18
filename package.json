@@ -1,0 +1,15 @@
+{
+  "name": "nexora",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nexora — local-first AI coding studio for Windows",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm --filter @nexora/desktop dev",
+    "build": "pnpm --filter @nexora/desktop build",
+    "typecheck": "pnpm --filter @nexora/desktop typecheck",
+    "test": "pnpm --filter @nexora/desktop test",
+    "tauri": "pnpm --filter @nexora/desktop tauri",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  }
+}

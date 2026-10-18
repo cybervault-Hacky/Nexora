@@ -1,0 +1,170 @@
+# Continuous integration for Nexora.
+#
+# Scope: verification only. Nothing here publishes, signs, packages, or uploads
+# an installer — the bundling step is deliberately absent.
+#
+# Every action is pinned to a commit SHA. Tags move; a private repository that
+# builds a desktop binary should not execute a mutable ref.
+#
+# NOTE: `tauri::generate_context!` embeds `frontendDist` at compile time, so the
+# UI must be built before any cargo command. That is why the Rust jobs run the
+# frontend build first instead of assuming `ui/dist` exists.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "arena/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Read-only by default; no job needs more.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — typecheck, tests, production build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The version comes from `packageManager` in package.json, which
+      # `ui/src/lib/buildConfig.test.ts` requires to be an exact pin.
+      - name: Install pnpm
+        uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies from the lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit and contract tests
+        run: pnpm test
+
+      - name: Production build
+        run: pnpm build
+
+  rust:
+    name: Rust — fmt, check, clippy, tests (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Required before cargo: the context macro embeds ui/dist.
+      - name: Build the frontend the crate embeds
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # Reads rust-toolchain.toml, so the pinned channel is the single source.
+      - name: Install the pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+
+      - name: Check formatting
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Type-check every target
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --all-targets
+
+      - name: Lint with warnings denied
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
+
+  windows:
+    name: Windows — compile and Rust tests
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build the frontend the crate embeds
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install the pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+
+      # This is the check that only a Windows runner can perform: `cfg(windows)`
+      # code (memory detection, CREATE_NO_WINDOW, executable sniffing) compiles.
+      - name: Type-check every target on Windows
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --all-targets
+
+      # `cargo check` type-checks but does not link. Building the binary on
+      # Windows compiles the linker step, the `windows_subsystem` attribute and
+      # the embedded icon, which is the part a check cannot reach. No bundling:
+      # `tauri build` is deliberately absent, so no installer is produced.
+      - name: Link the native executable
+        working-directory: apps/desktop/src-tauri
+        run: cargo build
+
+      - name: Run Rust tests on Windows
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
+
+      # Deliberately no `tauri build`: producing an installer is out of scope.
