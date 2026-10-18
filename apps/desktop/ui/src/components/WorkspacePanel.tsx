@@ -81,9 +81,8 @@ export function WorkspacePanel({
       {!hasWorkspace ? (
         <div className="workspace-panel__empty">
           <p className="workspace-panel__hint">
-            No project selected. Open a local folder to browse files, preview
-            code, and attach context to your questions. Nothing leaves this
-            machine.
+            Open a local folder to browse files, preview code, and add read-only
+            context. Nothing leaves this machine.
           </p>
           <button type="button" className="workspace-panel__open-btn" onClick={onOpen} disabled={loading}>
             <Icon name="folder" size={14} />
@@ -98,7 +97,7 @@ export function WorkspacePanel({
               <input
                 id="workspace-manual-path"
                 className="workspace-panel__manual-input"
-                placeholder="C:\Users\you\my-app or /home/you/my-app"
+                placeholder="C:\\path\\to\\project or /home/you/project"
                 value={manualPath}
                 onChange={(e) => setManualPath(e.target.value)}
                 onKeyDown={(e) => {
@@ -132,8 +131,7 @@ export function WorkspacePanel({
             </div>
           ) : null}
           <p className="workspace-panel__note">
-            In the desktop app, a native folder picker is used. In browser
-            preview, type a path to test validation.
+            The desktop app uses the native folder picker; browser preview cannot browse local paths.
           </p>
         </div>
       ) : (
@@ -176,23 +174,27 @@ export function WorkspacePanel({
             </div>
           ) : null}
 
-          <div className="workspace-panel__search">
-            <Icon name="search" size={13} />
+          <div className="search-field" role="search" aria-label="Project file paths">
+            <Icon className="search-field__icon" name="search" size={15} />
             <input
-              className="workspace-panel__search-input"
-              placeholder="Search files…"
-              aria-label="Search files"
+              className="search-field__input"
+              type="text"
+              placeholder="Filter project paths…"
+              aria-label="Filter project paths"
+              autoComplete="off"
+              spellCheck={false}
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
             />
             {search ? (
               <button
                 type="button"
-                className="workspace-panel__search-clear"
-                aria-label="Clear search"
+                className="search-field__clear"
+                aria-label="Clear path filter"
+                title="Clear path filter"
                 onClick={() => onSearchChange("")}
               >
-                <Icon name="x" size={12} />
+                <Icon name="x" size={13} />
               </button>
             ) : null}
           </div>
@@ -204,7 +206,7 @@ export function WorkspacePanel({
             </span>
             {inventory?.stats ? (
               <span className="workspace-panel__stats-detail">
-                {inventory.stats.fileCount} files, {inventory.stats.dirCount} dirs
+                {inventory.stats.fileCount} files · {inventory.stats.dirCount} folders
                 {inventory.stats.skippedExcluded > 0 ? `, ${inventory.stats.skippedExcluded} excluded` : ""}
                 {inventory.stats.skippedSymlinkOutside > 0 ? `, ${inventory.stats.skippedSymlinkOutside} symlinks skipped` : ""}
                 {inventory.stats.skippedDepth > 0 ? `, ${inventory.stats.skippedDepth} depth-limited` : ""}
@@ -217,8 +219,8 @@ export function WorkspacePanel({
               Scanning project…
             </p>
           ) : filteredEntries.length === 0 ? (
-            <p className="workspace-panel__empty-text">
-              {search ? `No files match “${search}”.` : "No files to display. This folder may be empty or contain only excluded items."}
+            <p className="workspace-panel__empty-text" role="status">
+              {search ? `No paths match “${search}”.` : "No files to display. This folder may be empty or contain only excluded items."}
             </p>
           ) : (
             <ul className="workspace-panel__list" role="list" aria-label="Project files">

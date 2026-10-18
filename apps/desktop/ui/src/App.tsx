@@ -582,7 +582,10 @@ export default function App() {
                       <li>Missing: {patchMissing.missing.join(", ")}</li>
                     ) : null}
                   </ul>
-                  <span style={{ color: "var(--text-tertiary)", fontSize: "10px" }}>Add the missing files to context or enlarge the budget for a more grounded patch. Never auto-apply — review preview and validation.</span>
+                  <span className="patch-generate__missing-help">
+                    Add the missing files to context or enlarge the budget for a more grounded patch.
+                    Never auto-apply — review preview and validation.
+                  </span>
                 </div>
               </div>
             ) : null}
@@ -664,7 +667,7 @@ export default function App() {
                     />
                     {manualRepair.repairState.status === "revised" ? (
                       <div className="workspace__revised" aria-label="Revised patch preview">
-                        <h4 className="validation__revised-header" style={{ marginTop: 8 }}>Revised proposal (not yet applied)</h4>
+                        <h4 className="validation__revised-header">Revised proposal (not yet applied)</h4>
                         <PatchPreview
                           proposal={manualRepair.repairState.proposal}
                           validation={manualRepair.repairState.validation}
@@ -734,7 +737,6 @@ export default function App() {
           <section className="workspace__chat" aria-label="Conversation">
             <header className="conversation-header">
           <div className="conversation-header__titles">
-            <p className="eyebrow">Conversation</p>
             {renameEditing && activeId ? (
               <div className="conversation-header__rename">
                 <input
@@ -895,7 +897,14 @@ export default function App() {
           </div>
         ) : null}
 
-        <div className="conversation" ref={scrollRef} onScroll={handleScroll}>
+        <div
+          className="conversation"
+          ref={scrollRef}
+          role="region"
+          aria-label="Conversation messages"
+          tabIndex={0}
+          onScroll={handleScroll}
+        >
           {conversationLoading ? <p role="status">Loading conversation…</p> : hasMessages ? (
             <MessageList messages={messages} />
           ) : showSetup ? (
@@ -988,7 +997,7 @@ export default function App() {
 
             {/* Phase 17: concise evidence transparency near composer — reuses tokens, not noisy, shows for current draft */}
             {evidenceReport && (draft.trim().length > 0 || workspace.contextFiles.length > 0 || streaming) ? (
-              <div style={{ padding: "0 10px" }}>
+              <div className="composer__evidence">
                 <EvidencePanel report={evidenceReport} isStreaming={streaming} />
               </div>
             ) : null}
