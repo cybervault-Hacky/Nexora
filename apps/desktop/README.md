@@ -201,7 +201,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-152 Vitest tests run in jsdom (plus a node-environment configuration suite):
+187 Vitest tests run in jsdom (plus a node-environment configuration suite):
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
@@ -213,6 +213,8 @@ decision and a Windows machine to verify.
 - shell routing: browser preview, no model, loading, ready, and unreadable IPC
 - composer disabled/counter/error/stop states and keyboard behaviour
 - scroll-follow logic
+- code rendering: fence and inline parsing, language labels, copy success and
+  failure, streaming fences, and untrusted markup staying text
 - IPC runtime: invoke names and argument objects, channel pass-through, typed
   and transport-level rejection normalisation, and closed-failure status helpers
 - build configuration: Vite/Tauri port and output wiring, bundle icons, capability
