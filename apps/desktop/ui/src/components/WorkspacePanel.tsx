@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { WorkspaceInventory } from "../lib/workspace";
+import { getWorkspaceSettings } from "../lib/workspaceSettings";
 import { Icon } from "./Icon";
 
 interface WorkspacePanelProps {
@@ -15,7 +16,7 @@ interface WorkspacePanelProps {
   onToggleContext: (path: string) => void;
   onClearContext: () => void;
   contextError: string | null;
-  onOpen: () => void;
+  onOpen: (path?: string) => void;
   onRefresh: () => void;
   onClose: () => void;
   onPreview: (path: string) => void;
@@ -44,6 +45,17 @@ export function WorkspacePanel({
   collapsed = false,
 }: WorkspacePanelProps) {
   const [manualPath, setManualPath] = useState("");
+  const [recentPath, setRecentPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getWorkspaceSettings()
+      .then((s) => {
+        if (s.lastWorkspacePath && s.lastWorkspacePath.trim().length > 0) {
+          setRecentPath(s.lastWorkspacePath.trim());
+        }
+      })
+      .catch(() => {});
+  }, [workspacePath]);
 
   if (collapsed) return null;
 
@@ -84,10 +96,28 @@ export function WorkspacePanel({
             Open a local folder to browse files, preview code, and add read-only
             context. Nothing leaves this machine.
           </p>
-          <button type="button" className="workspace-panel__open-btn" onClick={onOpen} disabled={loading}>
+          <button type="button" className="workspace-panel__open-btn" onClick={() => onOpen()} disabled={loading}>
             <Icon name="folder" size={14} />
             {loading ? "Opening…" : "Open project"}
           </button>
+
+          {recentPath ? (
+            <div className="workspace-panel__recent">
+              <span className="workspace-panel__recent-label">Recent project:</span>
+              <button
+                type="button"
+                className="workspace-panel__recent-btn"
+                onClick={() => onOpen(recentPath)}
+                disabled={loading}
+                title={`Reopen recent: ${recentPath}`}
+              >
+                <Icon name="folder" size={13} />
+                <span className="workspace-panel__recent-path">
+                  {recentPath.split(/[/\\]/).filter(Boolean).pop() ?? recentPath}
+                </span>
+              </button>
+            </div>
+          ) : null}
 
           <div className="workspace-panel__manual">
             <label className="workspace-panel__manual-label" htmlFor="workspace-manual-path">
@@ -103,8 +133,7 @@ export function WorkspacePanel({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && manualPath.trim()) {
                     e.preventDefault();
-                    // caller handles via onOpen with typed path — we expose via custom event
-                    // For simplicity, trigger prompt fallback; parent can read manualPath via closure if needed
+                    onOpen(manualPath.trim());
                     const ev = new CustomEvent("workspace:openManual", { detail: manualPath.trim() });
                     window.dispatchEvent(ev);
                   }
@@ -115,6 +144,7 @@ export function WorkspacePanel({
                 className="workspace-panel__manual-btn"
                 disabled={!manualPath.trim() || loading}
                 onClick={() => {
+                  onOpen(manualPath.trim());
                   const ev = new CustomEvent("workspace:openManual", { detail: manualPath.trim() });
                   window.dispatchEvent(ev);
                 }}
@@ -145,7 +175,7 @@ export function WorkspacePanel({
               {workspacePath}
             </div>
             <div className="workspace-panel__switch-row">
-              <button type="button" className="workspace-panel__link-btn" onClick={onOpen}>
+              <button type="button" className="workspace-panel__link-btn" onClick={() => onOpen()}>
                 Switch project
               </button>
               <span className="workspace-panel__dot" aria-hidden="true">

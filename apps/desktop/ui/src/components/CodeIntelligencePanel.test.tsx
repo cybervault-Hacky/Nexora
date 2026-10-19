@@ -202,4 +202,49 @@ describe("CodeIntelligencePanel", () => {
     render(<CodeIntelligencePanel workspacePath="/tmp/my-app" onPreview={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeTruthy());
   });
+
+  it("filters search results by symbol kind", async () => {
+    const idx = makeIndex();
+    getMock.mockResolvedValue(idx);
+    const results: Symbol[] = [
+      { name: "processData", kind: "function", path: "src/main.rs", startLine: 10, endLine: 15 },
+      { name: "UserSession", kind: "class", path: "src/user.ts", startLine: 5, endLine: 20 },
+      { name: "MAX_RETRIES", kind: "constant", path: "src/config.ts", startLine: 1, endLine: 1 },
+    ];
+    searchMock.mockResolvedValue(results);
+    const user = userEvent.setup();
+    render(<CodeIntelligencePanel workspacePath="/tmp/my-app" onPreview={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/2 files indexed/i)).toBeTruthy());
+
+    const input = screen.getByRole("textbox", { name: "Search symbols by name" });
+    await user.type(input, "test");
+    await user.click(screen.getByRole("button", { name: "Search symbols" }));
+    await waitFor(() => expect(screen.getByText("processData")).toBeTruthy());
+    expect(screen.getByText("UserSession")).toBeTruthy();
+    expect(screen.getByText("MAX_RETRIES")).toBeTruthy();
+
+    // Filter by Functions
+    await user.click(screen.getByRole("radio", { name: "Functions" }));
+    expect(screen.getByText("processData")).toBeTruthy();
+    expect(screen.queryByText("UserSession")).toBeNull();
+    expect(screen.queryByText("MAX_RETRIES")).toBeNull();
+
+    // Filter by Types & Classes
+    await user.click(screen.getByRole("radio", { name: "Types & Classes" }));
+    expect(screen.queryByText("processData")).toBeNull();
+    expect(screen.getByText("UserSession")).toBeTruthy();
+    expect(screen.queryByText("MAX_RETRIES")).toBeNull();
+
+    // Filter by Constants
+    await user.click(screen.getByRole("radio", { name: "Constants" }));
+    expect(screen.queryByText("processData")).toBeNull();
+    expect(screen.queryByText("UserSession")).toBeNull();
+    expect(screen.getByText("MAX_RETRIES")).toBeTruthy();
+
+    // Reset to All
+    await user.click(screen.getByRole("radio", { name: /All/ }));
+    expect(screen.getByText("processData")).toBeTruthy();
+    expect(screen.getByText("UserSession")).toBeTruthy();
+    expect(screen.getByText("MAX_RETRIES")).toBeTruthy();
+  });
 });

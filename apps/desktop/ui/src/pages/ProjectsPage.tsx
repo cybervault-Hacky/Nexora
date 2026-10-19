@@ -70,6 +70,36 @@ export function ProjectsPage({
               : "Open a project to browse files, select chat context, and prepare single-file patches. Nothing is modified until you explicitly apply."}
           </p>
         </div>
+        {workspace.workspacePath ? (
+          <div className="page-header__actions">
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => void workspace.openWorkspace().catch(() => {})}
+              disabled={workspace.loading}
+              title="Open a different project directory"
+            >
+              <Icon name="folder" size={13} /> Switch project
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => void workspace.refresh().catch(() => {})}
+              disabled={workspace.loading}
+              title="Rescan project directory for new or changed files"
+            >
+              <Icon name="refresh" size={13} /> Refresh
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => void workspace.closeWorkspace()}
+              title="Close the current project"
+            >
+              <Icon name="x" size={13} /> Close
+            </button>
+          </div>
+        ) : null}
       </header>
 
       <div className="projects-layout">
@@ -87,7 +117,7 @@ export function ProjectsPage({
             onToggleContext={workspace.toggleContext}
             onClearContext={workspace.clearContext}
             contextError={workspace.contextError}
-            onOpen={() => void workspace.openWorkspace().catch(() => {})}
+            onOpen={(p) => void workspace.openWorkspace(p).catch(() => {})}
             onRefresh={() => void workspace.refresh().catch(() => {})}
             onClose={() => void workspace.closeWorkspace()}
             onPreview={workspace.loadPreview}
@@ -97,16 +127,42 @@ export function ProjectsPage({
         </aside>
 
         <section className="projects__detail" aria-label="File preview and patch workflow">
-          <FilePreview
-            path={workspace.previewPath}
-            content={workspace.preview?.content ?? null}
-            size={workspace.preview?.size ?? null}
-            loading={workspace.previewLoading}
-            error={workspace.previewError}
-            onClose={workspace.clearPreview}
-          />
+          {!workspace.workspacePath ? (
+            <div className="empty projects__empty-detail" aria-label="No project open">
+              <div className="empty__mark" aria-hidden="true">
+                <Icon name="folder" size={36} />
+              </div>
+              <h2 className="empty__title">No project open</h2>
+              <p className="empty__copy">
+                Open a project directory to browse files, select read-only context for your AI chats, and generate single-file patches with review-before-apply safety.
+              </p>
+              <div className="empty__actions">
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => void workspace.openWorkspace().catch(() => {})}
+                  disabled={workspace.loading}
+                >
+                  <Icon name="folder" size={14} />
+                  Open project folder
+                </button>
+              </div>
+              <p className="empty__note">
+                Read-only by default: files on disk are never modified without an explicit patch approval.
+              </p>
+            </div>
+          ) : (
+            <>
+              <FilePreview
+                path={workspace.previewPath}
+                content={workspace.preview?.content ?? null}
+                size={workspace.preview?.size ?? null}
+                loading={workspace.previewLoading}
+                error={workspace.previewError}
+                onClose={workspace.clearPreview}
+              />
 
-          {evidenceReport ? (
+              {evidenceReport ? (
             <EvidencePanel report={evidenceReport} isStreaming={isStreaming} />
           ) : null}
 
@@ -275,6 +331,8 @@ export function ProjectsPage({
               ) : null}
             </div>
           ) : null}
+            </>
+          )}
         </section>
       </div>
     </div>

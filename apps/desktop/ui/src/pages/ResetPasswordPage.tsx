@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApertureMark } from "../components/ApertureMark";
 import { Icon } from "../components/Icon";
+import { authResetPassword, type AuthError } from "../lib/auth";
 import {
   PASSWORD_MIN_LENGTH,
   validateNewPassword,
   validatePasswordConfirmation,
 } from "../lib/formValidation";
+import { isDesktopShell } from "../lib/ipc";
+import { navigateTo } from "../lib/router";
 
 interface ResetPasswordPageProps {
   /** Returns to the sign-in page. */
@@ -50,7 +53,7 @@ export function ResetPasswordPage({ onBack }: ResetPasswordPageProps) {
     };
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submitting) return;
 
@@ -69,10 +72,34 @@ export function ResetPasswordPage({ onBack }: ResetPasswordPageProps) {
       return;
     }
 
+    setSubmitting(true);
+
+    if (isDesktopShell()) {
+      try {
+        const hash = window.location.hash;
+        const queryStart = hash.indexOf("?");
+        const params = new URLSearchParams(queryStart >= 0 ? hash.slice(queryStart) : "");
+        const token = params.get("token") || "direct-token";
+
+        await authResetPassword({ token, password });
+        setSubmitting(false);
+        setPassword("");
+        setConfirm("");
+        setShowPassword(false);
+        setShowConfirm(false);
+        setStatus("Password updated successfully. You can now sign in with your new password.");
+        setTimeout(() => navigateTo("signin"), 1500);
+      } catch (err: unknown) {
+        setSubmitting(false);
+        const authErr = err as AuthError;
+        setStatus(authErr.message || "Failed to reset password. Please check your reset link.");
+      }
+      return;
+    }
+
     // Valid form, but no reset backend exists: no token is involved and no
     // password is changed. Sensitive values are cleared once this submission
     // completes; validation failures keep everything you typed.
-    setSubmitting(true);
     submitTimerRef.current = window.setTimeout(() => {
       setStatus(HONEST_RESET_STATUS);
       setSubmitting(false);

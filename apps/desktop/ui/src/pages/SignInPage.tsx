@@ -3,11 +3,16 @@ import { ApertureMark } from "../components/ApertureMark";
 import { GoogleMark } from "../components/GoogleMark";
 import { Icon } from "../components/Icon";
 import { RouterLink } from "../components/RouterLink";
+import { authGoogleBegin, authLogin, type AuthError } from "../lib/auth";
 import { validateEmail } from "../lib/formValidation";
+import { isDesktopShell } from "../lib/ipc";
+import { navigateTo } from "../lib/router";
 
 interface SignInPageProps {
   /** Returns to the previous onboarding step. */
   onBack: () => void;
+  /** Optional callback upon successful authentication. */
+  onSuccess?: () => void;
 }
 
 interface FieldErrors {
@@ -16,7 +21,7 @@ interface FieldErrors {
 }
 
 interface StatusMessage {
-  tone: "info";
+  tone: "info" | "error";
   message: string;
 }
 
@@ -33,13 +38,14 @@ function validatePassword(value: string): string | undefined {
 }
 
 /**
- * The Phase 21 sign-in interface.
+ * The Phase 21 & Phase 24 sign-in interface.
  *
- * This is frontend behaviour only: it validates and submits locally, and then
- * reports honestly that authentication is not connected. Credentials are never
- * logged, stored, or sent anywhere — there is no backend to send them to yet.
+ * In browser preview mode, it reports honestly that authentication is interface-only.
+ * In desktop mode (Tauri), it invokes the secure `auth_login` and `auth_google_begin`
+ * commands over Tauri IPC. Raw session tokens are stored in the OS credential manager
+ * and are never exposed to frontend state, storage, or error logs.
  */
-export function SignInPage({ onBack }: SignInPageProps) {
+export function SignInPage({ onBack, onSuccess }: SignInPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -60,9 +66,9 @@ export function SignInPage({ onBack }: SignInPageProps) {
     };
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    // Repeat-submission guard while the local submission state is active.
+    // Repeat-submission guard while the submission state is active.
     if (submitting) return;
 
     const nextErrors: FieldErrors = {};
@@ -84,16 +90,89 @@ export function SignInPage({ onBack }: SignInPageProps) {
       return;
     }
 
-    // Valid form, but no authentication exists yet: no network call, no
-    // session, no navigation into an authenticated area. The short local
-    // submission beat exercises the real loading/disabled button states; the
-    // terminal message is the honest one below.
     setSubmitting(true);
+
+    // When running in desktop Tauri shell, submit via secure IPC command.
+    if (isDesktopShell()) {
+      try {
+        await authLogin({ email, password });
+        setPassword("");
+        setSubmitting(false);
+        if (onSuccess) {
+          onSuccess();
+        } else {
+          navigateTo("home");
+        }
+      } catch (err: unknown) {
+        setSubmitting(false);
+        const authErr = err as AuthError;
+        if (authErr.code === "invalid_credentials") {
+          setStatus({ tone: "error", message: "Invalid email or password." });
+        } else if (authErr.code === "email_unverified") {
+          setStatus({
+            tone: "error",
+            message: "Please verify your email address before signing in.",
+          });
+        } else if (authErr.code === "rate_limited") {
+          const mins = Math.ceil((authErr.retryAfterSeconds || 60) / 60);
+          setStatus({
+            tone: "error",
+            message: `Too many attempts. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`,
+          });
+        } else {
+          setStatus({
+            tone: "error",
+            message:
+              authErr.message ||
+              "Can't reach the Nexora account service. Check your connection and try again.",
+          });
+        }
+      }
+      return;
+    }
+
+    // Browser preview mode (non-desktop):
     submitTimerRef.current = window.setTimeout(() => {
       setStatus({ tone: "info", message: HONEST_SIGNIN_STATUS });
       setSubmitting(false);
       submitTimerRef.current = null;
     }, 400);
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (!isDesktopShell()) {
+      setStatus({ tone: "info", message: GOOGLE_STATUS });
+      return;
+    }
+
+    setSubmitting(true);
+    setStatus({ tone: "info", message: "Opening browser for Google sign-in..." });
+    try {
+      await authGoogleBegin();
+      setSubmitting(false);
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        navigateTo("home");
+      }
+    } catch (err: unknown) {
+      setSubmitting(false);
+      const authErr = err as AuthError;
+      if (authErr.code === "email_conflict") {
+        setStatus({
+          tone: "error",
+          message:
+            "An account with this email already exists. Sign in with your password to link Google.",
+        });
+      } else if (authErr.code === "cancelled") {
+        setStatus({ tone: "info", message: "Google sign-in was cancelled." });
+      } else {
+        setStatus({
+          tone: "error",
+          message: authErr.message || "Google sign-in could not be completed.",
+        });
+      }
+    }
   };
 
   return (
@@ -210,12 +289,8 @@ export function SignInPage({ onBack }: SignInPageProps) {
         <button
           type="button"
           className="google-btn"
-          onClick={() => {
-            // No OAuth call, no invented endpoint, no account picker: an
-            // honest explanation only. Real Google sign-in arrives with the
-            // authentication backend in a later phase.
-            setStatus({ tone: "info", message: GOOGLE_STATUS });
-          }}
+          disabled={submitting}
+          onClick={handleGoogleSignIn}
         >
           <GoogleMark size={18} />
           <span>Sign in with Google</span>

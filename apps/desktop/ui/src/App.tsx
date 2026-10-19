@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./components/Icon";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
+import { AccountPage } from "./pages/AccountPage";
 import { ChatPage } from "./pages/ChatPage";
 import { CodeIntelligencePage } from "./pages/CodeIntelligencePage";
 import { CreateAccountPage } from "./pages/CreateAccountPage";
+import { FounderPage } from "./pages/FounderPage";
 import { HomePage } from "./pages/HomePage";
+import { LicensingPage } from "./pages/LicensingPage";
 import { ModelManagerPage } from "./pages/ModelManagerPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
@@ -63,6 +66,9 @@ export default function App() {
   const patch = usePatch(workspace.workspacePath);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [founderModeEnabled, setFounderModeEnabled] = useState(false);
+  const [codeLigatures, setCodeLigatures] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const [settingsRestored, setSettingsRestored] = useState(false);
   const [loadedStatus, setLoadedStatus] = useState<AppStatus | null>(null);
   const [unloading, setUnloading] = useState(false);
@@ -342,7 +348,11 @@ export default function App() {
   useEffect(() => {
     if (settingsRestored) return;
     void getWorkspaceSettings()
-      .then(() => {
+      .then((s) => {
+        setSidebarCollapsed(Boolean(s.preferences.explorerCollapsed));
+        setFounderModeEnabled(Boolean(s.preferences.founderModeEnabled));
+        setCodeLigatures(Boolean(s.preferences.codeLigatures));
+        setReducedMotion(Boolean(s.preferences.reducedMotion));
         setSettingsRestored(true);
         // Do not auto-scan; the remembered path is a manual-open hint only.
       })
@@ -351,11 +361,16 @@ export default function App() {
 
   useEffect(() => {
     if (!settingsRestored) return;
-    // Persist last path and collapsed state on change
-    const pref = { explorerCollapsed: sidebarCollapsed };
+    // Persist last path and preferences states on change
+    const pref = {
+      explorerCollapsed: sidebarCollapsed,
+      founderModeEnabled,
+      codeLigatures,
+      reducedMotion,
+    };
     const last = workspace.workspacePath ?? null;
     void saveWorkspaceSettings({ version: 1, lastWorkspacePath: last, preferences: pref }).catch(() => {});
-  }, [settingsRestored, workspace.workspacePath, sidebarCollapsed]);
+  }, [settingsRestored, workspace.workspacePath, sidebarCollapsed, founderModeEnabled, codeLigatures, reducedMotion]);
 
   const handleStatus = useCallback(
     (next: AppStatus) => {
@@ -423,7 +438,15 @@ export default function App() {
     : (ROUTES.find((candidate) => candidate.id === route.id)?.label ?? "Nexora");
 
   return (
-    <div className={`app ${sidebarCollapsed ? "app--collapsed" : ""}${flowRoute ? " app--flow" : ""}`}>
+    <div
+      className={`app ${sidebarCollapsed ? "app--collapsed" : ""}${flowRoute ? " app--flow" : ""}${reducedMotion ? " reduced-motion" : ""}${!codeLigatures ? " no-ligatures" : ""}`.trim()}
+    >
+      <div className="aurora-ambient" aria-hidden="true" data-testid="aurora-ambient">
+        <div className="aurora-beam aurora-beam--1" />
+        <div className="aurora-beam aurora-beam--2" />
+        <div className="aurora-beam aurora-beam--3" />
+      </div>
+
       <TitleBar
         pageLabel={pageLabel}
         sidebarCollapsed={sidebarCollapsed}
@@ -437,6 +460,7 @@ export default function App() {
         status={engineStatus}
         statusFailed={statusError !== null}
         collapsed={sidebarCollapsed}
+        founderModeEnabled={founderModeEnabled}
         onNewChat={startNewChat}
         onUnload={desktop ? handleUnload : undefined}
         unloading={unloading}
@@ -514,8 +538,16 @@ export default function App() {
             engineReady={engineReady}
             workspacePath={workspace.workspacePath}
             workspaceName={workspace.workspaceName}
+            fileCount={workspace.inventory?.stats.fileCount ?? 0}
+            selectedFileCount={workspace.selectedPaths.size}
+            symbolCount={symbolIndex?.symbols.length ?? 0}
+            relationshipCount={analysisGraph?.edges.length ?? 0}
+            recentConversations={conversation.conversations.slice(0, 3)}
             conversationCount={conversation.conversations.length}
             onNewChat={startNewChat}
+            onOpenProject={() => void workspace.openWorkspace()}
+            onOpenPath={(path) => void workspace.openWorkspace(path)}
+            onSelectConversation={openConversation}
           />
         ) : route.id === "chat" ? (
           <ChatPage
@@ -550,12 +582,14 @@ export default function App() {
         ) : route.id === "code" ? (
           <CodeIntelligencePage
             workspacePath={workspace.workspacePath}
+            workspaceName={workspace.workspaceName}
             onPreview={workspace.loadPreview}
             symbolIndex={symbolIndex}
             onIndexChange={setSymbolIndex}
             analysisTargetPath={
               generationTargetPath ?? workspace.previewPath ?? (workspace.contextFiles[0]?.path ?? null)
             }
+            onOpenWorkspace={() => void workspace.openWorkspace()}
           />
         ) : route.id === "models" ? (
           <ModelManagerPage
@@ -573,7 +607,19 @@ export default function App() {
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
             workspacePath={workspace.workspacePath}
+            founderModeEnabled={founderModeEnabled}
+            onToggleFounderMode={() => setFounderModeEnabled((current) => !current)}
+            codeLigatures={codeLigatures}
+            onToggleCodeLigatures={() => setCodeLigatures((current) => !current)}
+            reducedMotion={reducedMotion}
+            onToggleReducedMotion={() => setReducedMotion((current) => !current)}
           />
+        ) : route.id === "account" ? (
+          <AccountPage />
+        ) : route.id === "founder" ? (
+          <FounderPage status={engineStatus} />
+        ) : route.id === "licensing" ? (
+          <LicensingPage />
         ) : (
           <NotFoundPage path={route.path} />
         )}

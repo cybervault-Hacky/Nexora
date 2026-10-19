@@ -6,6 +6,9 @@ export interface WorkspaceSettings {
   lastWorkspacePath?: string | null;
   preferences: {
     explorerCollapsed: boolean;
+    founderModeEnabled?: boolean;
+    codeLigatures?: boolean;
+    reducedMotion?: boolean;
   };
 }
 
@@ -36,7 +39,12 @@ function fallbackLoad(): WorkspaceSettings {
     return {
       version: 1,
       lastWorkspacePath: typeof parsed.lastWorkspacePath === "string" ? parsed.lastWorkspacePath : null,
-      preferences: { explorerCollapsed: Boolean(parsed.preferences?.explorerCollapsed) },
+      preferences: {
+        explorerCollapsed: Boolean(parsed.preferences?.explorerCollapsed),
+        founderModeEnabled: Boolean(parsed.preferences?.founderModeEnabled),
+        codeLigatures: Boolean(parsed.preferences?.codeLigatures),
+        reducedMotion: Boolean(parsed.preferences?.reducedMotion),
+      },
     };
   } catch {
     return { version: 1, lastWorkspacePath: null, preferences: { explorerCollapsed: false } };

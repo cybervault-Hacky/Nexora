@@ -25,8 +25,12 @@ describe("parseRoute", () => {
     expect(parseRoute("#/chat").id).toBe("chat");
     expect(parseRoute("#/projects").id).toBe("projects");
     expect(parseRoute("#/code").id).toBe("code");
+    expect(parseRoute("#/intelligence").id).toBe("code");
     expect(parseRoute("#/models").id).toBe("models");
+    expect(parseRoute("#/model-setup").id).toBe("models");
+    expect(parseRoute("#/engine").id).toBe("models");
     expect(parseRoute("#/settings").id).toBe("settings");
+    expect(parseRoute("#/preferences").id).toBe("settings");
   });
 
   it("tolerates trailing slashes and query noise", () => {

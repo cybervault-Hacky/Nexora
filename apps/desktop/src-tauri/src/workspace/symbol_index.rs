@@ -198,7 +198,7 @@ fn extract_typescript(content: &str, path: &str, out: &mut Vec<Symbol>) {
         (r"(?m)^\s*type\s+(\w+)\s*=", SymbolKind::Type),
         (r"(?m)^\s*export\s+enum\s+(\w+)", SymbolKind::Enum),
         (r"(?m)^\s*enum\s+(\w+)", SymbolKind::Enum),
-        (r"(?m)^\s*import\s+.*from\s+['\"]([^'\"]+)['\"]", SymbolKind::Import),
+        (r#"(?m)^\s*import\s+.*from\s+['"]([^'"]+)['"]"#, SymbolKind::Import),
         (r"(?m)^\s*import\s+\{([^}]+)\}", SymbolKind::Import),
         (r"(?m)export\s+(?:const|let|var)\s+(\w+)", SymbolKind::Export),
         (r"(?m)^\s*const\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>", SymbolKind::Function),

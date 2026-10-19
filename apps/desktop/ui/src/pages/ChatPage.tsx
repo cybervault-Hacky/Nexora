@@ -103,6 +103,7 @@ export function ChatPage({
     renameActive,
     deleteActive,
     stop,
+    newChat,
   } = conversation;
 
   const [renameEditing, setRenameEditing] = useState(false);
@@ -269,6 +270,17 @@ export function ChatPage({
                 <Icon name="trash" size={12} /> Delete
               </button>
             </>
+          ) : null}
+          {hasMessages || activeId ? (
+            <button
+              type="button"
+              className="chip chip--action"
+              aria-label="Start new chat"
+              title="Start new chat (Ctrl+N)"
+              onClick={newChat}
+            >
+              <Icon name="message" size={12} /> New chat
+            </button>
           ) : null}
         </div>
       </header>
