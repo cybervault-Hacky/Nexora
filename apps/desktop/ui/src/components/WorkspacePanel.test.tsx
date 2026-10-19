@@ -278,4 +278,32 @@ describe("WorkspacePanel", () => {
     btn.focus();
     expect(document.activeElement).toBe(btn);
   });
+
+  it("allows entering manual project path and opening it", async () => {
+    const props = {
+      workspacePath: null,
+      workspaceName: null,
+      inventory: null,
+      loading: false,
+      error: null,
+      search: "",
+      onSearchChange: vi.fn(),
+      filteredEntries: [],
+      selectedPaths: new Set<string>(),
+      onToggleContext: vi.fn(),
+      onClearContext: vi.fn(),
+      contextError: null,
+      onOpen: vi.fn(),
+      onRefresh: vi.fn(),
+      onClose: vi.fn(),
+      onPreview: vi.fn(),
+      previewPath: null,
+    };
+    render(<WorkspacePanel {...props} />);
+    const input = screen.getByLabelText("Or type an absolute path");
+    await userEvent.type(input, "D:\\repos\\test-repo");
+    const openBtn = screen.getByRole("button", { name: "Open" });
+    await userEvent.click(openBtn);
+    expect(props.onOpen).toHaveBeenCalledWith("D:\\repos\\test-repo");
+  });
 });

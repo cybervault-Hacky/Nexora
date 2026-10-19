@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApertureMark } from "../components/ApertureMark";
 import { Icon } from "../components/Icon";
 import { RouterLink } from "../components/RouterLink";
+import { authRegister, type AuthError } from "../lib/auth";
 import {
   PASSWORD_MIN_LENGTH,
   validateEmail,
@@ -9,6 +10,8 @@ import {
   validateNewPassword,
   validatePasswordConfirmation,
 } from "../lib/formValidation";
+import { isDesktopShell } from "../lib/ipc";
+import { navigateTo } from "../lib/router";
 
 interface CreateAccountPageProps {
   /** Returns to the sign-in page. */
@@ -58,7 +61,7 @@ export function CreateAccountPage({ onBack }: CreateAccountPageProps) {
     };
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     // Repeat-submission guard while the local submission state is active.
     if (submitting) return;
@@ -85,11 +88,29 @@ export function CreateAccountPage({ onBack }: CreateAccountPageProps) {
       return;
     }
 
+    setSubmitting(true);
+
+    if (isDesktopShell()) {
+      try {
+        await authRegister({ name: fullName, email, password });
+        setPassword("");
+        setConfirm("");
+        setShowPassword(false);
+        setShowConfirm(false);
+        setSubmitting(false);
+        navigateTo("verify");
+      } catch (err: unknown) {
+        setSubmitting(false);
+        const authErr = err as AuthError;
+        setStatus(authErr.message || "Registration failed. Check your connection and try again.");
+      }
+      return;
+    }
+
     // Valid form, but no account backend exists: no account is created, no
     // email is sent, no session appears, and nothing is transmitted. The
     // short local beat exercises the real loading/disabled button states; the
     // terminal message is the honest one below.
-    setSubmitting(true);
     submitTimerRef.current = window.setTimeout(() => {
       setStatus(HONEST_SIGNUP_STATUS);
       setSubmitting(false);

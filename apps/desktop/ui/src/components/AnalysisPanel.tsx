@@ -56,7 +56,7 @@ export function AnalysisPanel({ workspacePath, targetPath, onPreview }: Props) {
   const graphError = analysisState.status === "error" ? analysisState.message : null;
 
   return (
-    <div className="analysis" aria-label="Deep analysis">
+    <div className="analysis" role="region" aria-label="Deep analysis">
       <header className="analysis__header">
         <div className="analysis__title">
           <Icon name="branch" size={14} />

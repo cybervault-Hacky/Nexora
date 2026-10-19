@@ -1,5 +1,7 @@
+mod auth;
 mod history;
 mod inference;
+mod licensing;
 mod workspace;
 
 use tauri::Manager;
@@ -25,6 +27,10 @@ pub fn run() {
             ));
             app.manage(workspace::commands::SymbolIndexState::new());
             app.manage(workspace::commands::AnalysisState::new());
+            app.manage(auth::commands::AuthState::new());
+            app.manage(licensing::commands::LicenceState::new(Some(
+                config_dir.clone(),
+            )));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -80,6 +86,21 @@ pub fn run() {
             workspace::commands::get_file_relationships,
             workspace::commands::get_change_impact,
             workspace::commands::clear_analysis_graph,
+            auth::commands::auth_get_session,
+            auth::commands::auth_login,
+            auth::commands::auth_register,
+            auth::commands::auth_verify_email,
+            auth::commands::auth_resend_verification,
+            auth::commands::auth_recover_password,
+            auth::commands::auth_reset_password,
+            auth::commands::auth_logout,
+            auth::commands::auth_change_password,
+            auth::commands::get_developer_diagnostics,
+            auth::commands::auth_google_begin,
+            auth::commands::auth_google_cancel,
+            licensing::commands::licence_get_status,
+            licensing::commands::licence_activate,
+            licensing::commands::licence_deactivate,
         ])
         .run(tauri::generate_context!())
         .expect("Nexora failed to start");

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApertureMark } from "../components/ApertureMark";
 import { RouterLink } from "../components/RouterLink";
+import { authRecoverPassword, type AuthError } from "../lib/auth";
 import { validateEmail } from "../lib/formValidation";
+import { isDesktopShell } from "../lib/ipc";
 
 interface RecoverPasswordPageProps {
   /** Returns to the sign-in page. */
@@ -35,7 +37,7 @@ export function RecoverPasswordPage({ onBack }: RecoverPasswordPageProps) {
     };
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submitting) return;
 
@@ -48,10 +50,24 @@ export function RecoverPasswordPage({ onBack }: RecoverPasswordPageProps) {
       return;
     }
 
+    setSubmitting(true);
+
+    if (isDesktopShell()) {
+      try {
+        await authRecoverPassword({ email });
+        setSubmitting(false);
+        setStatus("If an account exists for that email, password reset instructions have been sent.");
+      } catch (err: unknown) {
+        setSubmitting(false);
+        const authErr = err as AuthError;
+        setStatus(authErr.message || "Failed to submit password recovery request.");
+      }
+      return;
+    }
+
     // Valid email, but recovery is not connected: nothing is transmitted and
     // no email is sent. The short local beat exercises the loading/disabled
     // button states; the terminal message is the honest one below.
-    setSubmitting(true);
     submitTimerRef.current = window.setTimeout(() => {
       setStatus(HONEST_RECOVERY_STATUS);
       setSubmitting(false);

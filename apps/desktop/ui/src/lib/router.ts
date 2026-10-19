@@ -26,6 +26,9 @@ export const ROUTES = [
   { id: "code", path: "/code", label: "Code Intelligence" },
   { id: "models", path: "/models", label: "Local Models" },
   { id: "settings", path: "/settings", label: "Settings" },
+  { id: "account", path: "/account", label: "Account" },
+  { id: "founder", path: "/founder", label: "Founder Control" },
+  { id: "licensing", path: "/licensing", label: "Licensing & Plans" },
 ] as const;
 
 export type RouteId = (typeof ROUTES)[number]["id"];
@@ -76,6 +79,11 @@ export function parseRoute(hash: string): RouteMatch {
   const path = normalizePath(hash);
   // The empty/root path is the app entry: the welcome screen (Phase 20).
   if (path === "/" || path === "/welcome") return { id: "welcome", path };
+  if (path === "/dashboard") return { id: "home", path };
+  if (path === "/billing") return { id: "licensing", path };
+  if (path === "/intelligence") return { id: "code", path };
+  if (path === "/preferences") return { id: "settings", path };
+  if (path === "/model-setup" || path === "/engine") return { id: "models", path };
   for (const route of ROUTES) {
     if (route.path === path) return { id: route.id, path };
   }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { getSymbolIndex, refreshSymbolIndex, searchSymbols, type Symbol, type SymbolIndex } from "../lib/symbolIndex";
 
@@ -22,10 +22,33 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
   const error = isControlled ? (externalError ?? null) : internalError;
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Symbol[]>([]);
+  const [kindFilter, setKindFilter] = useState<"all" | "functions" | "types" | "constants">("all");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchedQuery, setSearchedQuery] = useState("");
   const searchSequence = useRef(0);
+
+  const filteredResults = useMemo(() => {
+    if (kindFilter === "all") return results;
+    if (kindFilter === "functions") {
+      return results.filter((s) => s.kind === "function" || s.kind === "method");
+    }
+    if (kindFilter === "types") {
+      return results.filter(
+        (s) =>
+          s.kind === "class" ||
+          s.kind === "interface" ||
+          s.kind === "type" ||
+          s.kind === "struct" ||
+          s.kind === "enum" ||
+          s.kind === "trait",
+      );
+    }
+    if (kindFilter === "constants") {
+      return results.filter((s) => s.kind === "constant");
+    }
+    return results;
+  }, [results, kindFilter]);
 
   const load = useCallback(async (refresh = false) => {
     if (isControlled) {
@@ -255,26 +278,72 @@ export function CodeIntelligencePanel({ workspacePath, onPreview, externalIndex,
           </p>
         ) : null}
         {results.length > 0 ? (
-          <ul className="code-intel__results" role="list" aria-label="Search results" aria-live="polite">
-            {results.map((sym) => (
-              <li key={`${sym.path}:${sym.name}:${sym.startLine}`} className="code-intel__result" role="listitem">
-                <button
-                  type="button"
-                  className="code-intel__result-button"
-                  onClick={() => onPreview(sym.path)}
-                  title={`${sym.path}:${sym.startLine}`}
-                  aria-label={`Open ${sym.path}:${sym.startLine}`}
-                >
-                  <span className="code-intel__result-name">{sym.name}</span>
-                  <span className="code-intel__result-kind">{sym.kind}</span>
-                  <span className="code-intel__result-path">
-                    {sym.path}:{sym.startLine}
-                  </span>
-                </button>
-                {sym.detail ? <span className="code-intel__result-detail">{sym.detail}</span> : null}
-              </li>
-            ))}
-          </ul>
+          <>
+            <div className="code-intel__filters" role="radiogroup" aria-label="Filter symbols by kind">
+              <button
+                type="button"
+                className={`button button--ghost button--sm ${kindFilter === "all" ? "button--selected" : ""}`}
+                onClick={() => setKindFilter("all")}
+                aria-checked={kindFilter === "all"}
+                role="radio"
+              >
+                All ({results.length})
+              </button>
+              <button
+                type="button"
+                className={`button button--ghost button--sm ${kindFilter === "functions" ? "button--selected" : ""}`}
+                onClick={() => setKindFilter("functions")}
+                aria-checked={kindFilter === "functions"}
+                role="radio"
+              >
+                Functions
+              </button>
+              <button
+                type="button"
+                className={`button button--ghost button--sm ${kindFilter === "types" ? "button--selected" : ""}`}
+                onClick={() => setKindFilter("types")}
+                aria-checked={kindFilter === "types"}
+                role="radio"
+              >
+                Types & Classes
+              </button>
+              <button
+                type="button"
+                className={`button button--ghost button--sm ${kindFilter === "constants" ? "button--selected" : ""}`}
+                onClick={() => setKindFilter("constants")}
+                aria-checked={kindFilter === "constants"}
+                role="radio"
+              >
+                Constants
+              </button>
+            </div>
+            {filteredResults.length > 0 ? (
+              <ul className="code-intel__results" role="list" aria-label="Search results" aria-live="polite">
+                {filteredResults.map((sym) => (
+                  <li key={`${sym.path}:${sym.name}:${sym.startLine}`} className="code-intel__result" role="listitem">
+                    <button
+                      type="button"
+                      className="code-intel__result-button"
+                      onClick={() => onPreview(sym.path)}
+                      title={`${sym.path}:${sym.startLine}`}
+                      aria-label={`Open ${sym.path}:${sym.startLine}`}
+                    >
+                      <span className="code-intel__result-name">{sym.name}</span>
+                      <span className="code-intel__result-kind">{sym.kind}</span>
+                      <span className="code-intel__result-path">
+                        {sym.path}:{sym.startLine}
+                      </span>
+                    </button>
+                    {sym.detail ? <span className="code-intel__result-detail">{sym.detail}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="code-intel__hint" role="status">
+                No {kindFilter} symbols in search results for “{searchedQuery}”.
+              </p>
+            )}
+          </>
         ) : searchedQuery === query.trim() && searchedQuery && !searching && !searchError ? (
           <p className="code-intel__hint" role="status">
             No symbols found for “{searchedQuery}”. Try another name or refresh the index.

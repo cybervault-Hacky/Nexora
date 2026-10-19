@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 export type IconName =
+  | "activity"
   | "alert"
   | "arrow-up"
   | "branch"
@@ -26,10 +27,17 @@ export type IconName =
   | "settings"
   | "shield"
   | "stop"
+  | "terminal"
   | "trash"
+  | "user"
   | "x";
 
 const ICONS: Record<IconName, ReactElement> = {
+  activity: (
+    <>
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </>
+  ),
   alert: (
     <>
       <path d="M12 8v5" />
@@ -134,6 +142,18 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="M9 7V5h6v2" />
       <path d="M6 7l1 12h10l1-12" />
       <path d="M10 11v6M14 11v6" />
+    </>
+  ),
+  terminal: (
+    <>
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </>
+  ),
+  user: (
+    <>
+      <circle cx="12" cy="7" r="4" />
+      <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
     </>
   ),
   file: (

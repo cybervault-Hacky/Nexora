@@ -23,6 +23,7 @@ interface SidebarProps {
   status: AppStatus | null;
   statusFailed: boolean;
   collapsed: boolean;
+  founderModeEnabled?: boolean;
   onNewChat: () => void;
   onUnload?: () => void;
   unloading?: boolean;
@@ -42,6 +43,7 @@ export function Sidebar({
   status,
   statusFailed,
   collapsed,
+  founderModeEnabled = false,
   onNewChat,
   onUnload,
   unloading = false,
@@ -54,6 +56,11 @@ export function Sidebar({
   onDeleteConversation,
   onRetryHistory,
 }: SidebarProps) {
+  const navItems = [
+    ...NAV_ITEMS,
+    ...(founderModeEnabled ? [{ id: "founder" as RouteId, label: "Founder Control", icon: "terminal" as IconName }] : []),
+  ];
+
   return (
     <aside id="sidebar" className="sidebar" aria-label="Workspace">
       <div className="sidebar__brand">
@@ -68,7 +75,7 @@ export function Sidebar({
 
       <nav className="sidebar__nav" aria-label="Primary">
         <ul className="sidebar__nav-list">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const active = currentRoute === item.id;
             return (
               <li key={item.id}>

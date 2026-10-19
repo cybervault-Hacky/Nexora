@@ -62,25 +62,49 @@
   --explorer-width: 340px;
   --content-max: 820px;
 
-  /* Motion is short and consistent; reduced-motion overrides are below. */
-  --ease-standard: cubic-bezier(0.2, 0.75, 0.2, 1);
+  /* Motion is short and consistent; reduced-motion overrides are below (§3.6). */
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-instant: 80ms linear;
   --motion-fast: 140ms var(--ease-standard);
-  --motion-base: 190ms var(--ease-standard);
+  --motion-base: 200ms var(--ease-standard);
+  --motion-slow: 280ms var(--ease-standard);
+  --motion-exit: 120ms var(--ease-exit);
+
+  /* Living Aurora ambient lighting tokens (§3.1, §3.2, Phase 30) */
+  --aurora-color-1: rgba(170, 145, 241, 0.10);
+  --aurora-color-2: rgba(141, 199, 223, 0.07);
+  --aurora-color-3: rgba(105, 213, 160, 0.05);
+  --aurora-speed: 22s;
 
   /* Quiet depth; borders do most of the work on the graphite surfaces. */
-  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-high: 0 24px 64px rgba(0, 0, 0, 0.45);
 
-  /* Selective glass: legible graphite tints with a shared low-contrast edge. */
-  --glass-chrome: rgba(13, 15, 19, 0.78);
-  --glass-sidebar: rgba(18, 21, 26, 0.84);
-  --glass-panel: rgba(20, 23, 29, 0.84);
-  --glass-control: rgba(31, 35, 43, 0.62);
-  --glass-control-focus: rgba(37, 41, 50, 0.78);
-  --glass-border: rgba(238, 235, 246, 0.12);
-  --glass-highlight: rgba(255, 255, 255, 0.045);
-  --glass-blur: blur(18px) saturate(125%);
-  --shadow-glass: 0 12px 30px rgba(0, 0, 0, 0.2);
+  /* Original Phase 1/Phase 29 Glassmorphism System (§3.2):
+     - glass/panel: rgba(17,20,25,0.68) + blur(20px) saturate(130%) + 1 px border/subtle + inset top highlight rgba(255,255,255,0.05)
+     - glass/raised: rgba(24,28,35,0.80) + blur(28px) saturate(140%) + border/strong
+     - glass/scrim: rgba(5,7,10,0.55) + blur(8px)
+  */
+  --glass-panel: rgba(17, 20, 25, 0.68);
+  --glass-raised: rgba(24, 28, 35, 0.80);
+  --glass-scrim: rgba(5, 7, 10, 0.55);
+
+  --glass-chrome: rgba(13, 16, 21, 0.72);
+  --glass-sidebar: rgba(16, 19, 25, 0.75);
+  --glass-control: rgba(27, 31, 39, 0.65);
+  --glass-control-focus: rgba(33, 38, 48, 0.80);
+
+  --glass-border: rgba(238, 235, 246, 0.08);
+  --glass-border-subtle: rgba(238, 235, 246, 0.08);
+  --glass-border-strong: rgba(238, 235, 246, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
+
+  --glass-blur: blur(20px) saturate(130%);
+  --glass-blur-raised: blur(28px) saturate(140%);
+  --glass-blur-scrim: blur(8px);
+  --shadow-glass: 0 12px 32px rgba(0, 0, 0, 0.35);
 
   /* System faces only; Nexora never downloads fonts. */
   --font-ui: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui,
