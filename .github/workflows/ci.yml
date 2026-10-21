@@ -113,13 +113,15 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo check --all-targets
 
-      - name: Lint with warnings denied
-        working-directory: apps/desktop/src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
+      # Tests run before the lint gate: a lint-only failure must never hide a
+      # failing test, and the two checks answer different questions.
       - name: Run Rust tests
         working-directory: apps/desktop/src-tauri
         run: cargo test
+
+      - name: Lint with warnings denied
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
   windows:
     name: Windows — compile and Rust tests
@@ -165,6 +167,29 @@ jobs:
 
       - name: Run Rust tests on Windows
         working-directory: apps/desktop/src-tauri
-        run: cargo test
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee windows-test.log
+          exit "${PIPESTATUS[0]}"
+
+      # A failing test name as an annotation survives environments that cannot
+      # read the raw job log, so the failure stays diagnosable from the checks
+      # API alone. This step never changes the job's own result.
+      - name: Report failing Windows tests
+        if: failure()
+        working-directory: apps/desktop/src-tauri
+        shell: bash
+        run: |
+          if [ ! -f windows-test.log ]; then
+            exit 0
+          fi
+
+          awk '/^failures:$/ { section = 1; next } /^test result:/ { section = 0 } section' \
+            windows-test.log | sed '/^[[:space:]]*$/d' > failing-tests.txt
+
+          while IFS= read -r name; do
+            echo "::error title=Rust test failed on Windows::${name}"
+          done < failing-tests.txt
 
       # Deliberately no `tauri build`: producing an installer is out of scope.
