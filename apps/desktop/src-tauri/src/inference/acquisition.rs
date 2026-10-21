@@ -533,6 +533,7 @@ mod tests {
                 note: "No artefact recorded.",
             },
             context: registry::NEXORA_MINI.context,
+            kv_bytes_per_token: registry::NEXORA_MINI.kv_bytes_per_token,
             compatibility_notes: &["test"],
             locally_verified: false,
         }

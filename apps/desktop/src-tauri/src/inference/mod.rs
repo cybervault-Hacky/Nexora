@@ -602,6 +602,7 @@ mod tests {
             messages,
             max_tokens: None,
             temperature: None,
+            profile_id: None,
         }
     }
 
