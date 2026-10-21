@@ -27,9 +27,9 @@ pub struct ValidatedPatchContract {
 pub struct PatchGenerationResponseStrict {
     pub version: u8,
     #[serde(alias = "target_path")]
-    pub targetPath: String,
+    pub target_path: String,
     #[serde(alias = "proposed_content")]
-    pub proposedContent: String,
+    pub proposed_content: String,
     #[serde(default)]
     pub explanation: Option<String>,
 }
@@ -49,7 +49,7 @@ impl PatchGenerationResponseStrict {
         }
 
         // targetPath must equal expected
-        let target = self.targetPath.trim();
+        let target = self.target_path.trim();
         if target.is_empty() {
             return Err("Missing 'targetPath'.".to_string());
         }
@@ -75,7 +75,7 @@ impl PatchGenerationResponseStrict {
         }
 
         // proposedContent checks
-        let proposed = &self.proposedContent;
+        let proposed = &self.proposed_content;
         if proposed.trim().is_empty() {
             return Err(
                 "Missing 'proposedContent' — patch must contain replacement content.".to_string(),
@@ -330,6 +330,7 @@ mod tests {
     fn valid_single_file() {
         let json = r#"{"version":1,"targetPath":"src/app.ts","proposedContent":"let a = 2;\n","explanation":"update"}"#;
         let res = parse_and_validate(json, "src/app.ts", &original()).expect("valid");
+        assert_eq!(res.version, PATCH_CONTRACT_VERSION);
         assert_eq!(res.target_path, "src/app.ts");
         assert_eq!(res.proposed_content, "let a = 2;\n");
         assert_eq!(res.explanation.as_deref(), Some("update"));
@@ -751,6 +752,7 @@ mod batch_tests {
         assert_eq!(batch.version, PATCH_CONTRACT_VERSION_V2);
         assert_eq!(batch.files.len(), 2);
         assert_eq!(batch.files[0].target_path, "src/a.ts");
+        assert_eq!(batch.files[0].proposed_content, "a2\n");
         assert_eq!(batch.files[0].explanation.as_deref(), Some("part one"));
         assert_eq!(batch.explanation.as_deref(), Some("batch"));
     }

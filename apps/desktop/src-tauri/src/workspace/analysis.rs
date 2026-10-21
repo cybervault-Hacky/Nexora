@@ -433,8 +433,8 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
         }
         // Try single file part
         let simple = path_part
-            .split('/')
-            .last()
+            .rsplit('/')
+            .next()
             .unwrap_or(&path_part)
             .to_string();
         let mod_candidates = [
@@ -526,7 +526,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
         if is_sensitive_file(Path::new(rel)) {
             continue;
         }
-        if entry.size > MAX_PREVIEW_BYTES as u64 {
+        if entry.size > MAX_PREVIEW_BYTES {
             continue;
         }
         let ext = rel.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -810,7 +810,11 @@ pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships
     let node = graph.nodes.iter().find(|n| n.path == target_norm);
     let imports = node.map(|n| n.imports.clone()).unwrap_or_default();
     let imported_by = node.map(|n| n.imported_by.clone()).unwrap_or_default();
-    let unresolved: Vec<DependencyEdge> = imports.iter().filter(|e| !e.verified).cloned().collect();
+    let unresolved: Vec<DependencyEdge> = imports
+        .iter()
+        .cloned()
+        .filter(|edge| !edge.verified)
+        .collect();
 
     // Defined symbols
     let defined_symbols: Vec<Symbol> = symbol_index
@@ -882,7 +886,7 @@ pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships
     if graph.truncated {
         notes.push("Graph truncated — limits hit; some relationships may be missing.".to_string());
     }
-    if unresolved.len() > 0 {
+    if !unresolved.is_empty() {
         notes.push(format!(
             "{} unresolved imports — verified=false",
             unresolved.len()

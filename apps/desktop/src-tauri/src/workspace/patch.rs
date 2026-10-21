@@ -129,7 +129,7 @@ fn is_binary_content(s: &str) -> bool {
 }
 
 fn validate_proposed_size(content: &str) -> WorkspaceResult<()> {
-    if content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+    if content.len() as u64 > MAX_PREVIEW_BYTES {
         return Err(WorkspaceError::too_large(format!(
             "Proposed content too large ({} bytes, max {}).",
             content.len(),
@@ -268,10 +268,10 @@ pub fn validate_patch_proposal(
     }
 
     // Size checks
-    if proposal.original_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+    if proposal.original_content.len() as u64 > MAX_PREVIEW_BYTES {
         errors.push("Original content too large.".to_string());
     }
-    if proposal.proposed_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+    if proposal.proposed_content.len() as u64 > MAX_PREVIEW_BYTES {
         errors.push("Proposed content too large.".to_string());
     }
 
@@ -444,7 +444,7 @@ pub fn apply_patch_proposal(root: &Path, proposal: &PatchProposal) -> WorkspaceR
     }
 
     let new_hash = proposal.proposed_hash.clone();
-    let new_size = proposal.proposed_content.as_bytes().len() as u64;
+    let new_size = proposal.proposed_content.len() as u64;
 
     Ok(ApplyResult {
         applied: true,

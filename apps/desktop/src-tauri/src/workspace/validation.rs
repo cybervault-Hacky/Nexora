@@ -49,10 +49,10 @@ pub struct ValidationReport {
     pub overall: CheckStatus,
     pub checks: Vec<ValidationCheck>,
     pub summary: String,
-    pub durationMs: u64,
-    pub proposalId: String,
-    pub proposalPath: String,
-    pub generatedAt: u64,
+    pub duration_ms: u64,
+    pub proposal_id: String,
+    pub proposal_path: String,
+    pub generated_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -785,10 +785,10 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         overall,
         checks,
         summary,
-        durationMs: duration_ms,
-        proposalId: proposal.id.clone(),
-        proposalPath: proposal.path.clone(),
-        generatedAt: generated_at,
+        duration_ms,
+        proposal_id: proposal.id.clone(),
+        proposal_path: proposal.path.clone(),
+        generated_at,
     }
 }
 
