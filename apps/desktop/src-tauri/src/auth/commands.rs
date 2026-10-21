@@ -246,7 +246,7 @@ pub async fn auth_logout(state: State<'_, AuthState>) -> AuthResult<bool> {
 pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUser> {
     state.google_cancel.store(false, Ordering::SeqCst);
 
-    let pkce = generate_pkce();
+    let pkce = generate_pkce()?;
     let (listener, port) = bind_loopback()?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 

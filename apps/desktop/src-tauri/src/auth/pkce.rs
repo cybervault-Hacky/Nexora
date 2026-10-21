@@ -18,13 +18,11 @@ pub struct PkceChallenge {
 }
 
 /// Generates RFC 7636 PKCE S256 verifier, challenge, state, and nonce.
-pub fn generate_pkce() -> PkceChallenge {
+pub fn generate_pkce() -> Result<PkceChallenge, AuthError> {
+    // A predictable verifier, state, or nonce defeats PKCE entirely, so a
+    // missing random source aborts the flow instead of substituting constants.
     let mut verifier_bytes = [0u8; 32];
-    getrandom::getrandom(&mut verifier_bytes).unwrap_or_else(|_| {
-        for b in &mut verifier_bytes {
-            *b = 42;
-        }
-    });
+    getrandom::getrandom(&mut verifier_bytes).map_err(|_| no_random_source())?;
 
     let code_verifier = to_base64_url(&verifier_bytes);
 
@@ -34,27 +32,26 @@ pub fn generate_pkce() -> PkceChallenge {
     let code_challenge = to_base64_url(&challenge_digest);
 
     let mut state_bytes = [0u8; 16];
-    getrandom::getrandom(&mut state_bytes).unwrap_or_else(|_| {
-        for b in &mut state_bytes {
-            *b = 99;
-        }
-    });
+    getrandom::getrandom(&mut state_bytes).map_err(|_| no_random_source())?;
     let state = to_base64_url(&state_bytes);
 
     let mut nonce_bytes = [0u8; 16];
-    getrandom::getrandom(&mut nonce_bytes).unwrap_or_else(|_| {
-        for b in &mut nonce_bytes {
-            *b = 77;
-        }
-    });
+    getrandom::getrandom(&mut nonce_bytes).map_err(|_| no_random_source())?;
     let nonce = to_base64_url(&nonce_bytes);
 
-    PkceChallenge {
+    Ok(PkceChallenge {
         code_verifier,
         code_challenge,
         state,
         nonce,
-    }
+    })
+}
+
+fn no_random_source() -> AuthError {
+    AuthError::new(
+        "no_random_source",
+        "The operating system's random source is unavailable, so sign-in cannot start safely.",
+    )
 }
 
 /// URL-safe base64 encoding without padding per RFC 7636.
@@ -216,7 +213,7 @@ mod tests {
 
     #[test]
     fn pkce_generation_properties() {
-        let pkce = generate_pkce();
+        let pkce = generate_pkce().expect("the test host has a random source");
         assert!(pkce.code_verifier.len() >= 43 && pkce.code_verifier.len() <= 128);
         assert!(!pkce.code_challenge.is_empty());
         assert!(!pkce.state.is_empty());

@@ -40,7 +40,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     }
 
     // Rounded up: a trailing partial group still costs a token.
-    (ascii + 3) / 4 + wide * 2
+    ascii.div_ceil(4) + wide * 2
 }
 
 /// Conservative estimate for a whole conversation, including framing.

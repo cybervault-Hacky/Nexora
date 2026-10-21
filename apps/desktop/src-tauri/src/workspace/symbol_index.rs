@@ -32,26 +32,6 @@ pub enum SymbolKind {
     File,
 }
 
-impl SymbolKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Function => "function",
-            Self::Method => "method",
-            Self::Class => "class",
-            Self::Interface => "interface",
-            Self::Type => "type",
-            Self::Struct => "struct",
-            Self::Enum => "enum",
-            Self::Trait => "trait",
-            Self::Constant => "constant",
-            Self::Import => "import",
-            Self::Export => "export",
-            Self::Module => "module",
-            Self::File => "file",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Symbol {
@@ -101,19 +81,6 @@ fn now_millis() -> u64 {
 
 fn is_supported_ext(ext: &str) -> bool {
     matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "py")
-}
-
-fn language_for_path(path: &str) -> &'static str {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "rs" => "rust",
-        "ts" => "typescript",
-        "tsx" => "tsx",
-        "js" => "javascript",
-        "jsx" => "jsx",
-        "py" => "python",
-        _ => "unsupported",
-    }
 }
 
 // Helper to compute line number from byte offset

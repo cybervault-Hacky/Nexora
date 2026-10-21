@@ -140,7 +140,30 @@ jobs:
 
       - name: Lint with warnings denied
         working-directory: apps/desktop/src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --all-targets -- -D warnings 2>&1 | tee clippy.log
+          exit "${PIPESTATUS[0]}"
+
+      # The checks API keeps only a handful of raw compiler annotations, so the
+      # full set is re-emitted with the file and line attached. It never
+      # changes the job result.
+      - name: Report lint failures
+        if: failure()
+        working-directory: apps/desktop/src-tauri
+        shell: bash
+        run: |
+          if [ ! -f clippy.log ]; then
+            exit 0
+          fi
+
+          awk '/^error/ { message = $0 } /^[[:space:]]*--> / { print message " at " $2 }' clippy.log \
+            | sort -u | head -n 120 > lint-failures.txt
+
+          while IFS= read -r line; do
+            echo "::error title=Clippy::${line}"
+          done < lint-failures.txt
 
   windows:
     name: Windows — compile and Rust tests
