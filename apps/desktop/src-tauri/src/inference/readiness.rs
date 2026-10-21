@@ -307,14 +307,6 @@ impl ResourceEstimate {
     pub fn weights_display(&self) -> f64 {
         round2(self.weights_gib)
     }
-
-    pub fn kv_cache_display(&self) -> f64 {
-        round2(self.kv_cache_gib)
-    }
-
-    pub fn required_free_display(&self) -> f64 {
-        round2(self.peak_download_bytes as f64 / GIB)
-    }
 }
 
 /// The authoritative readiness result for one profile.

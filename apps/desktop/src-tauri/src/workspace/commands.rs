@@ -592,14 +592,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn temp_with_file(content: &str) -> (TempDir, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("src/main.rs");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, content).unwrap();
-        (dir, file)
-    }
-
     #[test]
     fn set_and_scan_current() {
         let dir = TempDir::new().unwrap();

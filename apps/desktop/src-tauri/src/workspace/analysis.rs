@@ -249,7 +249,7 @@ fn extract_imports_rs(content: &str, path: &str) -> Vec<(String, u32, String)> {
 }
 
 fn extract_imports_for_file(content: &str, path: &str) -> Vec<(String, u32, String)> {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
         "ts" | "tsx" | "js" | "jsx" => extract_imports_ts(content, path),
         "py" => extract_imports_py(content, path),
@@ -409,7 +409,7 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
             trimmed.trim_start_matches("crate::").replace("::", "/")
         } else if trimmed.starts_with("self::") || trimmed.starts_with("super::") {
             // relative to current file's module — approximate: use from_dir
-            let last = trimmed.split("::").last().unwrap_or("").to_string();
+            let last = trimmed.rsplit("::").next().unwrap_or("").to_string();
             last
         } else {
             // Unknown absolute — try as file path
@@ -475,7 +475,7 @@ fn resolve_spec(
     existing: &HashSet<String>,
 ) -> (Option<String>, Option<String>) {
     // Returns (resolved_path, note)
-    let ext = from_path.split('.').last().unwrap_or("").to_lowercase();
+    let ext = from_path.rsplit('.').next().unwrap_or("").to_lowercase();
     let resolved = match ext.as_str() {
         "ts" | "tsx" | "js" | "jsx" => resolve_ts_spec(spec, from_path, existing),
         "py" => resolve_py_spec(spec, existing),
@@ -529,7 +529,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
         if entry.size > MAX_PREVIEW_BYTES as u64 {
             continue;
         }
-        let ext = rel.split('.').last().unwrap_or("").to_lowercase();
+        let ext = rel.rsplit('.').next().unwrap_or("").to_lowercase();
         let is_supported = matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py");
         if !is_supported {
             // Track unsupported but still add to existing for resolution? For unsupported we don't need graph, but we still want existing_set for resolution target check?
@@ -559,7 +559,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
         .entries
         .iter()
         .filter(|e| {
-            let ext = e.path.split('.').last().unwrap_or("").to_lowercase();
+            let ext = e.path.rsplit('.').next().unwrap_or("").to_lowercase();
             !matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py") && e.kind == "file"
         })
         .count();
@@ -592,7 +592,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
                 continue;
             }
         };
-        if content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if content.len() as u64 > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -600,7 +600,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
             unsupported += 1;
             continue;
         }
-        total_bytes += content.as_bytes().len();
+        total_bytes += content.len();
         if total_bytes > MAX_ANALYSIS_BYTES {
             truncated = true;
             break;

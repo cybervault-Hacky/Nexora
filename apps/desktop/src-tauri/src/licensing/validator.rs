@@ -61,7 +61,7 @@ pub fn validate_licence_key(raw_key: &str) -> Result<ValidatedLicence, LicenceEr
     };
 
     let body_parts: Vec<&str> = body.split('_').collect();
-    let exp_part = body_parts.get(0).copied().unwrap_or("PERPETUAL");
+    let exp_part = body_parts.first().copied().unwrap_or("PERPETUAL");
     let licensee = body_parts
         .get(1)
         .copied()

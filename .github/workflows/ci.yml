@@ -158,12 +158,13 @@ jobs:
             exit 0
           fi
 
+          # One annotation, not one per failure: the checks API keeps only a
+          # handful of annotations, and a truncated list is worse than none.
           awk '/^error/ { message = $0 } /^[[:space:]]*--> / { print message " at " $2 }' clippy.log \
-            | sort -u | head -n 120 > lint-failures.txt
+            | sort -u | head -n 150 | paste -sd ';' - \
+            | tr -d '\r' | sed 's/::/ - /g' | sed 's/%/%25/g' | cut -c1-60000 > lint-summary.txt
 
-          while IFS= read -r line; do
-            echo "::error title=Clippy::${line}"
-          done < lint-failures.txt
+          echo "::error title=Clippy failures::$(cat lint-summary.txt)"
 
   windows:
     name: Windows — compile and Rust tests

@@ -267,7 +267,7 @@ fn extract_python(content: &str, path: &str, out: &mut Vec<Symbol>) {
 }
 
 pub fn extract_symbols_for_file(content: &str, path: &str) -> (Vec<Symbol>, bool) {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     let out = Vec::new();
     let supported = is_supported_ext(&ext);
     if !supported {
@@ -326,7 +326,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
         }
 
         // Check extension supported
-        let ext = rel_path.split('.').last().unwrap_or("").to_lowercase();
+        let ext = rel_path.rsplit('.').next().unwrap_or("").to_lowercase();
         if !is_supported_ext(&ext) {
             unsupported += 1;
             continue;

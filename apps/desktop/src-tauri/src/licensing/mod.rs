@@ -3,19 +3,14 @@ pub mod validator;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LicenceTier {
+    #[default]
     Community,
     Pro,
     Team,
     Enterprise,
-}
-
-impl Default for LicenceTier {
-    fn default() -> Self {
-        LicenceTier::Community
-    }
 }
 
 impl std::fmt::Display for LicenceTier {
