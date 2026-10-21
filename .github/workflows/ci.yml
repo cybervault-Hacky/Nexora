@@ -117,7 +117,26 @@ jobs:
       # failing test, and the two checks answer different questions.
       - name: Run Rust tests
         working-directory: apps/desktop/src-tauri
-        run: cargo test
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee rust-test.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Report failing tests
+        if: failure()
+        working-directory: apps/desktop/src-tauri
+        shell: bash
+        run: |
+          if [ ! -f rust-test.log ]; then
+            exit 0
+          fi
+
+          awk '/^failures:$/ { section = 1; next } /^test result:/ { section = 0 } section' rust-test.log | sed '/^[[:space:]]*$/d' > failing-tests.txt
+
+          while IFS= read -r name; do
+            echo "::error title=Rust test failed::${name}"
+          done < failing-tests.txt
 
       - name: Lint with warnings denied
         working-directory: apps/desktop/src-tauri
@@ -185,8 +204,7 @@ jobs:
             exit 0
           fi
 
-          awk '/^failures:$/ { section = 1; next } /^test result:/ { section = 0 } section' \
-            windows-test.log | sed '/^[[:space:]]*$/d' > failing-tests.txt
+          awk '/^failures:$/ { section = 1; next } /^test result:/ { section = 0 } section' windows-test.log | sed '/^[[:space:]]*$/d' > failing-tests.txt
 
           while IFS= read -r name; do
             echo "::error title=Rust test failed on Windows::${name}"

@@ -316,9 +316,14 @@ mod tests {
         dir
     }
 
+    /// Mirrors `build_plan`: the folder is canonicalised before entries are
+    /// resolved. Without that, Windows' short 8.3 temporary path and the long
+    /// form `canonicalize` returns for the file do not share a prefix.
     fn select(root: &Path, paths: &[&str]) -> ExportResult<ExportPlan> {
         let owned: Vec<String> = paths.iter().map(|path| (*path).to_string()).collect();
-        plan_selection(root, "project".to_string(), &owned)
+        let canonical_root = fs::canonicalize(root)
+            .map_err(|_| ExportError::not_found("The project folder is not available."))?;
+        plan_selection(&canonical_root, "project".to_string(), &owned)
     }
 
     #[test]
