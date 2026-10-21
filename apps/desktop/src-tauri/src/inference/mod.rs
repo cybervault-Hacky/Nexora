@@ -392,6 +392,19 @@ impl InferenceState {
             .and_then(|slot| slot.as_ref().and_then(|failure| failure.profile_id))
     }
 
+    /// The recorded reason the last load or runtime attempt failed.
+    ///
+    /// A failure can happen before a child process exists (a missing file, an
+    /// unusable runtime path), so the supervisor has no stderr tail to report.
+    /// Without this the panel would fall back to "configured but stopped" and
+    /// hide the reason entirely.
+    pub fn failure_message(&self) -> Option<String> {
+        self.last_failure
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|failure| failure.message.clone()))
+    }
+
     /// Reaps a crashed engine and drops the "loaded" mark that is no longer
     /// true.
     ///
@@ -505,6 +518,11 @@ impl InferenceState {
             .lock()
             .map(|slot| slot.is_some())
             .unwrap_or(false);
+
+        // The supervisor only knows about a child that started. A load that
+        // failed before spawning still has a recorded reason; report it rather
+        // than pretending the engine is merely stopped.
+        let last_error = last_error.or_else(|| self.failure_message());
 
         let healthy = match (running, port) {
             (true, Some(port)) => process::health_ok(port).await,

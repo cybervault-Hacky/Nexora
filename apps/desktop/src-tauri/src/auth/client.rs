@@ -53,18 +53,6 @@ impl AuthApiClient {
         Self { client, base_url }
     }
 
-    pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
-
-        Self {
-            client,
-            base_url: base_url.into(),
-        }
-    }
-
     fn url(&self, path: &str) -> String {
         format!("{}/v1/auth{}", self.base_url.trim_end_matches('/'), path)
     }

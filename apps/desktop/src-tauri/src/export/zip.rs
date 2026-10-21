@@ -90,6 +90,9 @@ fn crc_update(mut crc: u32, bytes: &[u8]) -> u32 {
     crc
 }
 
+/// Whole-buffer CRC-32, used to check the writer against published vectors.
+/// The writer itself folds each buffer through `crc_update` directly.
+#[cfg(test)]
 fn crc32(bytes: &[u8]) -> u32 {
     crc_update(0xFFFF_FFFF, bytes) ^ 0xFFFF_FFFF
 }

@@ -51,7 +51,16 @@ pub struct ModelSource {
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum ArtifactState {
     Approved(ModelSource),
-    Pending { note: &'static str },
+    /// No approved artefact is recorded.
+    ///
+    /// Both shipped profiles are approved, so nothing constructs this today;
+    /// it stays part of the state machine (and of the serialised contract the
+    /// UI switches on) so a profile can never be treated as installable
+    /// without a length and digest to check it against.
+    #[allow(dead_code)]
+    Pending {
+        note: &'static str,
+    },
 }
 
 impl ArtifactState {

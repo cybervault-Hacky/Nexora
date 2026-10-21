@@ -295,6 +295,9 @@ pub struct ResourceEstimate {
     pub context_size: u32,
 }
 
+// Rounded-view helpers. Production messages format the raw figures with
+// `{:.1}`/`{:.2}` instead, so these exist only for the rounding tests.
+#[cfg(test)]
 impl ResourceEstimate {
     /// Memory this profile needs in total, rounded for display only.
     pub fn estimated_memory_display(&self) -> f64 {
@@ -337,6 +340,10 @@ pub fn bytes_to_gib(bytes: u64) -> f64 {
 }
 
 /// Converts GiB to bytes, saturating instead of overflowing.
+///
+/// Only the test helpers build disk figures from GiB; production reads byte
+/// counts straight from the filesystem and never converts backwards.
+#[cfg(test)]
 pub fn gib_to_bytes(gib: f64) -> u64 {
     if !gib.is_finite() || gib <= 0.0 {
         return 0;
@@ -351,6 +358,7 @@ pub fn gib_to_bytes(gib: f64) -> u64 {
     }
 }
 
+#[cfg(test)]
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
