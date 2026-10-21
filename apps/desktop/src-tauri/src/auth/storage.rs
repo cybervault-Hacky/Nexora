@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use super::AuthError;
+use std::sync::Mutex;
 
 const KEYRING_SERVICE: &str = "com.nexora.desktop";
 const KEYRING_USER: &str = "session_token";
@@ -22,14 +22,18 @@ pub fn save_session_token(token: &str) -> Result<(), AuthError> {
                     if let Ok(mut mem) = MEMORY_STORE.lock() {
                         *mem = Some(token.to_string());
                     }
-                    return Err(AuthError::storage(format!("Failed to save credential to Windows Credential Manager: {e}")));
+                    return Err(AuthError::storage(format!(
+                        "Failed to save credential to Windows Credential Manager: {e}"
+                    )));
                 }
             }
             Err(e) => {
                 if let Ok(mut mem) = MEMORY_STORE.lock() {
                     *mem = Some(token.to_string());
                 }
-                return Err(AuthError::storage(format!("Failed to access Windows Credential Manager entry: {e}")));
+                return Err(AuthError::storage(format!(
+                    "Failed to access Windows Credential Manager entry: {e}"
+                )));
             }
         }
     }
@@ -71,7 +75,9 @@ pub fn delete_session_token() -> Result<(), AuthError> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-            let _ = entry.delete_password();
+            // keyring 3.x renamed `delete_password` to `delete_credential`. A
+            // missing entry is not an error: logout must stay idempotent.
+            let _ = entry.delete_credential();
         }
     }
 

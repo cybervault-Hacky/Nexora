@@ -55,7 +55,7 @@ export function LicensingPage() {
       <PageHeader
         eyebrow="Plans & Monetization"
         title="Developer Licensing"
-        copy="Nexora is built on an offline-first sovereign foundation. Local model inference, code intelligence, and patch generation remain completely free forever on the Community Edition without requiring any licence."
+        copy="Nexora is built on an offline-first sovereign foundation. Local model inference, code intelligence, and patch generation are free on the Community Edition without a licence. Local generations share one daily free allowance, enforced on this machine."
       />
 
       <div className="page-stack">
@@ -121,8 +121,9 @@ export function LicensingPage() {
                   <span>
                     <span className="settings-row__label">Community Sovereignty Guarantee</span>
                     <span className="settings-row__hint">
-                      Your workspace is running in Community mode with 100% full local model execution,
-                      patch generation, and code analysis. No feature gating, telemetry, or expiration.
+                      Your workspace runs fully offline with local model execution, patch generation,
+                      and code analysis. No telemetry, no account and no expiration. Local generations
+                      share the daily free allowance shown in the chat composer.
                     </span>
                   </span>
                   <span className="badge badge--local">Offline Sovereign</span>

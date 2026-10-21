@@ -24,10 +24,14 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel }));
 
 import {
   cancelGeneration,
+  cancelModelDownload,
+  fetchModelProfile,
   fetchStatus,
   generate,
+  startModelDownload,
   toInferenceError,
   validateModel,
+  verifyModel,
 } from "./inference";
 import { isDesktopShell, isEngineBusy, isEngineReady, previewStatus } from "./ipc";
 
@@ -145,6 +149,30 @@ describe("outside the desktop shell", () => {
     await expect(cancelGeneration("a")).resolves.toBe(false);
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it("cannot start a model download from a browser preview", async () => {
+    await expect(startModelDownload(null, "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", () => {})).rejects.toEqual({
+      code: "desktop_only",
+      message: expect.stringContaining("desktop app"),
+    });
+
+    await expect(cancelModelDownload()).resolves.toBe(false);
+    await expect(verifyModel("C:/models/a.gguf")).rejects.toEqual({
+      code: "desktop_only",
+      message: expect.stringContaining("desktop app"),
+    });
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("cannot read model metadata from a browser preview", async () => {
+    await expect(fetchModelProfile()).rejects.toEqual({
+      code: "desktop_only",
+      message: expect.stringContaining("desktop app"),
+    });
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
 
 describe("inside the desktop shell", () => {
@@ -241,6 +269,123 @@ describe("inside the desktop shell", () => {
     invoke.mockRejectedValue(new Error("gone"));
 
     await expect(cancelGeneration("req-9")).resolves.toBe(false);
+  });
+
+  it("reads the approved profile without sending an identifier", async () => {
+    const profile = {
+      id: "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m",
+      displayName: "Nexora Mini",
+      publisher: "Qwen team, Alibaba Group",
+      upstreamModel: "Qwen/Qwen2.5-Coder-7B-Instruct",
+      upstreamRevision: "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      format: "GGUF",
+      quantization: "Q4_K_M",
+      licence: { id: "Apache-2.0", reference: "https://example.invalid/LICENSE" },
+      source: {
+        repository: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+        revision: "13fb94bfda8c8cf22497dc57b78f391a9acb426a",
+        fileName: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        sizeBytes: 4_683_073_536,
+        sha256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
+      },
+      context: { recommended: 32_768, documentedMax: 32_768 },
+      compatibilityNotes: ["note"],
+      locallyVerified: false,
+    };
+
+    invoke.mockResolvedValue(profile);
+
+    await expect(fetchModelProfile()).resolves.toEqual(profile);
+    expect(invoke).toHaveBeenCalledWith("get_model_profile", undefined);
+  });
+
+  it("normalises a rejected profile lookup", async () => {
+    invoke.mockRejectedValue({ code: "unknown_model", message: "No model profile is registered." });
+
+    await expect(fetchModelProfile()).rejects.toEqual({
+      code: "unknown_model",
+      message: "No model profile is registered.",
+    });
+  });
+
+  it("starts a download with the folder and a progress channel", async () => {
+    const outcome = {
+      path: "C:/models/m.gguf",
+      fileName: "m.gguf",
+      sizeBytes: 10,
+      sha256: "abc",
+      cancelled: false,
+    };
+
+    invoke.mockImplementation(
+      async (
+        _command: string,
+        args: { onEvent: { onmessage: ((event: unknown) => void) | null } },
+      ) => {
+        args.onEvent.onmessage?.({ type: "progress", received: 4, total: 10 });
+        return outcome;
+      },
+    );
+
+    const events: unknown[] = [];
+
+    await expect(
+      startModelDownload(null, "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", (event: unknown) => events.push(event)),
+    ).resolves.toEqual(outcome);
+
+    const [command, args] = invoke.mock.calls[0] as [string, Record<string, unknown>];
+
+    expect(command).toBe("start_model_download");
+    expect(Object.keys(args).sort()).toEqual(["onEvent", "profileId", "targetDir"]);
+    expect(args.targetDir).toBeNull();
+    expect(args.onEvent).toBeInstanceOf(Channel);
+    expect(events).toEqual([{ type: "progress", received: 4, total: 10 }]);
+  });
+
+  it("sends an explicit download folder when one is chosen", async () => {
+    invoke.mockResolvedValue({
+      path: null,
+      fileName: "m.gguf",
+      sizeBytes: 0,
+      sha256: "",
+      cancelled: true,
+    });
+
+    await startModelDownload("D:/Models", "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", () => {});
+
+    expect(invoke).toHaveBeenCalledWith("start_model_download", {
+      targetDir: "D:/Models",
+      profileId: "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m",
+      onEvent: expect.anything(),
+    });
+  });
+
+  it("reports a failed cancel as false and a stopped download as cancelled", async () => {
+    invoke.mockRejectedValue(new Error("gone"));
+
+    await expect(cancelModelDownload()).resolves.toBe(false);
+  });
+
+  it("verifies a chosen file through the registry command", async () => {
+    const report = {
+      path: "C:/models/a.gguf",
+      fileName: "a.gguf",
+      profileId: "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m",
+      sizeBytes: 12,
+      sizeMatches: false,
+      sha256: "abc",
+      expectedSizeBytes: 4_683_073_536,
+      expectedSha256: "509287f7",
+      digestMatches: false,
+    };
+
+    invoke.mockResolvedValue(report);
+
+    await expect(verifyModel("C:/models/a.gguf")).resolves.toEqual(report);
+    expect(invoke).toHaveBeenCalledWith("verify_model", {
+      path: "C:/models/a.gguf",
+      profileId: null,
+    });
   });
 
   it("passes the model path and context size to validation", async () => {

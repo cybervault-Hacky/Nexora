@@ -38,10 +38,18 @@ export type PatchGenerationState =
 export interface UsePatchGenerationOptions {
   workspacePath: string | null;
   engineStatus: AppStatus | null;
+  /**
+   * The profile selected in the core. Sent with the request so a patch
+   * prepared under one model cannot be answered by another; the core still
+   * decides which model actually runs.
+   */
+  profileId?: string | null;
 }
 
-export function usePatchGeneration({ workspacePath, engineStatus }: UsePatchGenerationOptions) {
+export function usePatchGeneration({ workspacePath, engineStatus, profileId }: UsePatchGenerationOptions) {
   const [state, setState] = useState<PatchGenerationState>({ status: "idle" });
+  const profileRef = useRef<string | null>(profileId ?? null);
+  profileRef.current = profileId ?? null;
   const requestIdRef = useRef<string | null>(null);
   const generatingRef = useRef(false);
 
@@ -205,6 +213,7 @@ export function usePatchGeneration({ workspacePath, engineStatus }: UsePatchGene
           messages,
           maxTokens: 4096,
           temperature: 0.2,
+          profileId: profileRef.current,
         },
         (event) => {
           if (event.requestId !== requestId) return;

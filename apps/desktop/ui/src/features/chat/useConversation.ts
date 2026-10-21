@@ -56,6 +56,8 @@ export interface ConversationController {
 interface Options {
   /** Called whenever a generation settles, so the caller can refresh status. */
   onSettled?: () => void;
+  /** The profile selected in the core; every request names it. */
+  profileId?: string | null;
 }
 
 /**
@@ -67,7 +69,13 @@ interface Options {
  *   never land in a conversation the user has already left.
  * - Nothing is persisted.
  */
-export function useConversation({ onSettled }: Options = {}): ConversationController {
+export function useConversation({
+  onSettled,
+  profileId = null,
+}: Options = {}): ConversationController {
+  // Read at send time, so a message carries the profile that will answer it.
+  const profileRef = useRef<string | null>(profileId);
+  profileRef.current = profileId;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraftState] = useState("");
   const [error, setError] = useState<ComposerError | null>(null);
@@ -227,6 +235,7 @@ export function useConversation({ onSettled }: Options = {}): ConversationContro
             messages: turns,
             maxTokens: 1024,
             temperature: 0.2,
+            profileId: profileRef.current,
           },
           (event) => {
             if (event.type !== "delta" || !event.text) {

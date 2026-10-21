@@ -10,16 +10,32 @@ vi.mock("../lib/inference", () => ({
     availableRamGib: 22.5,
     platform: "windows",
   }),
+  fetchModelProfile: vi.fn().mockResolvedValue(null),
+  fetchModelReadiness: vi.fn().mockResolvedValue(null),
+  fetchDiskSpace: vi.fn().mockResolvedValue({
+    freeBytes: 21 * 1024 ** 3,
+    totalBytes: 64 * 1024 ** 3,
+    unavailableReason: null,
+  }),
   probeRuntime: vi.fn(),
   validateModel: vi.fn(),
   saveSettings: vi.fn(),
   loadModel: vi.fn(),
+  startModelDownload: vi.fn(),
+  cancelModelDownload: vi.fn().mockResolvedValue(false),
+  verifyModel: vi.fn(),
 }));
 
-import { fetchSystemInfo } from "../lib/inference";
+import { fetchDiskSpace, fetchModelProfile, fetchSystemInfo } from "../lib/inference";
 
 describe("Phase 28 — ModelManagerPage component", () => {
   beforeEach(() => {
+    vi.mocked(fetchModelProfile).mockRejectedValue(new Error("profile unavailable"));
+    vi.mocked(fetchDiskSpace).mockResolvedValue({
+      freeBytes: 21 * 1024 ** 3,
+      totalBytes: 64 * 1024 ** 3,
+      unavailableReason: null,
+    });
     vi.mocked(fetchSystemInfo).mockResolvedValue({
       totalRamGib: 32,
       availableRamGib: 22.5,

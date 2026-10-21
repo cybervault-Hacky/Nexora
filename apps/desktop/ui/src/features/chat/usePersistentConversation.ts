@@ -16,7 +16,18 @@ function summary(c: PersistedConversation): ConversationSummary {
     messageCount: c.messages.length, preview: [...c.messages].reverse().find(m => m.content.trim())?.content.split("\n")[0]?.slice(0,120) ?? "" };
 }
 
-export function usePersistentConversation({ onSettled }: { onSettled?: () => void } = {}) {
+export function usePersistentConversation({
+  onSettled,
+  profileId,
+}: {
+  onSettled?: () => void;
+  /**
+   * The profile selected in the core right now. Read through a ref at send
+   * time: a message must be labelled with the model that will answer it, not
+   * with whatever was selected when the component mounted.
+   */
+  profileId?: string | null;
+} = {}) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState("New conversation");
@@ -44,6 +55,11 @@ export function usePersistentConversation({ onSettled }: { onSettled?: () => voi
   const pending = useRef<PersistedConversation | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastWrite = useRef(Promise.resolve());
+  const profileRef = useRef<string | null>(profileId ?? null);
+
+  useEffect(() => {
+    profileRef.current = profileId ?? null;
+  }, [profileId]);
 
   const updateSummary = useCallback((c: PersistedConversation) => {
     if (!mountedRef.current) return;
@@ -349,6 +365,7 @@ export function usePersistentConversation({ onSettled }: { onSettled?: () => voi
             messages: turns,
             maxTokens: 1024,
             temperature: 0.2,
+            profileId: profileRef.current,
           },
           (event) => {
             if (event.type !== "delta" || !event.text) {

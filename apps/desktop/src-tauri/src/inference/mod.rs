@@ -4,12 +4,17 @@
 //! module accepts commands, sizes, or paths from the model, and no model output
 //! is ever executed.
 
+pub mod acquisition;
+pub mod budget;
 pub mod client;
 pub mod commands;
 pub mod error;
 pub mod hardware;
+pub mod loading;
 pub mod models;
 pub mod process;
+pub mod readiness;
+pub mod registry;
 pub mod settings;
 pub mod sse;
 
@@ -44,6 +49,10 @@ pub struct GenerateRequest {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// The profile the UI prepared this message under. When present it must be
+    /// the selected profile; the core never trusts it instead of its settings.
+    #[serde(default)]
+    pub profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,10 +187,61 @@ pub struct ActiveGeneration {
     pub cancelled: Arc<AtomicBool>,
 }
 
+/// The model the running engine actually loaded.
+///
+/// Recorded at `load_model` time from the chosen path, so a request can be
+/// refused when it would otherwise be answered by the wrong model. This is a
+/// name-level attribution, not a proof about the bytes on disk.
+#[derive(Debug, Clone)]
+pub struct LoadedModel {
+    /// The registered profile the file name belongs to, when it matches one.
+    pub profile_id: Option<&'static str>,
+    pub path: String,
+    /// The context window the engine was actually started with. The settings
+    /// can change while an engine is running; prompts must fit what is running,
+    /// not what is configured.
+    pub context_size: u32,
+}
+
+/// A load or runtime failure, attributed to a profile when it is known.
+///
+/// Kept separately from `loaded`: a failed load leaves nothing loaded, but the
+/// row still needs to explain itself rather than silently offering the same
+/// file again.
+#[derive(Debug, Clone)]
+pub struct LoadFailure {
+    pub profile_id: Option<&'static str>,
+    pub message: String,
+}
+
+/// A download that is writing to disk right now.
+///
+/// Carries the profile id so a second profile's row cannot be shown as
+/// "downloading" just because some other file is in flight.
+pub struct ActiveDownload {
+    pub profile_id: &'static str,
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 pub struct InferenceState {
     pub supervisor: Mutex<process::Supervisor>,
     pub settings: Mutex<SettingsStore>,
     pub active: Mutex<Option<ActiveGeneration>>,
+    /// What the engine last loaded. Cleared on unload and on a failed load.
+    pub loaded: Mutex<Option<LoadedModel>>,
+    /// Digest results for this session, per profile.
+    pub verified: Mutex<readiness::VerificationLedger>,
+    /// The last load or runtime failure, for rows and the engine panel.
+    pub last_failure: Mutex<Option<LoadFailure>>,
+    /// The profile a load is currently starting, before the engine confirms.
+    ///
+    /// The outer `Option` is "a load is in flight"; the inner one is the
+    /// profile, which is unknown for a GGUF no profile publishes.
+    pub loading: Mutex<Option<Option<&'static str>>>,
+    /// Set while a model download runs, so a second one is refused and the
+    /// first can be cancelled. `false` is never stored; the flag is created
+    /// once per download.
+    pub download: Mutex<Option<ActiveDownload>>,
     pub config_dir: PathBuf,
 }
 
@@ -245,8 +305,165 @@ impl InferenceState {
             supervisor: Mutex::new(process::Supervisor::new()),
             settings: Mutex::new(SettingsStore::load(&config_dir)),
             active: Mutex::new(None),
+            loaded: Mutex::new(None),
+            verified: Mutex::new(readiness::VerificationLedger::default()),
+            last_failure: Mutex::new(None),
+            loading: Mutex::new(None),
+            download: Mutex::new(None),
             config_dir,
         }
+    }
+
+    /// The context window of the running engine, when one is recorded.
+    pub fn loaded_context(&self) -> Option<u32> {
+        self.loaded
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|model| model.context_size))
+    }
+
+    /// Records the model the engine is now running.
+    pub fn set_loaded(&self, model: LoadedModel) {
+        if let Ok(mut slot) = self.loaded.lock() {
+            *slot = Some(model);
+        }
+    }
+
+    /// Claims the single load slot, returning false when a load is already in
+    /// flight.
+    ///
+    /// Check-and-set happen under one lock, so two clicks cannot start two
+    /// engine processes. Readiness uses the marker to show "Loading" instead of
+    /// "Ready to load". It is not evidence of success: only `set_loaded`
+    /// follows a health check.
+    pub fn begin_loading(&self, profile_id: Option<&'static str>) -> bool {
+        match self.loading.lock() {
+            Ok(mut slot) if slot.is_none() => {
+                *slot = Some(profile_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Clears the in-flight load marker, on success and failure alike.
+    pub fn finish_loading(&self) {
+        if let Ok(mut slot) = self.loading.lock() {
+            *slot = None;
+        }
+    }
+
+    /// Whether any load is in flight, including one for a custom GGUF whose
+    /// profile is unknown.
+    pub fn load_in_flight(&self) -> bool {
+        self.loading
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false)
+    }
+
+    /// The profile whose load is in flight, when one is.
+    pub fn loading_profile_id(&self) -> Option<&'static str> {
+        self.loading.lock().ok().and_then(|slot| *slot).flatten()
+    }
+
+    /// Records why a load or runtime attempt failed, attributed when known.
+    pub fn record_failure(&self, profile_id: Option<&'static str>, message: impl Into<String>) {
+        if let Ok(mut slot) = self.last_failure.lock() {
+            *slot = Some(LoadFailure {
+                profile_id,
+                message: message.into(),
+            });
+        }
+    }
+
+    /// Clears the recorded failure after a load that actually succeeded.
+    pub fn clear_failure(&self) {
+        if let Ok(mut slot) = self.last_failure.lock() {
+            *slot = None;
+        }
+    }
+
+    /// The profile the last failure was attributed to, when it was.
+    pub fn failed_profile_id(&self) -> Option<&'static str> {
+        self.last_failure
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(|failure| failure.profile_id))
+    }
+
+    /// Reaps a crashed engine and drops the "loaded" mark that is no longer
+    /// true.
+    ///
+    /// Returns true when something was actually cleared. The supervisor keeps
+    /// the reason the child died, which is recorded against the profile that
+    /// was loaded so readiness reports a runtime failure instead of pretending
+    /// the file is merely ready to load again.
+    pub fn reconcile_engine(&self) -> bool {
+        let reason = {
+            let mut supervisor = match self.supervisor.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            if supervisor.is_running() {
+                return false;
+            }
+
+            supervisor.last_error.clone()
+        };
+
+        let previous = self.loaded.lock().ok().and_then(|mut slot| slot.take());
+
+        let Some(model) = previous else {
+            return false;
+        };
+
+        self.record_failure(
+            model.profile_id,
+            reason.unwrap_or_else(|| "The local engine stopped unexpectedly.".to_string()),
+        );
+
+        true
+    }
+
+    /// Forgets the loaded model after an unload or a failed load.
+    pub fn clear_loaded(&self) {
+        if let Ok(mut slot) = self.loaded.lock() {
+            *slot = None;
+        }
+    }
+
+    /// The registered profile id the engine is running, when it is known.
+    pub fn loaded_profile_id(&self) -> Option<&'static str> {
+        self.loaded
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(|model| model.profile_id))
+    }
+
+    /// Digest status for a profile **at one path**, as `(verified, failed)`.
+    ///
+    /// Path-aware on purpose: confirming a copy in one folder must not bless a
+    /// different file of the same name somewhere else.
+    pub fn verification_status(
+        &self,
+        profile_id: &str,
+        path: Option<&std::path::Path>,
+    ) -> (bool, bool) {
+        let Some(path) = path else {
+            return (false, false);
+        };
+
+        self.verified
+            .lock()
+            .map(|ledger| {
+                (
+                    ledger.is_verified(profile_id, path),
+                    ledger.has_failed(profile_id),
+                )
+            })
+            .unwrap_or((false, false))
     }
 
     pub fn settings_snapshot(&self) -> Settings {
@@ -262,6 +479,10 @@ impl InferenceState {
     /// "ready", and a configured-but-stopped engine is distinct from an
     /// unconfigured one.
     pub async fn status(&self, version: String) -> AppStatus {
+        // A child that died since the last read makes the "loaded" mark stale.
+        // Reap it here, before anything reports what is running.
+        self.reconcile_engine();
+
         let settings = self.settings_snapshot();
 
         let (running, port, last_error) = {
@@ -299,20 +520,38 @@ impl InferenceState {
             last_error.as_deref(),
         );
 
+        // While an engine is recorded as loaded, the panel must name the file
+        // that engine is actually running. `settings.model_path` can be edited
+        // without a reload, and reporting it here would claim the running
+        // process had changed model. Once the engine stops, the configured path
+        // is the honest answer again.
+        let running_path = self
+            .loaded
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|model| model.path.clone()));
+
         AppStatus {
             name: "Nexora",
             version,
             engine: EngineStatus {
                 state,
                 runtime: settings.runtime_path.clone(),
-                model: settings.model_path.as_ref().and_then(|path| {
-                    std::path::Path::new(path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(str::to_string)
-                }),
+                // Owned up front: `settings.model_path` is moved into this
+                // payload a few lines below, and a borrow here would fight it.
+                model: running_path
+                    .or_else(|| settings.model_path.clone())
+                    .as_deref()
+                    .and_then(|path| {
+                        std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_string)
+                    }),
                 detail,
             },
+            // Configuration, not the running engine: the setup form prefills
+            // from these and must not be rewritten under the user.
             model_path: settings.model_path,
             runtime_path: settings.runtime_path,
             context_size: settings.context_size,

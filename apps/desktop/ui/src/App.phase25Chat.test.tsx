@@ -30,6 +30,7 @@ vi.mock("./lib/inference", async (importOriginal) => {
 });
 
 let storedConversations: import("./lib/history").PersistedConversation[] = [];
+let usageStatus = makeUsage();
 
 vi.mock("./lib/history", () => ({
   listConversations: async () =>
@@ -79,7 +80,7 @@ vi.mock("./lib/history", () => ({
 import App from "./App";
 import { cancelGeneration, fetchStatus, fetchSystemInfo, generate } from "./lib/inference";
 import type { GenerationEvent, GenerationOutcome } from "./lib/ipc";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -143,12 +144,15 @@ beforeEach(() => {
   generateMock.mockReset();
   cancelMock.mockReset();
   cancelMock.mockResolvedValue(true);
+  usageStatus = makeUsage();
 
   markDesktop(true);
 
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(usageStatus);
       case "list_conversations":
         return Promise.resolve(
           storedConversations.map((c) => ({
@@ -216,6 +220,54 @@ describe("Phase 25 — AI Chat Integration", () => {
       expect(screen.queryByText("Generating")).toBeNull();
     });
     expect(within(messagesLog).getByText(/fn add\(a: i32, b: i32\)/)).toBeTruthy();
+
+    // The allowance is re-read from the core once the generation settles, so the
+    // meter reflects what was actually charged rather than a stale guess.
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === "get_usage_status").length,
+      ).toBeGreaterThan(1),
+    );
+  });
+
+  it("blocks sending and explains the exhausted daily allowance", async () => {
+    usageStatus = makeUsage({ used: 50, exhausted: true, remaining: 0 });
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const input = await screen.findByRole("textbox", { name: "Message Nexora" });
+
+    expect(screen.getByText("50 of 50 used")).toBeTruthy();
+    expect(screen.getAllByText(/Daily free allowance reached/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Load a model to send/i)).toBeNull();
+
+    const send = screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    await user.type(input, "hello{Enter}");
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/upgrade|buy|purchase|subscribe/i)).toBeNull();
+  });
+
+  it("reports a backend refusal at exhaustion instead of a fake reply", async () => {
+    const user = userEvent.setup();
+
+    generateMock.mockRejectedValue({
+      code: "quota_exhausted",
+      message:
+        "The daily free allowance is used up (50 of 50 generations today). It resets at 2026-10-21 00:00 UTC.",
+    });
+
+    render(<App />);
+
+    const input = await screen.findByRole("textbox", { name: "Message Nexora" });
+    await user.type(input, "hello{Enter}");
+
+    expect(await screen.findByText(/daily free allowance is used up/i)).toBeTruthy();
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Generating")).toBeNull();
   });
 
   it("supports stopping active generation and preserving partial output", async () => {

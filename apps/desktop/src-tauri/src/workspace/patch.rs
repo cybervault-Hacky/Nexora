@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -7,8 +7,8 @@ use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 
 use super::scanner::{
-    is_sensitive_file, validate_relative_path, WorkspaceError, WorkspaceResult, MAX_PREVIEW_BYTES,
-    MAX_PATH_CHARS,
+    is_sensitive_file, validate_relative_path, WorkspaceError, WorkspaceResult, MAX_PATH_CHARS,
+    MAX_PREVIEW_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,9 @@ fn validate_proposed_size(content: &str) -> WorkspaceResult<()> {
         )));
     }
     if content.chars().count() > 200_000 {
-        return Err(WorkspaceError::too_large("Proposed content exceeds character limit."));
+        return Err(WorkspaceError::too_large(
+            "Proposed content exceeds character limit.",
+        ));
     }
     Ok(())
 }
@@ -160,7 +162,9 @@ pub fn create_patch_proposal(
     // Validate proposed content size early
     validate_proposed_size(proposed_content)?;
     if is_binary_content(proposed_content) {
-        return Err(WorkspaceError::binary("Proposed content contains binary data."));
+        return Err(WorkspaceError::binary(
+            "Proposed content contains binary data.",
+        ));
     }
 
     // Canonicalize root
@@ -168,16 +172,20 @@ pub fn create_patch_proposal(
 
     // Join and canonicalize target
     let joined = canonical_root.join(relative_path);
-    let canonical_file = fs::canonicalize(&joined).map_err(|_| WorkspaceError::not_found("File not found or not accessible."))?;
+    let canonical_file = fs::canonicalize(&joined)
+        .map_err(|_| WorkspaceError::not_found("File not found or not accessible."))?;
 
     if !canonical_file.starts_with(&canonical_root) {
         return Err(WorkspaceError::forbidden("File escapes workspace."));
     }
 
     // Must be existing regular file
-    let meta = fs::metadata(&canonical_file).map_err(|_| WorkspaceError::not_found("File not accessible."))?;
+    let meta = fs::metadata(&canonical_file)
+        .map_err(|_| WorkspaceError::not_found("File not accessible."))?;
     if meta.is_dir() {
-        return Err(WorkspaceError::invalid_request("Path is a directory, not a file."));
+        return Err(WorkspaceError::invalid_request(
+            "Path is a directory, not a file.",
+        ));
     }
 
     // Sensitive check
@@ -188,23 +196,33 @@ pub fn create_patch_proposal(
     }
     let lower_rel = relative_path.to_ascii_lowercase();
     if lower_rel == ".env" || lower_rel.starts_with(".env.") || lower_rel.contains("/.env") {
-        return Err(WorkspaceError::secret_excluded("Environment files are excluded."));
+        return Err(WorkspaceError::secret_excluded(
+            "Environment files are excluded.",
+        ));
     }
 
     // Size check for original file
     if meta.len() > MAX_PREVIEW_BYTES {
-        return Err(WorkspaceError::too_large("Original file too large for patching."));
+        return Err(WorkspaceError::too_large(
+            "Original file too large for patching.",
+        ));
     }
 
     // Read original
-    let original_bytes = fs::read(&canonical_file).map_err(|_| WorkspaceError::storage("Could not read original file."))?;
+    let original_bytes = fs::read(&canonical_file)
+        .map_err(|_| WorkspaceError::storage("Could not read original file."))?;
     if original_bytes.len() as u64 > MAX_PREVIEW_BYTES {
-        return Err(WorkspaceError::too_large("Original file exceeds preview limit."));
+        return Err(WorkspaceError::too_large(
+            "Original file exceeds preview limit.",
+        ));
     }
     if original_bytes.contains(&0) {
-        return Err(WorkspaceError::binary("Original file is binary and cannot be patched."));
+        return Err(WorkspaceError::binary(
+            "Original file is binary and cannot be patched.",
+        ));
     }
-    let original_content = String::from_utf8(original_bytes).map_err(|_| WorkspaceError::binary("Original file is not valid UTF-8."))?;
+    let original_content = String::from_utf8(original_bytes)
+        .map_err(|_| WorkspaceError::binary("Original file is not valid UTF-8."))?;
 
     // Compute hashes
     let original_hash = hash_content(&original_content);
@@ -224,7 +242,10 @@ pub fn create_patch_proposal(
     })
 }
 
-pub fn validate_patch_proposal(root: &Path, proposal: &PatchProposal) -> WorkspaceResult<PatchValidation> {
+pub fn validate_patch_proposal(
+    root: &Path,
+    proposal: &PatchProposal,
+) -> WorkspaceResult<PatchValidation> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -319,7 +340,8 @@ pub fn validate_patch_proposal(root: &Path, proposal: &PatchProposal) -> Workspa
             if let Ok(current_str) = String::from_utf8(current_bytes) {
                 let current_hash = hash_content(&current_str);
                 if current_hash != proposal.original_hash {
-                    warnings.push("File has changed since proposal was created (stale).".to_string());
+                    warnings
+                        .push("File has changed since proposal was created (stale).".to_string());
                 }
             }
         }
@@ -327,7 +349,8 @@ pub fn validate_patch_proposal(root: &Path, proposal: &PatchProposal) -> Workspa
 
     let diff = diff_summary(&proposal.original_content, &proposal.proposed_content);
     if proposal.original_content == proposal.proposed_content {
-        warnings.push("No changes detected — original and proposed content are identical.".to_string());
+        warnings
+            .push("No changes detected — original and proposed content are identical.".to_string());
     }
 
     let ok = errors.is_empty();
@@ -357,43 +380,56 @@ pub fn apply_patch_proposal(root: &Path, proposal: &PatchProposal) -> WorkspaceR
 
     let canonical_root = super::scanner::canonicalize_root(root)?;
     let joined = canonical_root.join(&proposal.path);
-    let canonical_file = fs::canonicalize(&joined).map_err(|_| WorkspaceError::not_found("File not found."))?;
+    let canonical_file =
+        fs::canonicalize(&joined).map_err(|_| WorkspaceError::not_found("File not found."))?;
 
     if !canonical_file.starts_with(&canonical_root) {
         return Err(WorkspaceError::forbidden("File escapes workspace."));
     }
 
     // Verify still a file, not dir
-    let meta = fs::metadata(&canonical_file).map_err(|_| WorkspaceError::not_found("File not accessible."))?;
+    let meta = fs::metadata(&canonical_file)
+        .map_err(|_| WorkspaceError::not_found("File not accessible."))?;
     if meta.is_dir() {
         return Err(WorkspaceError::invalid_request("Target is a directory."));
     }
 
     // Double-check sensitive
     if is_sensitive_file(&canonical_file) {
-        return Err(WorkspaceError::secret_excluded("Sensitive files cannot be patched."));
+        return Err(WorkspaceError::secret_excluded(
+            "Sensitive files cannot be patched.",
+        ));
     }
 
     // Compare current content to original
-    let current_bytes = fs::read(&canonical_file).map_err(|_| WorkspaceError::storage("Could not read file."))?;
-    let current_str = String::from_utf8(current_bytes).map_err(|_| WorkspaceError::binary("Current file is binary."))?;
+    let current_bytes =
+        fs::read(&canonical_file).map_err(|_| WorkspaceError::storage("Could not read file."))?;
+    let current_str = String::from_utf8(current_bytes)
+        .map_err(|_| WorkspaceError::binary("Current file is binary."))?;
     let current_hash = hash_content(&current_str);
     if current_hash != proposal.original_hash {
-        return Err(WorkspaceError::invalid_request("Stale proposal: file has changed."));
+        return Err(WorkspaceError::invalid_request(
+            "Stale proposal: file has changed.",
+        ));
     }
     if current_str != proposal.original_content {
-        return Err(WorkspaceError::invalid_request("Stale proposal: original content mismatch."));
+        return Err(WorkspaceError::invalid_request(
+            "Stale proposal: original content mismatch.",
+        ));
     }
 
     // Check proposed size again
     validate_proposed_size(&proposal.proposed_content)?;
 
     // Atomic write: NamedTempFile in parent dir
-    let parent = canonical_file.parent().ok_or_else(|| WorkspaceError::storage("Invalid file parent."))?;
+    let parent = canonical_file
+        .parent()
+        .ok_or_else(|| WorkspaceError::storage("Invalid file parent."))?;
     // Ensure parent inside root (already)
     {
         use std::io::Write;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|_| WorkspaceError::storage("Could not create temporary patch file."))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|_| WorkspaceError::storage("Could not create temporary patch file."))?;
         tmp.write_all(proposal.proposed_content.as_bytes())
             .and_then(|_| tmp.as_file().sync_all())
             .map_err(|_| WorkspaceError::storage("Could not write patched content."))?;
@@ -445,7 +481,10 @@ mod tests {
         assert_eq!(validation.diff_summary.removed, 1);
         let result = apply_patch_proposal(dir.path(), &proposal).unwrap();
         assert!(result.applied);
-        assert_eq!(fs::read_to_string(dir.path().join("src/app.ts")).unwrap(), "let x = 2;\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/app.ts")).unwrap(),
+            "let x = 2;\n"
+        );
     }
 
     #[test]
@@ -480,10 +519,28 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            symlink(outside.path().join("secret.txt"), dir.path().join("link.txt")).unwrap();
+            symlink(
+                outside.path().join("secret.txt"),
+                dir.path().join("link.txt"),
+            )
+            .unwrap();
             let err = create_patch_proposal(dir.path(), "link.txt", "new").unwrap_err();
             // Either not_found or forbidden depending on canonicalization
-            assert!(err.code == "forbidden" || err.code == "not_found" || err.code == "storage" || err.code == "secret_excluded");
+            assert!(
+                err.code == "forbidden"
+                    || err.code == "not_found"
+                    || err.code == "storage"
+                    || err.code == "secret_excluded"
+            );
+        }
+
+        // Creating a symlink needs privileges on Windows, so the escape vector
+        // is only exercised on unix. Keep the fixture meaningful everywhere
+        // rather than leaving `dir` unused on the other platform.
+        #[cfg(not(unix))]
+        {
+            make_file(dir.path(), "inside.txt", "inside");
+            assert!(create_patch_proposal(dir.path(), "inside.txt", "new").is_ok());
         }
     }
 
@@ -497,7 +554,10 @@ mod tests {
         let err = apply_patch_proposal(dir.path(), &proposal).unwrap_err();
         assert!(err.message.to_lowercase().contains("stale") || err.code == "invalid_request");
         // File should remain modified, not overwritten to v2
-        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "v1-modified");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "v1-modified"
+        );
     }
 
     #[test]
@@ -526,7 +586,9 @@ mod tests {
         let parent = dir.path().parent().unwrap();
         let err = create_patch_proposal(parent, "tmp", "x").unwrap_err();
         // Depends on path handling, but should reject or not_found
-        assert!(err.code == "not_found" || err.code == "forbidden" || err.code == "invalid_request");
+        assert!(
+            err.code == "not_found" || err.code == "forbidden" || err.code == "invalid_request"
+        );
     }
 
     #[test]
@@ -537,7 +599,6 @@ mod tests {
         // Make file read-only to cause write failure if possible (unix)
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             let p = dir.path().join("a.txt");
             // Make parent dir not writable instead? File write via persist uses parent dir permissions
             // Simulate by making parent dir read-only
@@ -555,7 +616,10 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "orig");
+            assert_eq!(
+                fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+                "orig"
+            );
         }
     }
 
@@ -668,7 +732,11 @@ pub fn create_patch_batch(root: &Path, edits: &[BatchEdit]) -> WorkspaceResult<P
 
     let mut files = Vec::with_capacity(edits.len());
     for edit in edits {
-        files.push(create_patch_proposal(root, &edit.relative_path, &edit.proposed_content)?);
+        files.push(create_patch_proposal(
+            root,
+            &edit.relative_path,
+            &edit.proposed_content,
+        )?);
     }
 
     Ok(PatchBatch {
@@ -692,7 +760,10 @@ pub fn validate_patch_batch(root: &Path, batch: &PatchBatch) -> WorkspaceResult<
     if batch.files.len() > MAX_BATCH_FILES {
         return Ok(BatchValidation {
             ok: false,
-            errors: vec![format!("Too many files in patch batch (max {}).", MAX_BATCH_FILES)],
+            errors: vec![format!(
+                "Too many files in patch batch (max {}).",
+                MAX_BATCH_FILES
+            )],
             warnings: Vec::new(),
             files: Vec::new(),
         });
@@ -705,7 +776,10 @@ pub fn validate_patch_batch(root: &Path, batch: &PatchBatch) -> WorkspaceResult<
     let mut seen = std::collections::HashSet::new();
     for proposal in &batch.files {
         if !seen.insert(proposal.path.to_lowercase()) {
-            errors.push(format!("Duplicate path in patch batch: '{}'.", proposal.path));
+            errors.push(format!(
+                "Duplicate path in patch batch: '{}'.",
+                proposal.path
+            ));
         }
     }
 
@@ -854,8 +928,14 @@ mod batch_tests {
         let result = apply_patch_batch(dir.path(), &batch).unwrap();
         assert!(result.applied);
         assert_eq!(result.results.len(), 2);
-        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a2\n");
-        assert_eq!(fs::read_to_string(dir.path().join("sub/b.txt")).unwrap(), "b2\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "a2\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("sub/b.txt")).unwrap(),
+            "b2\n"
+        );
     }
 
     #[test]
@@ -870,10 +950,7 @@ mod batch_tests {
             .collect();
         assert!(create_patch_batch(dir.path(), &many).is_err());
 
-        let dup = create_patch_batch(
-            dir.path(),
-            &[edit("a.txt", "x\n"), edit("A.TXT", "y\n")],
-        );
+        let dup = create_patch_batch(dir.path(), &[edit("a.txt", "x\n"), edit("A.TXT", "y\n")]);
         assert!(dup.is_err(), "case-insensitive duplicates must be rejected");
     }
 
@@ -881,7 +958,10 @@ mod batch_tests {
     fn batch_create_fails_when_any_file_is_missing() {
         let dir = TempDir::new().unwrap();
         make_file(dir.path(), "a.txt", "a1\n");
-        let result = create_patch_batch(dir.path(), &[edit("a.txt", "x\n"), edit("missing.txt", "y\n")]);
+        let result = create_patch_batch(
+            dir.path(),
+            &[edit("a.txt", "x\n"), edit("missing.txt", "y\n")],
+        );
         assert!(result.is_err(), "one missing file fails the whole batch");
     }
 
@@ -890,15 +970,23 @@ mod batch_tests {
         let dir = TempDir::new().unwrap();
         make_file(dir.path(), "a.txt", "a1\n");
         make_file(dir.path(), "b.txt", "b1\n");
-        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")]).unwrap();
+        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")])
+            .unwrap();
 
         // Change b.txt after the batch was created.
         make_file(dir.path(), "b.txt", "b-changed\n");
 
         let error = apply_patch_batch(dir.path(), &batch).unwrap_err();
-        assert!(error.message.to_lowercase().contains("changed"), "got: {}", error.message);
+        assert!(
+            error.message.to_lowercase().contains("changed"),
+            "got: {}",
+            error.message
+        );
         // All-or-nothing: a.txt must be untouched.
-        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a1\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "a1\n"
+        );
     }
 
     #[test]
@@ -906,7 +994,8 @@ mod batch_tests {
         let dir = TempDir::new().unwrap();
         make_file(dir.path(), "a.txt", "a1\n");
         make_file(dir.path(), "b.txt", "b1\n");
-        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")]).unwrap();
+        let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n"), edit("b.txt", "b2\n")])
+            .unwrap();
         make_file(dir.path(), "b.txt", "b-changed\n");
 
         let validation = validate_patch_batch(dir.path(), &batch).unwrap();
@@ -925,9 +1014,15 @@ mod batch_tests {
         make_file(dir.path(), "a.txt", "a1\n");
         let batch = create_patch_batch(dir.path(), &[edit("a.txt", "a2\n")]).unwrap();
         apply_patch_batch(dir.path(), &batch).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a2\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "a2\n"
+        );
 
         restore_original(dir.path(), &batch.files[0]).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "a1\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "a1\n"
+        );
     }
 }

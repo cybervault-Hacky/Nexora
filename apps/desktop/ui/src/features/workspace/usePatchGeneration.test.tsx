@@ -36,7 +36,20 @@ import {
 } from "../../lib/patch";
 import { usePatchGeneration } from "./usePatchGeneration";
 
+const SONNET_ID = "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m";
+
 const generateMock = vi.mocked(generate);
+
+/** The request of the nth `generate` call; fails loudly when there is none. */
+function sentRequest(index = 0) {
+  const call = generateMock.mock.calls[index];
+
+  if (!call) {
+    throw new Error(`generate was called ${generateMock.mock.calls.length} time(s), not ${index + 1}`);
+  }
+
+  return call[0];
+}
 const cancelMock = vi.mocked(cancelGeneration);
 const createMock = vi.mocked(createPatchProposal);
 const validateMock = vi.mocked(validatePatchProposal);
@@ -139,6 +152,42 @@ describe("usePatchGeneration — inference integration", () => {
       expect(result.current.generationState.validation.ok).toBe(true);
     }
     expect(createMock).toHaveBeenCalledWith("/tmp/proj", "a.txt", "new");
+  });
+
+  it("names the selected profile on the patch request", async () => {
+    generateMock.mockImplementation(async (req, onEvent) => {
+      onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+    });
+    const { result } = renderHook(() =>
+      usePatchGeneration({
+        workspacePath: "/tmp/proj",
+        engineStatus: appStatus("ready"),
+        profileId: SONNET_ID,
+      }),
+    );
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change it", filteredContextBlock: null });
+    });
+
+    // Patch generation uses the same single generation command as chat, so the
+    // profile travels with it and the core can refuse a stale tab.
+    expect(sentRequest(0).profileId).toBe(SONNET_ID);
+  });
+
+  it("does not name a profile when the caller has none", async () => {
+    generateMock.mockImplementation(async (req, onEvent) => {
+      onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+    });
+    const { result } = renderHook(() =>
+      usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }),
+    );
+    await act(async () => {
+      await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change it", filteredContextBlock: null });
+    });
+
+    expect(sentRequest(0).profileId).toBeNull();
   });
 
   it("handles runtime error during generation", async () => {

@@ -50,7 +50,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -135,6 +135,20 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string, args?: any) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(makeUsage());
+      case "plan_workspace_export":
+        return Promise.resolve({
+          rootName: "demo-app",
+          files: [{ path: "src/main.ts", size: 58 }],
+          excludedSensitive: 0,
+          excludedSymlink: 0,
+          excludedUnsafe: 0,
+          totalBytes: 58,
+          truncated: false,
+        });
+      case "suggest_export_path":
+        return Promise.resolve("/tmp/demo-app.zip");
       case "list_conversations":
         return Promise.resolve([]);
       case "pick_workspace_dialog":

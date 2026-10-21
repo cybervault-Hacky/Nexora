@@ -53,7 +53,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -85,6 +85,8 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(makeUsage());
       case "list_conversations":
         return Promise.resolve([
           { id: "chat-alpha", title: "Implement Dashboard Tests", createdAt: Date.now() - 3600000, updatedAt: Date.now() - 120000, messageCount: 2, preview: "Test" },

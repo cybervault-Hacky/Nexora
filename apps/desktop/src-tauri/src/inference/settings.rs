@@ -20,6 +20,10 @@ pub struct Settings {
     pub model_path: Option<String>,
     pub runtime_path: Option<String>,
     pub context_size: u32,
+    /// The registered profile the user selected. `None` means the default
+    /// profile, so an installation created before selection existed keeps
+    /// behaving exactly as it did.
+    pub model_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -28,6 +32,7 @@ impl Default for Settings {
             model_path: None,
             runtime_path: None,
             context_size: DEFAULT_CONTEXT_SIZE,
+            model_id: None,
         }
     }
 }
@@ -40,7 +45,13 @@ impl Settings {
             model_path: clean_path(&self.model_path),
             runtime_path: clean_path(&self.runtime_path),
             context_size: self.context_size.clamp(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE),
+            model_id: clean_path(&self.model_id),
         }
+    }
+
+    /// The selected profile id, or `None` when the default applies.
+    pub fn selected_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
     }
 }
 
@@ -98,12 +109,17 @@ mod tests {
             model_path: Some("  \"C:/models/a.gguf\"  ".into()),
             runtime_path: Some("   ".into()),
             context_size: 1,
+            model_id: Some("  nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m  ".into()),
         }
         .normalised();
 
         assert_eq!(settings.model_path.as_deref(), Some("C:/models/a.gguf"));
         assert_eq!(settings.runtime_path, None);
         assert_eq!(settings.context_size, MIN_CONTEXT_SIZE);
+        assert_eq!(
+            settings.selected_id(),
+            Some("nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m")
+        );
     }
 
     #[test]
@@ -123,6 +139,7 @@ mod tests {
             model_path: Some("D:/models/qwen.gguf".into()),
             runtime_path: Some("D:/tools/llama-server.exe".into()),
             context_size: 16_384,
+            model_id: Some("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m".into()),
         };
 
         let text = serde_json::to_string(&settings).expect("serialise");
@@ -130,6 +147,18 @@ mod tests {
 
         assert_eq!(parsed.model_path, settings.model_path);
         assert_eq!(parsed.context_size, 16_384);
+        assert_eq!(parsed.selected_id(), settings.selected_id());
+    }
+
+    #[test]
+    fn a_file_without_a_model_id_keeps_working() {
+        let parsed: Settings = serde_json::from_str(
+            r#"{"modelPath":"D:/models/qwen.gguf","runtimePath":null,"contextSize":8192}"#,
+        )
+        .expect("legacy settings");
+
+        assert_eq!(parsed.selected_id(), None);
+        assert_eq!(parsed.context_size, 8_192);
     }
 
     #[test]
@@ -138,5 +167,6 @@ mod tests {
 
         assert_eq!(settings.context_size, DEFAULT_CONTEXT_SIZE);
         assert!(settings.model_path.is_none());
+        assert_eq!(settings.selected_id(), None);
     }
 }

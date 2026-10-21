@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { markDesktop } from "./test/fixtures";
+import { markDesktop, makeUsage } from "./test/fixtures";
 
 // Mock Tauri invoke IPC
 vi.mock("@tauri-apps/api/core", () => ({
@@ -23,6 +23,8 @@ function installTauriMocks() {
 
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
     switch (command) {
+      case "get_usage_status":
+        return makeUsage();
       case "get_app_status":
         return {
           name: "Nexora",

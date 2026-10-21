@@ -11,6 +11,7 @@ export type IconName =
   | "close"
   | "cloud-off"
   | "code"
+  | "download"
   | "edit"
   | "eye"
   | "eye-off"
@@ -189,6 +190,13 @@ const ICONS: Record<IconName, ReactElement> = {
     </>
   ),
   circle: <circle cx="12" cy="12" r="8" />,
+  download: (
+    <>
+      <path d="M12 4v11" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M5 19h14" />
+    </>
+  ),
   refresh: (
     <>
       <path d="M20 12a8 8 0 1 1-2.34-5.66" />

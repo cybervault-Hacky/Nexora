@@ -11,6 +11,7 @@ interface RenderOptions {
   error?: ComposerError | null;
   busy?: boolean;
   canGenerate?: boolean;
+  blockedReason?: string | null;
 }
 
 function renderOptions({
@@ -18,6 +19,7 @@ function renderOptions({
   error = null,
   busy = false,
   canGenerate = true,
+  blockedReason = null,
 }: RenderOptions = {}): string {
   return renderToStaticMarkup(
     <Composer
@@ -26,6 +28,7 @@ function renderOptions({
       textareaRef={createRef<HTMLTextAreaElement>()}
       busy={busy}
       canGenerate={canGenerate}
+      blockedReason={blockedReason}
       onChange={() => undefined}
       onSubmit={() => undefined}
       onStop={() => undefined}
@@ -63,6 +66,18 @@ describe("Composer", () => {
     expect(button(html, "send")).toContain("disabled");
     expect(html).toContain("Load a model to send");
     expect(html).toContain("No model loaded");
+  });
+
+  it("explains the daily allowance instead of blaming a missing model", () => {
+    const html = renderOptions({
+      value: "hello",
+      canGenerate: false,
+      blockedReason: "Daily free allowance reached — it resets at 00:00 UTC",
+    });
+
+    expect(button(html, "send")).toContain("disabled");
+    expect(html).toContain("Daily free allowance reached");
+    expect(html).not.toContain("Load a model to send");
   });
 
   it("disables send past the length limit and shows the counter", () => {

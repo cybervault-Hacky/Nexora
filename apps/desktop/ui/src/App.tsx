@@ -41,6 +41,8 @@ import {
 import { isDesktopShell, isEngineReady, type AppStatus } from "./lib/ipc";
 import { navigateTo, isFlowRoute, ROUTES, useHashRoute, type AnyRouteId } from "./lib/router";
 import { useAppStatus } from "./lib/useAppStatus";
+import { useUsage } from "./features/usage/useUsage";
+import { useModelCatalog } from "./features/models/useModelCatalog";
 
 /**
  * Phase 19 shell: shared chrome (title bar, sidebar navigation, global engine
@@ -56,11 +58,27 @@ export default function App() {
   // The welcome/onboarding flow renders outside the workspace sidebar.
   const flowRoute = isFlowRoute(route.id);
 
+  // The allowance is read here and refreshed whenever a generation settles, so
+  // the chat UI and the record in Rust cannot disagree for long.
+  const [usageNonce, setUsageNonce] = useState(0);
+  const usage = useUsage(usageNonce);
+  // Registered models and their availability. Refreshed whenever the engine
+  // changes state, so "ready" can never outlive the process it describes.
+  const models = useModelCatalog();
+
   const handleSettled = useCallback(() => {
     reload();
+    setUsageNonce((value) => value + 1);
   }, [reload]);
 
-  const conversation = usePersistentConversation({ onSettled: handleSettled });
+  // The chat is told which profile is selected so every request can name the
+  // model it was composed under; the core still decides what actually runs.
+  const selectedProfileId = models.selected?.profile.id ?? null;
+
+  const conversation = usePersistentConversation({
+    onSettled: handleSettled,
+    profileId: selectedProfileId,
+  });
   const { newChat, selectConversation, submit } = conversation;
   const workspace = useWorkspace();
   const patch = usePatch(workspace.workspacePath);
@@ -82,12 +100,21 @@ export default function App() {
   const engineReady = isEngineReady(loadedStatus ?? status);
   const engineStatus = loadedStatus ?? status;
 
+  const modelRefresh = models.reload;
+  const engineState = engineStatus?.engine.state ?? null;
+  const configuredModel = engineStatus?.modelPath ?? null;
+
+  useEffect(() => {
+    modelRefresh();
+  }, [modelRefresh, engineState, configuredModel]);
+
   const manualValidation = useValidation(workspace.workspacePath);
   const manualRepair = usePatchRepair({
     workspacePath: workspace.workspacePath,
     engineStatus,
     symbolIndex,
     contextFiles: workspace.contextFiles,
+    profileId: selectedProfileId,
   });
 
   // Context budget: reserve system + output, fit prompt + selected files + recent history
@@ -563,6 +590,8 @@ export default function App() {
             textareaRef={textareaRef}
             focusNonce={chatFocusNonce}
             onSubmit={handleSubmit}
+            usage={usage}
+            models={models}
           />
         ) : route.id === "projects" ? (
           <ProjectsPage
@@ -578,6 +607,7 @@ export default function App() {
             engineStatus={engineStatus}
             symbolIndex={symbolIndex}
             isStreaming={conversation.streaming}
+            profileId={selectedProfileId}
           />
         ) : route.id === "code" ? (
           <CodeIntelligencePage
@@ -593,6 +623,7 @@ export default function App() {
           />
         ) : route.id === "models" ? (
           <ModelManagerPage
+            profileId={models.selected?.profile.id ?? null}
             status={engineStatus}
             statusError={statusError}
             desktop={desktop}
@@ -600,6 +631,7 @@ export default function App() {
             onStatus={handleStatus}
             onRefresh={reload}
             onUnload={desktop ? handleUnload : undefined}
+            onModelsChanged={modelRefresh}
           />
         ) : route.id === "settings" ? (
           <SettingsPage

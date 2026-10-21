@@ -59,12 +59,20 @@ vi.mock("./lib/history", () => ({
   deleteConversation: async () => true,
 }));
 
+vi.mock("./lib/usage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/usage")>();
+
+  return { ...actual, fetchUsage: vi.fn() };
+});
+
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { fetchUsage } from "./lib/usage";
+import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
+const usageMock = vi.mocked(fetchUsage);
 
 function goto(hash: string) {
   act(() => {
@@ -86,6 +94,8 @@ describe("Phase 23 Step 7 — Offline AI & Unauthenticated Regression Suite", ()
       availableRamGib: 20.5,
       platform: "windows",
     });
+    usageMock.mockReset();
+    usageMock.mockResolvedValue(makeUsage());
     markDesktop();
 
     // Link-down simulation: simulate auth API unreachable on network

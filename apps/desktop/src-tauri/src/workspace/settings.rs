@@ -86,19 +86,28 @@ impl WorkspaceSettingsStore {
         }
 
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|_| WError::storage("Could not create workspace settings folder."))?;
+            fs::create_dir_all(parent)
+                .map_err(|_| WError::storage("Could not create workspace settings folder."))?;
         }
-        let text = serde_json::to_string_pretty(&to_save).map_err(|_| WError::storage("Could not serialize workspace settings."))?;
+        let text = serde_json::to_string_pretty(&to_save)
+            .map_err(|_| WError::storage("Could not serialize workspace settings."))?;
         if text.len() > 64 * 1024 {
             return Err(WError::invalid_request("Workspace settings too large."));
         }
         // Atomic write via tempfile (same semantics as history)
         {
             use std::io::Write;
-            let parent = self.path.parent().ok_or_else(|| WError::storage("Invalid settings directory."))?;
-            let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|_| WError::storage("Could not create temporary settings file."))?;
-            tmp.write_all(text.as_bytes()).and_then(|_| tmp.as_file().sync_all()).map_err(|_| WError::storage("Could not write workspace settings."))?;
-            tmp.persist(&self.path).map_err(|_| WError::storage("Could not replace workspace settings file."))?;
+            let parent = self
+                .path
+                .parent()
+                .ok_or_else(|| WError::storage("Invalid settings directory."))?;
+            let mut tmp = tempfile::NamedTempFile::new_in(parent)
+                .map_err(|_| WError::storage("Could not create temporary settings file."))?;
+            tmp.write_all(text.as_bytes())
+                .and_then(|_| tmp.as_file().sync_all())
+                .map_err(|_| WError::storage("Could not write workspace settings."))?;
+            tmp.persist(&self.path)
+                .map_err(|_| WError::storage("Could not replace workspace settings file."))?;
             #[cfg(unix)]
             {
                 if let Ok(dir) = fs::File::open(parent) {
@@ -148,7 +157,10 @@ mod tests {
         let saved = store.save(settings).expect("save");
         assert_eq!(saved.last_workspace_path.as_deref(), Some("/tmp/my-app"));
         let reloaded = WorkspaceSettingsStore::load(dir.path());
-        assert_eq!(reloaded.settings.last_workspace_path.as_deref(), Some("/tmp/my-app"));
+        assert_eq!(
+            reloaded.settings.last_workspace_path.as_deref(),
+            Some("/tmp/my-app")
+        );
     }
 
     #[test]

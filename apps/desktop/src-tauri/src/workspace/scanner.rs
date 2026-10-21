@@ -740,9 +740,7 @@ pub fn read_workspace_file(root_input: &Path, relative_path: &str) -> WorkspaceR
     let content = String::from_utf8(bytes)
         .map_err(|_| WorkspaceError::binary("File is not valid UTF-8 text."))?;
 
-    // Additional check: if content is empty, allow but mark not truncated
-    let truncated = content.len() as u64 > MAX_PREVIEW_BYTES; // already checked
-
+    // Size was checked above, so the preview is never truncated here.
     // Derive encoding check: prefer UTF-8, content already validated
     let rel = posix_relative(&canonical_root, &canonical_file)?;
 

@@ -51,7 +51,7 @@ impl Default for LicenceStatus {
             licensee: None,
             expires_at: None,
             features: vec![
-                "unlimited_local_inference".to_string(),
+                "daily_local_inference".to_string(),
                 "gguf_model_execution".to_string(),
                 "offline_ai_chat".to_string(),
                 "workspace_code_intelligence".to_string(),

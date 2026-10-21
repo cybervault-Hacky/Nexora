@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -36,16 +36,23 @@ const rustSrcDir = resolve(inferenceDir, "..");
 const sources = {
   mod: readFileSync(join(inferenceDir, "mod.rs"), "utf8"),
   models: readFileSync(join(inferenceDir, "models.rs"), "utf8"),
+  acquisition: readFileSync(join(inferenceDir, "acquisition.rs"), "utf8"),
   process: readFileSync(join(inferenceDir, "process.rs"), "utf8"),
   hardware: readFileSync(join(inferenceDir, "hardware.rs"), "utf8"),
   settings: readFileSync(join(inferenceDir, "settings.rs"), "utf8"),
   error: readFileSync(join(inferenceDir, "error.rs"), "utf8"),
   commands: readFileSync(join(inferenceDir, "commands.rs"), "utf8"),
   lib: readFileSync(join(rustSrcDir, "lib.rs"), "utf8"),
+  exportMod: readFileSync(join(rustSrcDir, "export/mod.rs"), "utf8"),
+  exportCommands: readFileSync(join(rustSrcDir, "export/commands.rs"), "utf8"),
+  usageMod: readFileSync(join(rustSrcDir, "usage/mod.rs"), "utf8"),
+  usageCommands: readFileSync(join(rustSrcDir, "usage/commands.rs"), "utf8"),
 };
 
 const ipcSource = readFileSync(join(uiLibDir, "ipc.ts"), "utf8");
 const inferenceSource = readFileSync(join(uiLibDir, "inference.ts"), "utf8");
+const exportSource = readFileSync(join(uiLibDir, "export.ts"), "utf8");
+const usageSource = readFileSync(join(uiLibDir, "usage.ts"), "utf8");
 
 function group(match: ArrayLike<string | undefined>, index: number): string {
   const value = match[index];
@@ -314,7 +321,9 @@ const STRUCTS: StructFixture[] = [
     rust: "GenerateRequest",
     file: "mod",
     ts: "GenerateRequestPayload",
-    wire: ["requestId", "messages", "maxTokens", "temperature"],
+    // `profileId` carries the profile a message was composed under, so the
+    // core can refuse a stale tab instead of answering it with another model.
+    wire: ["requestId", "messages", "maxTokens", "temperature", "profileId"],
     direction: "request",
   },
   {
@@ -334,6 +343,9 @@ const STRUCTS: StructFixture[] = [
       "sizeGib",
       "ggufVersion",
       "tensorCount",
+      "architecture",
+      "name",
+      "contextLength",
       "estimatedMinRamGib",
       "fitsAvailableRam",
       "warnings",
@@ -346,8 +358,94 @@ const STRUCTS: StructFixture[] = [
     ts: "SystemInfo",
     wire: ["totalRamGib", "availableRamGib", "platform"],
   },
-  { rust: "Settings", file: "settings", ts: "Settings", wire: ["modelPath", "runtimePath", "contextSize"] },
+  {
+    rust: "DownloadOutcome",
+    file: "acquisition",
+    ts: "ModelDownloadOutcome",
+    wire: ["path", "fileName", "sizeBytes", "sha256", "cancelled"],
+  },
+  {
+    rust: "IntegrityReport",
+    file: "acquisition",
+    ts: "IntegrityReport",
+    wire: [
+      "path",
+      "fileName",
+      "profileId",
+      "sizeBytes",
+      "sizeMatches",
+      "sha256",
+      "expectedSizeBytes",
+      "expectedSha256",
+      "digestMatches",
+    ],
+  },
+  {
+    rust: "Settings",
+    file: "settings",
+    ts: "Settings",
+    wire: ["modelPath", "runtimePath", "contextSize", "modelId"],
+  },
   { rust: "InferenceError", file: "error", ts: "InferenceError", wire: ["code", "message"] },
+  { rust: "ExportCandidate", file: "exportMod", ts: "ExportCandidate", wire: ["path", "size"] },
+  {
+    rust: "ExportPlan",
+    file: "exportMod",
+    ts: "ExportPlan",
+    wire: [
+      "rootName",
+      "files",
+      "excludedSensitive",
+      "excludedSymlink",
+      "excludedUnsafe",
+      "totalBytes",
+      "truncated",
+    ],
+  },
+  {
+    rust: "ExportProgress",
+    file: "exportMod",
+    ts: "ExportProgress",
+    wire: ["done", "total", "bytesDone", "bytesTotal", "current"],
+  },
+  {
+    rust: "ExportOutcome",
+    file: "exportMod",
+    ts: "ExportOutcome",
+    wire: ["path", "files", "bytes", "cancelled", "replaced"],
+  },
+  { rust: "ExportError", file: "exportMod", ts: "ExportError", wire: ["code", "message"] },
+  {
+    rust: "UsageStatus",
+    file: "usageMod",
+    ts: "UsageStatus",
+    wire: [
+      "allowance",
+      "used",
+      "remaining",
+      "day",
+      "resetAtMs",
+      "policyId",
+      "provisional",
+      "exhausted",
+      "notice",
+      "error",
+    ],
+  },
+  {
+    rust: "SingleExportRequest",
+    file: "exportMod",
+    ts: "SingleExportRequest",
+    wire: ["relativePath", "destination", "overwrite"],
+    direction: "request",
+  },
+  {
+    rust: "ZipExportRequest",
+    file: "exportMod",
+    ts: "ZipExportRequest",
+    wire: ["selection", "destination", "overwrite"],
+    direction: "request",
+  },
 ];
 
 describe("serialised structs match the TypeScript interfaces", () => {
@@ -540,7 +638,9 @@ function rustCommands(): RustCommand[] {
   const pattern =
     /^#\[(tauri::command[^\]]*)\]\s*\n(?:pub )?(?:async )?fn (\w+)\(([\s\S]*?)\)\s*->/gm;
 
-  return [...sources.commands.matchAll(pattern)].map((match) => {
+  const combined = `${sources.commands}\n${sources.exportCommands}\n${sources.usageCommands}`;
+
+  return [...combined.matchAll(pattern)].map((match) => {
     const args = splitTopLevel(group(match, 3))
       .map((parameter) => /^(\w+):\s*([\s\S]+)$/.exec(parameter))
       .filter((parsed): parsed is RegExpExecArray => parsed !== null)
@@ -563,8 +663,8 @@ function registeredCommands(): string[] {
     throw new Error("generate_handler![...] not found in lib.rs");
   }
 
-  return [...group(match, 1).matchAll(/inference::commands::(\w+)/g)].map((command) =>
-    group(command, 1),
+  return [...group(match, 1).matchAll(/(?:inference|export|usage)::commands::(\w+)/g)].map(
+    (command) => group(command, 1),
   );
 }
 
@@ -573,7 +673,7 @@ function uiCommands(): Map<string, string[]> {
   const calls = new Map<string, string[]>();
   const pattern = /\b(?:call|invoke)<\w+>\("(\w+)"(?:,\s*\{([\s\S]*?)\})?\)/g;
 
-  for (const match of inferenceSource.matchAll(pattern)) {
+  for (const match of `${inferenceSource}\n${exportSource}\n${usageSource}`.matchAll(pattern)) {
     const body = match[2];
     const keys =
       body === undefined
@@ -644,9 +744,15 @@ describe("Tauri command surface", () => {
     // rather than the UI sending them. Adding an argument to one of these Rust
     // signatures without updating the wrapper would break every call.
     expect(sorted(argless)).toEqual([
+      "cancel_export",
+      "cancel_model_download",
+      "check_model_readiness",
       "get_app_status",
+      "get_model_catalog",
+      "get_model_profile",
       "get_settings",
       "get_system_info",
+      "get_usage_status",
       "load_model",
       "unload_model",
     ]);
@@ -663,5 +769,144 @@ describe("Tauri command surface", () => {
     expect(byName.get("cancel_generation")).toEqual(["requestId"]);
     expect(byName.get("validate_model")).toEqual(["contextSize", "path"]);
     expect(byName.get("save_settings")).toEqual(["settings"]);
+    expect(byName.get("start_model_download")).toEqual(["onEvent", "profileId", "targetDir"]);
+    expect(byName.get("verify_model")).toEqual(["path", "profileId"]);
+    expect(byName.get("get_disk_space")).toEqual(["targetDir"]);
+    expect(byName.get("select_model")).toEqual(["id"]);
+    expect(byName.get("plan_workspace_export")).toEqual(["selection"]);
+    expect(byName.get("suggest_export_path")).toEqual(["kind", "relativePath"]);
+    expect(byName.get("export_single_file")).toEqual(["onEvent", "request"]);
+    expect(byName.get("export_zip")).toEqual(["onEvent", "request"]);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Phase 7: the daily allowance must be the same number on both sides
+// --------------------------------------------------------------------------
+
+describe("daily usage policy", () => {
+  it("publishes the allowance the backend enforces", () => {
+    const constant = /pub const DAILY_ALLOWANCE: u32 = (\d+);/.exec(sources.usageMod);
+    const published = /PUBLISHED_DAILY_ALLOWANCE = (\d+);/.exec(usageSource);
+
+    expect(constant).not.toBeNull();
+    expect(published).not.toBeNull();
+    expect(group(published as RegExpExecArray, 1)).toBe(group(constant as RegExpExecArray, 1));
+  });
+
+  it("marks the allowance as provisional in the core", () => {
+    expect(sources.usageMod).toContain("pub const ALLOWANCE_IS_PROVISIONAL: bool = true;");
+  });
+
+  it("enforces the allowance inside the only command that can start a model", () => {
+    // Every `generate()` in the UI funnels through `start_generation`; the
+    // allowance is reserved there, before the engine is asked to work.
+    expect(sources.commands).toContain("usage.reserve(");
+    expect(sources.commands).toContain("charge.commit()");
+    expect(sources.commands).toContain("if accepted.load(");
+  });
+
+  it("has exactly one caller of the streaming client in the whole core", () => {
+    // A second entry point that posted to the engine directly would bypass the
+    // allowance. The client module defines `stream_chat`; only the generation
+    // command may call it.
+    const files = ["inference/client.rs", "inference/commands.rs", "inference/mod.rs"];
+    const callers = files.filter((file) => {
+      const source = readFileSync(join(rustSrcDir, file), "utf8");
+      return (source.match(/\bstream_chat\(/g) ?? []).length > 0;
+    });
+
+    const client = readFileSync(join(rustSrcDir, "inference/client.rs"), "utf8");
+    const command = readFileSync(join(rustSrcDir, "inference/commands.rs"), "utf8");
+
+    expect(callers.sort()).toEqual(["inference/client.rs", "inference/commands.rs"]);
+    expect((client.match(/\bstream_chat\(/g) ?? []).length).toBe(1);
+    expect((command.match(/\bstream_chat\(/g) ?? []).length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whole-surface IPC audit (Phase 8)
+// ---------------------------------------------------------------------------
+//
+// The checks above model a subset of commands from the modules that carry a
+// hand-written DTO. They cannot notice a `call("typo")` in, say, the history or
+// workspace wrapper, because those files were never read. This audit walks
+// every non-test UI source file instead, and cross-checks the result against
+// the one list that actually decides what exists at runtime:
+// `tauri::generate_handler![...]`.
+//
+// It is still a source-text check: it proves the names line up, not that the
+// arguments or return types do.
+
+const uiSrcDir = resolve(uiLibDir, "..");
+
+function uiSourceFiles(dir: string): string[] {
+  const files: string[] = [];
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...uiSourceFiles(path));
+    } else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+      files.push(path);
+    }
+  }
+
+  return files;
+}
+
+function handlerCommands(): Set<string> {
+  const handler = /tauri::generate_handler!\[([\s\S]*?)\]/.exec(sources.lib);
+
+  if (!handler?.[1]) {
+    throw new Error("generate_handler![...] not found in lib.rs");
+  }
+
+  return new Set(
+    handler[1]
+      .split(",")
+      .map((entry) => entry.trim().split("::").pop() ?? "")
+      .filter((name) => /^\w+$/.test(name)),
+  );
+}
+
+function invokedCommands(): Map<string, string[]> {
+  const pattern = /\b(?:call|invoke)\s*(?:<[^()]*?>)?\s*\(\s*["']([A-Za-z0-9_]+)["']/g;
+  const found = new Map<string, string[]>();
+
+  for (const file of uiSourceFiles(uiSrcDir)) {
+    const text = readFileSync(file, "utf8");
+
+    for (const match of text.matchAll(pattern)) {
+      const name = match[1];
+
+      if (!name) {
+        continue;
+      }
+
+      const list = found.get(name) ?? [];
+      list.push(file.replace(uiSrcDir, ""));
+      found.set(name, list);
+    }
+  }
+
+  return found;
+}
+
+describe("IPC command surface", () => {
+  it("every command the UI invokes exists in generate_handler!", () => {
+    const registered = handlerCommands();
+    const missing = [...invokedCommands().keys()].filter((name) => !registered.has(name));
+
+    expect(missing).toEqual([]);
+  });
+
+  it("every registered command is reachable from the UI", () => {
+    const invoked = invokedCommands();
+    const orphaned = [...handlerCommands()].filter((name) => !invoked.has(name));
+
+    expect(orphaned).toEqual([]);
   });
 });

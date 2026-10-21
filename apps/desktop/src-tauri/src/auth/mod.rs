@@ -113,7 +113,11 @@ impl AuthError {
         }
     }
 
-    pub fn with_retry(code: impl Into<String>, message: impl Into<String>, retry_after: u64) -> Self {
+    pub fn with_retry(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        retry_after: u64,
+    ) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -130,7 +134,10 @@ impl AuthError {
     }
 
     pub fn email_unverified() -> Self {
-        Self::new("email_unverified", "Please verify your email address before signing in.")
+        Self::new(
+            "email_unverified",
+            "Please verify your email address before signing in.",
+        )
     }
 
     pub fn storage(message: impl Into<String>) -> Self {

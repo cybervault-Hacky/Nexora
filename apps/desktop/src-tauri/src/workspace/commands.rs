@@ -463,7 +463,9 @@ pub fn search_symbols(
         return Err(WorkspaceError::not_found("No index — build it first."));
     };
     if cached_root != &canonical {
-        return Err(WorkspaceError::invalid_request("Workspace changed — refresh the index."));
+        return Err(WorkspaceError::invalid_request(
+            "Workspace changed — refresh the index.",
+        ));
     }
     let lim = limit.unwrap_or(20).clamp(1, 50);
     Ok(super::symbol_index::search_symbols(idx, &query, lim))

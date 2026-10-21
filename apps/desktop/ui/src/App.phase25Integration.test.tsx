@@ -50,7 +50,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -77,6 +77,8 @@ beforeEach(() => {
   // Safe default mock for command-aware invoke
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(makeUsage());
       case "auth_get_session":
         return Promise.resolve({
           authenticated: false,

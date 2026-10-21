@@ -69,6 +69,14 @@ impl AuthApiClient {
         format!("{}/v1/auth{}", self.base_url.trim_end_matches('/'), path)
     }
 
+    /// The account-service origin this client talks to.
+    ///
+    /// Exposed read-only so diagnostics can report it without the caller
+    /// reaching into the private field (and without letting it be changed).
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn login(&self, email: &str, password: &str) -> AuthResult<(AuthUser, String)> {
         #[derive(Serialize)]
         struct Body<'a> {
@@ -82,14 +90,21 @@ impl AuthApiClient {
             .json(&Body { email, password })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         let status = resp.status();
         let headers = resp.headers().clone();
 
         if status.is_success() {
             let body: LoginResponseBody = resp.json().await.map_err(|e| {
-                AuthError::new("parse_error", format!("Failed to parse login response: {e}"))
+                AuthError::new(
+                    "parse_error",
+                    format!("Failed to parse login response: {e}"),
+                )
             })?;
             return Ok((body.user, body.session.token));
         }
@@ -102,13 +117,20 @@ impl AuthApiClient {
             403 => Err(AuthError::email_unverified()),
             429 => {
                 let retry = retry_after.unwrap_or(60);
-                Err(AuthError::with_retry("rate_limited", "Too many attempts. Try again in a few minutes.", retry))
+                Err(AuthError::with_retry(
+                    "rate_limited",
+                    "Too many attempts. Try again in a few minutes.",
+                    retry,
+                ))
             }
             _ => {
                 if let Some(err) = error_body {
                     Err(AuthError::new(err.error.code, err.error.message))
                 } else {
-                    Err(AuthError::new("auth_failed", "Sign-in could not be completed."))
+                    Err(AuthError::new(
+                        "auth_failed",
+                        "Sign-in could not be completed.",
+                    ))
                 }
             }
         }
@@ -125,10 +147,18 @@ impl AuthApiClient {
         let resp = self
             .client
             .post(self.url("/register"))
-            .json(&Body { name, email, password })
+            .json(&Body {
+                name,
+                email,
+                password,
+            })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() || resp.status().as_u16() == 202 {
             return Ok(());
@@ -149,7 +179,11 @@ impl AuthApiClient {
             .json(&Body { token })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() {
             return Ok(());
@@ -170,7 +204,11 @@ impl AuthApiClient {
             .json(&Body { email })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() || resp.status().as_u16() == 202 {
             return Ok(());
@@ -191,7 +229,11 @@ impl AuthApiClient {
             .json(&Body { email })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() || resp.status().as_u16() == 202 {
             return Ok(());
@@ -213,7 +255,11 @@ impl AuthApiClient {
             .json(&Body { token, password })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() || resp.status().as_u16() == 204 {
             return Ok(());
@@ -229,7 +275,11 @@ impl AuthApiClient {
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() {
             let body: MeResponseBody = resp.json().await.map_err(|e| {
@@ -239,7 +289,10 @@ impl AuthApiClient {
         }
 
         if resp.status().as_u16() == 401 {
-            return Err(AuthError::new("session_expired", "Your session has expired."));
+            return Err(AuthError::new(
+                "session_expired",
+                "Your session has expired.",
+            ));
         }
 
         handle_generic_error(resp).await
@@ -279,7 +332,11 @@ impl AuthApiClient {
             })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         if resp.status().is_success() || resp.status().as_u16() == 204 {
             return Ok(());
@@ -319,14 +376,21 @@ impl AuthApiClient {
             })
             .send()
             .await
-            .map_err(|_| AuthError::network("Can't reach the Nexora account service. Check your connection and try again."))?;
+            .map_err(|_| {
+                AuthError::network(
+                    "Can't reach the Nexora account service. Check your connection and try again.",
+                )
+            })?;
 
         let status = resp.status();
         let headers = resp.headers().clone();
 
         if status.is_success() {
             let body: LoginResponseBody = resp.json().await.map_err(|e| {
-                AuthError::new("parse_error", format!("Failed to parse Google exchange response: {e}"))
+                AuthError::new(
+                    "parse_error",
+                    format!("Failed to parse Google exchange response: {e}"),
+                )
             })?;
             return Ok((body.user, body.session.token));
         }
@@ -343,13 +407,20 @@ impl AuthApiClient {
 
         if status.as_u16() == 429 {
             let retry = retry_after.unwrap_or(60);
-            return Err(AuthError::with_retry("rate_limited", "Too many attempts. Try again in a few minutes.", retry));
+            return Err(AuthError::with_retry(
+                "rate_limited",
+                "Too many attempts. Try again in a few minutes.",
+                retry,
+            ));
         }
 
         if let Some(err) = error_body {
             Err(AuthError::new(err.error.code, err.error.message))
         } else {
-            Err(AuthError::new("google_failed", "Google authentication could not be completed."))
+            Err(AuthError::new(
+                "google_failed",
+                "Google authentication could not be completed.",
+            ))
         }
     }
 }

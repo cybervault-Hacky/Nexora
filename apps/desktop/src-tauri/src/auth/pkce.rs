@@ -64,8 +64,16 @@ fn to_base64_url(input: &[u8]) -> String {
     let mut i = 0;
     while i < input.len() {
         let b0 = input[i] as usize;
-        let b1 = if i + 1 < input.len() { input[i + 1] as usize } else { 0 };
-        let b2 = if i + 2 < input.len() { input[i + 2] as usize } else { 0 };
+        let b1 = if i + 1 < input.len() {
+            input[i + 1] as usize
+        } else {
+            0
+        };
+        let b2 = if i + 2 < input.len() {
+            input[i + 2] as usize
+        } else {
+            0
+        };
 
         result.push(CHARSET[b0 >> 2] as char);
         result.push(CHARSET[((b0 & 3) << 4) | (b1 >> 4)] as char);
@@ -83,14 +91,26 @@ fn to_base64_url(input: &[u8]) -> String {
 /// Spawns a loopback TCP listener on an ephemeral port.
 pub fn bind_loopback() -> Result<(TcpListener, u16), AuthError> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
-        AuthError::new("loopback_bind_failed", format!("Failed to bind loopback listener: {e}"))
+        AuthError::new(
+            "loopback_bind_failed",
+            format!("Failed to bind loopback listener: {e}"),
+        )
     })?;
-    let port = listener.local_addr().map_err(|e| {
-        AuthError::new("loopback_port_failed", format!("Failed to obtain port: {e}"))
-    })?.port();
+    let port = listener
+        .local_addr()
+        .map_err(|e| {
+            AuthError::new(
+                "loopback_port_failed",
+                format!("Failed to obtain port: {e}"),
+            )
+        })?
+        .port();
 
     listener.set_nonblocking(true).map_err(|e| {
-        AuthError::new("loopback_nonblocking_failed", format!("Failed to configure non-blocking: {e}"))
+        AuthError::new(
+            "loopback_nonblocking_failed",
+            format!("Failed to configure non-blocking: {e}"),
+        )
     })?;
 
     Ok((listener, port))
@@ -109,7 +129,10 @@ pub fn await_callback(
 
     while start.elapsed() < timeout {
         if cancelled.load(Ordering::SeqCst) {
-            return Err(AuthError::new("cancelled", "Authentication flow was cancelled."));
+            return Err(AuthError::new(
+                "cancelled",
+                "Authentication flow was cancelled.",
+            ));
         }
 
         match listener.accept() {
@@ -155,7 +178,10 @@ pub fn await_callback(
                                     let error_html = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nState mismatch";
                                     let _ = stream.write_all(error_html.as_bytes());
                                     let _ = stream.flush();
-                                    return Err(AuthError::new("state_mismatch", "OAuth security verification failed (state mismatch)."));
+                                    return Err(AuthError::new(
+                                        "state_mismatch",
+                                        "OAuth security verification failed (state mismatch).",
+                                    ));
                                 }
                             }
                         }
@@ -170,12 +196,18 @@ pub fn await_callback(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                return Err(AuthError::new("loopback_accept_error", format!("Loopback listener error: {e}")));
+                return Err(AuthError::new(
+                    "loopback_accept_error",
+                    format!("Loopback listener error: {e}"),
+                ));
             }
         }
     }
 
-    Err(AuthError::new("timeout", "Sign-in timed out. Please try again."))
+    Err(AuthError::new(
+        "timeout",
+        "Sign-in timed out. Please try again.",
+    ))
 }
 
 #[cfg(test)]

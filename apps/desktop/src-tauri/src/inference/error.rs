@@ -33,6 +33,20 @@ impl InferenceError {
         Self::new("invalid_model", message)
     }
 
+    pub fn unknown_model(message: impl Into<String>) -> Self {
+        Self::new("unknown_model", message)
+    }
+
+    /// A downloaded or selected file did not match the approved artefact.
+    pub fn integrity_failed(message: impl Into<String>) -> Self {
+        Self::new("integrity_failed", message)
+    }
+
+    /// The destination already holds a file and is never overwritten.
+    pub fn already_exists(message: impl Into<String>) -> Self {
+        Self::new("already_exists", message)
+    }
+
     pub fn spawn_failed(message: impl Into<String>) -> Self {
         Self::new("spawn_failed", message)
     }

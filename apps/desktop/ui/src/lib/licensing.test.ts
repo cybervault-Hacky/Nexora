@@ -13,6 +13,7 @@ import {
   PLAN_TIERS,
 } from "./licensing";
 import { getIpcTelemetryEvents, clearIpcTelemetry } from "./telemetry";
+import { PUBLISHED_DAILY_ALLOWANCE } from "./usage";
 import { markDesktop } from "../test/fixtures";
 
 describe("Phase 26 — Licensing Client & IPC Contracts", () => {
@@ -27,6 +28,17 @@ describe("Phase 26 — Licensing Client & IPC Contracts", () => {
     const community = PLAN_TIERS.find((p) => p.id === "community");
     expect(community).toBeDefined();
     expect(community?.price).toBe("$0");
+  });
+
+  it("never promises unlimited local inference", () => {
+    for (const plan of PLAN_TIERS) {
+      expect(plan.features.some((feature) => /unlimited/i.test(feature.name))).toBe(false);
+      expect(
+        plan.features.some((feature) =>
+          feature.name.startsWith(`${PUBLISHED_DAILY_ALLOWANCE} local generations per day`),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("licenceGetStatus invokes licence_get_status and records telemetry", async () => {

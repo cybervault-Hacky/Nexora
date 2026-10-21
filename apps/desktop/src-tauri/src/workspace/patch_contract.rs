@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::scanner::{is_sensitive_file, validate_relative_path, MAX_PREVIEW_BYTES, MAX_PATH_CHARS};
+use super::scanner::{
+    is_sensitive_file, validate_relative_path, MAX_PATH_CHARS, MAX_PREVIEW_BYTES,
+};
 
 // ---------------------------------------------------------------------------
 // Contract — versioned, strict, single-file
@@ -75,7 +77,9 @@ impl PatchGenerationResponseStrict {
         // proposedContent checks
         let proposed = &self.proposedContent;
         if proposed.trim().is_empty() {
-            return Err("Missing 'proposedContent' — patch must contain replacement content.".to_string());
+            return Err(
+                "Missing 'proposedContent' — patch must contain replacement content.".to_string(),
+            );
         }
         if proposed.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
             return Err(format!(
@@ -95,7 +99,11 @@ impl PatchGenerationResponseStrict {
         }
 
         // explanation optional
-        let explanation = self.explanation.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let explanation = self
+            .explanation
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         if let Some(exp) = &explanation {
             if exp.chars().count() > MAX_EXPLANATION_CHARS {
                 return Err("Explanation too long (max 1000 chars).".to_string());
@@ -165,8 +173,13 @@ pub fn parse_and_validate(
     }
 
     // Detect obvious multi-file attempts in raw string
-    if trimmed.contains("\"files\"") || trimmed.contains("\"patches\"") || trimmed.contains("\"edits\"") {
-        return Err("Only single-file patches are allowed — model returned multiple files.".to_string());
+    if trimmed.contains("\"files\"")
+        || trimmed.contains("\"patches\"")
+        || trimmed.contains("\"edits\"")
+    {
+        return Err(
+            "Only single-file patches are allowed — model returned multiple files.".to_string(),
+        );
     }
 
     // Return original direct parse error with more context
@@ -259,10 +272,15 @@ fn extract_first_json_object(input: &str) -> Option<String> {
 fn detect_multi_file(v: &serde_json::Value) -> Option<String> {
     if let serde_json::Value::Object(map) = v {
         if map.contains_key("files") || map.contains_key("patches") || map.contains_key("edits") {
-            return Some("Only single-file patches are allowed — model returned multiple files.".to_string());
+            return Some(
+                "Only single-file patches are allowed — model returned multiple files.".to_string(),
+            );
         }
         // If has both targetPath and files array, it's multi
-        if map.contains_key("targetPath") && (map.contains_key("file") || map.contains_key("path") && map.get("path") != map.get("targetPath")) {
+        if map.contains_key("targetPath")
+            && (map.contains_key("file")
+                || map.contains_key("path") && map.get("path") != map.get("targetPath"))
+        {
             // Not reliable, but check if proposedContent is array
             if let Some(pc) = map.get("proposedContent") {
                 if pc.is_array() {
@@ -273,7 +291,9 @@ fn detect_multi_file(v: &serde_json::Value) -> Option<String> {
     }
     if let serde_json::Value::Array(arr) = v {
         if !arr.is_empty() {
-            return Some("Only single-file patches are allowed — model returned an array.".to_string());
+            return Some(
+                "Only single-file patches are allowed — model returned an array.".to_string(),
+            );
         }
     }
     None
@@ -333,7 +353,11 @@ mod tests {
     fn rejects_missing_fields() {
         let json = r#"{"version":1,"targetPath":"a.txt"}"#;
         let err = parse_and_validate(json, "a.txt", "old").unwrap_err();
-        assert!(err.contains("Missing") || err.contains("missing field"), "got {}", err);
+        assert!(
+            err.contains("Missing") || err.contains("missing field"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
@@ -346,14 +370,22 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let err = parse_and_validate("not json at all", "a.txt", "old").unwrap_err();
-        assert!(err.contains("Malformed") || err.contains("valid JSON"), "got {}", err);
+        assert!(
+            err.contains("Malformed") || err.contains("valid JSON"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
     fn rejects_unknown_fields() {
         let json = r#"{"version":1,"targetPath":"a.txt","proposedContent":"new","extra":"field"}"#;
         let err = parse_and_validate(json, "a.txt", "old").unwrap_err();
-        assert!(err.contains("Unexpected") || err.contains("unknown field"), "got {}", err);
+        assert!(
+            err.contains("Unexpected") || err.contains("unknown field"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
@@ -364,14 +396,22 @@ mod tests {
 
         let json2 = r#"{"files":[{"path":"a.txt","content":"x"}]}"#;
         let err2 = parse_and_validate(json2, "a.txt", "old").unwrap_err();
-        assert!(err2.contains("Only single-file") || err2.contains("Missing"), "got {}", err2);
+        assert!(
+            err2.contains("Only single-file") || err2.contains("Missing"),
+            "got {}",
+            err2
+        );
     }
 
     #[test]
     fn rejects_empty_proposed() {
         let json = r#"{"version":1,"targetPath":"a.txt","proposedContent":""}"#;
         let err = parse_and_validate(json, "a.txt", "old").unwrap_err();
-        assert!(err.contains("Missing") || err.contains("proposedContent"), "got {}", err);
+        assert!(
+            err.contains("Missing") || err.contains("proposedContent"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
@@ -380,21 +420,33 @@ mod tests {
         let v = serde_json::json!({"version":1,"targetPath":"a.txt","proposedContent": big});
         let s = v.to_string();
         let err = parse_and_validate(&s, "a.txt", "old").unwrap_err();
-        assert!(err.contains("too large") || err.contains("character limit"), "got {}", err);
+        assert!(
+            err.contains("too large") || err.contains("character limit"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
     fn rejects_invalid_target_traversal() {
         let json = r#"{"version":1,"targetPath":"../outside.txt","proposedContent":"new"}"#;
         let err = parse_and_validate(json, "../outside.txt", "old").unwrap_err();
-        assert!(err.contains("Invalid") || err.contains("forbidden"), "got {}", err);
+        assert!(
+            err.contains("Invalid") || err.contains("forbidden"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
     fn rejects_absolute_path() {
         let json = r#"{"version":1,"targetPath":"/etc/passwd","proposedContent":"new"}"#;
         let err = parse_and_validate(json, "/etc/passwd", "old").unwrap_err();
-        assert!(err.contains("Absolute") || err.contains("Invalid"), "got {}", err);
+        assert!(
+            err.contains("Absolute") || err.contains("Invalid"),
+            "got {}",
+            err
+        );
     }
 
     #[test]
@@ -487,7 +539,9 @@ fn validate_file_fields(
     }
 
     if proposed.trim().is_empty() {
-        return Err("Missing 'proposedContent' — patch must contain replacement content.".to_string());
+        return Err(
+            "Missing 'proposedContent' — patch must contain replacement content.".to_string(),
+        );
     }
     if proposed.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
         return Err(format!(
@@ -625,7 +679,11 @@ pub fn parse_and_validate_batch(
         for key in entry_obj.keys() {
             let allowed = matches!(
                 key.as_str(),
-                "targetPath" | "target_path" | "proposedContent" | "proposed_content" | "explanation"
+                "targetPath"
+                    | "target_path"
+                    | "proposedContent"
+                    | "proposed_content"
+                    | "explanation"
             );
             if !allowed {
                 return Err(format!("Unexpected field in file entry: '{}'", key));
@@ -645,7 +703,10 @@ pub fn parse_and_validate_batch(
         let original = originals.get(target_raw.trim()).map(|s| s.as_str());
         let file = validate_file_fields(target_raw, proposed, explanation, original)?;
         if !seen.insert(file.target_path.to_lowercase()) {
-            return Err(format!("Duplicate target path in patch response: '{}'", file.target_path));
+            return Err(format!(
+                "Duplicate target path in patch response: '{}'",
+                file.target_path
+            ));
         }
         validated.push(file);
     }
@@ -682,8 +743,11 @@ mod batch_tests {
         let raw = r#"{"version":2,"explanation":"batch","files":[
             {"targetPath":"src/a.ts","proposedContent":"a2\n","explanation":"part one"},
             {"targetPath":"src/b.ts","proposedContent":"b2\n"}]}"#;
-        let batch = parse_and_validate_batch(raw, &originals(&[("src/a.ts", "a1\n"), ("src/b.ts", "b1\n")]))
-            .unwrap();
+        let batch = parse_and_validate_batch(
+            raw,
+            &originals(&[("src/a.ts", "a1\n"), ("src/b.ts", "b1\n")]),
+        )
+        .unwrap();
         assert_eq!(batch.version, PATCH_CONTRACT_VERSION_V2);
         assert_eq!(batch.files.len(), 2);
         assert_eq!(batch.files[0].target_path, "src/a.ts");
@@ -715,7 +779,9 @@ mod batch_tests {
             if i > 0 {
                 many.push(',');
             }
-            many.push_str(&format!("{{\"targetPath\":\"f{i}.txt\",\"proposedContent\":\"x\"}}"));
+            many.push_str(&format!(
+                "{{\"targetPath\":\"f{i}.txt\",\"proposedContent\":\"x\"}}"
+            ));
         }
         many.push_str("]}");
         assert!(parse_and_validate_batch(&many, &HashMap::new()).is_err());
@@ -728,10 +794,12 @@ mod batch_tests {
             {"targetPath":"../evil.txt","proposedContent":"x"}]}"#;
         assert!(parse_and_validate_batch(traversal, &HashMap::new()).is_err());
 
-        let sensitive = r#"{"version":2,"files":[{"targetPath":"cfg/.env","proposedContent":"x"}]}"#;
+        let sensitive =
+            r#"{"version":2,"files":[{"targetPath":"cfg/.env","proposedContent":"x"}]}"#;
         assert!(parse_and_validate_batch(sensitive, &HashMap::new()).is_err());
 
-        let no_change = r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"same"}]}"#;
+        let no_change =
+            r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"same"}]}"#;
         assert!(parse_and_validate_batch(no_change, &originals(&[("a.txt", "same")])).is_err());
 
         let nul = "{\"version\":2,\"files\":[{\"targetPath\":\"a.bin\",\"proposedContent\":\"x\\u0000y\"}]}";
@@ -740,14 +808,15 @@ mod batch_tests {
 
     #[test]
     fn rejects_wrong_versions_and_unknown_fields() {
-        let wrong_version = r#"{"version":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
+        let wrong_version =
+            r#"{"version":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
         assert!(parse_and_validate_batch(wrong_version, &HashMap::new()).is_err());
 
-        let unknown_top = r#"{"version":2,"extra":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
+        let unknown_top =
+            r#"{"version":2,"extra":1,"files":[{"targetPath":"a.txt","proposedContent":"x"}]}"#;
         assert!(parse_and_validate_batch(unknown_top, &HashMap::new()).is_err());
 
-        let unknown_file =
-            r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"x","mode":"append"}]}"#;
+        let unknown_file = r#"{"version":2,"files":[{"targetPath":"a.txt","proposedContent":"x","mode":"append"}]}"#;
         assert!(parse_and_validate_batch(unknown_file, &HashMap::new()).is_err());
 
         let array = r#"[{"targetPath":"a"}]"#;

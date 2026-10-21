@@ -25,10 +25,14 @@ export interface UsePatchRepairOptions {
   symbolIndex: SymbolIndex | null;
   contextFiles: Array<{ path: string; content: string; size: number }>;
   originalInstruction?: string | null;
+  /** The profile selected in the core; sent so a stale tab is refused. */
+  profileId?: string | null;
 }
 
 export function usePatchRepair(opts: UsePatchRepairOptions) {
   const { workspacePath, engineStatus, symbolIndex, contextFiles } = opts;
+  const profileRef = useRef<string | null>(opts.profileId ?? null);
+  profileRef.current = opts.profileId ?? null;
   const [state, setState] = useState<RepairState>({ status: "idle", attempts: 0 });
   const requestIdRef = useRef<string | null>(null);
   const generatingRef = useRef(false);
@@ -163,7 +167,13 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
         ] as Array<{ role: string; content: string }>;
 
         const outcome = await generate(
-          { requestId, messages: messages as any, maxTokens: 800, temperature: 0.2 },
+          {
+            requestId,
+            messages: messages as any,
+            maxTokens: 800,
+            temperature: 0.2,
+            profileId: profileRef.current,
+          },
           (ev) => {
             if (ev.type === "delta" && ev.text) {
               collected += ev.text;
@@ -264,7 +274,13 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
           { role: "user", content: user },
         ] as Array<{ role: string; content: string }>;
         const outcome = await generate(
-          { requestId, messages: messages as any, maxTokens: 1200, temperature: 0.2 },
+          {
+            requestId,
+            messages: messages as any,
+            maxTokens: 1200,
+            temperature: 0.2,
+            profileId: profileRef.current,
+          },
           (ev) => {
             if (ev.type === "delta" && ev.text) {
               collected += ev.text;
