@@ -1,5 +1,12 @@
 # Phase 26: Developer Licensing, Subscriptions & Workspace Tiering
 
+> **Superseded for Nexora Mini (verified 2026-10-20).** This document records the
+> original 32-phase build. Mini is local-first and account-free, so the tiers,
+> prices and "unlimited" rows below are **not** a current product promise: local
+> generation is metered at a provisional 50 generations per day, enforced in the
+> Rust core. The current policy is `docs/nexora-mini/PHASE_7_USAGE_LIMIT.md`; the
+> table is kept unchanged as history.
+
 ## 1. Overview & Architectural Intent
 
 Phase 26 implements the **Developer Licensing, Subscription Tiering, and Monetization** system for Nexora as defined in the architectural roadmap (`docs/phase-23/README.md` §10).

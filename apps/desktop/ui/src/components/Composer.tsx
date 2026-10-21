@@ -21,6 +21,11 @@ interface ComposerProps {
   busy: boolean;
   /** False when no model is loaded, so sending is disabled with a reason. */
   canGenerate: boolean;
+  /**
+   * Why sending is blocked when the engine itself is ready — today the daily
+   * allowance. Null/undefined keeps the engine wording.
+   */
+  blockedReason?: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onStop: () => void;
@@ -33,6 +38,7 @@ export function Composer({
   textareaRef,
   busy,
   canGenerate,
+  blockedReason = null,
   onChange,
   onSubmit,
   onStop,
@@ -78,7 +84,7 @@ export function Composer({
     ? "Generating on this machine…"
     : canGenerate
       ? "Local model ready"
-      : "No model loaded";
+      : (blockedReason ?? "No model loaded");
 
   return (
     <form className="composer-wrap" onSubmit={handleSubmit} aria-label="Message composer">
@@ -96,7 +102,7 @@ export function Composer({
           placeholder={
             canGenerate
               ? "Describe what you want to build…"
-              : "Load a local model to start"
+              : (blockedReason ?? "Load a local model to start")
           }
           aria-describedby="composer-help composer-status"
           aria-invalid={error ? true : undefined}
@@ -174,7 +180,7 @@ export function Composer({
                     ? canSend
                       ? "Send (Enter)"
                       : "Type a message to send"
-                    : "Load a model to send"
+                    : (blockedReason ?? "Load a model to send")
                 }
               >
                 <Icon name="arrow-up" size={17} />

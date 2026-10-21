@@ -50,7 +50,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -97,6 +97,20 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string, args?: any) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(makeUsage());
+      case "plan_workspace_export":
+        return Promise.resolve({
+          rootName: "demo-app",
+          files: [{ path: "src/main.ts", size: 58 }],
+          excludedSensitive: 0,
+          excludedSymlink: 0,
+          excludedUnsafe: 0,
+          totalBytes: 58,
+          truncated: false,
+        });
+      case "suggest_export_path":
+        return Promise.resolve("/tmp/demo-app.zip");
       case "list_conversations":
         return Promise.resolve([]);
       case "pick_workspace_dialog":
@@ -153,12 +167,25 @@ describe("Phase 26 — Projects Management & File Operations Integration", () =>
     await user.click(openBtn);
 
     expect(await screen.findByRole("heading", { name: "demo-app" })).toBeTruthy();
-    expect(await screen.findByText("src/main.ts")).toBeTruthy();
-    expect(screen.getByText("README.md")).toBeTruthy();
+    expect((await screen.findAllByText("src/main.ts")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("README.md").length).toBeGreaterThan(0);
 
     expect(screen.getAllByRole("button", { name: /Switch project/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole("button", { name: /Refresh/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole("button", { name: /Close/i }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("offers Download Mode with a reviewed export plan", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const openBtn = await screen.findByRole("button", { name: "Open project folder" });
+    await user.click(openBtn);
+
+    expect(await screen.findByRole("heading", { name: "Export project files" })).toBeTruthy();
+    expect(await screen.findByText(/1 file · 0\.00 GiB will be written/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Export ZIP/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Whole project" })).toBeTruthy();
   });
 
   it("selects a file for read-only preview without modifying disk", async () => {

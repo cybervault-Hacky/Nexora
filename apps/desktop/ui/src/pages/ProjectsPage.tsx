@@ -1,4 +1,5 @@
 import { EvidencePanel } from "../components/EvidencePanel";
+import { ExportPanel } from "../components/ExportPanel";
 import { FilePreview } from "../components/FilePreview";
 import { Icon } from "../components/Icon";
 import { PatchEditor } from "../components/PatchEditor";
@@ -35,6 +36,8 @@ interface ProjectsPageProps {
   engineStatus: AppStatus | null;
   symbolIndex: SymbolIndex | null;
   isStreaming: boolean;
+  /** The profile selected in the core; patch requests name it. */
+  profileId?: string | null;
 }
 
 /**
@@ -55,6 +58,7 @@ export function ProjectsPage({
   engineStatus,
   symbolIndex,
   isStreaming,
+  profileId = null,
 }: ProjectsPageProps) {
   return (
     <div className="page page--projects">
@@ -162,6 +166,12 @@ export function ProjectsPage({
                 onClose={workspace.clearPreview}
               />
 
+              <ExportPanel
+                workspacePath={workspace.workspacePath}
+                selectedPaths={workspace.selectedPaths}
+                previewPath={workspace.previewPath}
+              />
+
               {evidenceReport ? (
             <EvidencePanel report={evidenceReport} isStreaming={isStreaming} />
           ) : null}
@@ -195,6 +205,7 @@ export function ProjectsPage({
             engineStatus={engineStatus}
             symbolIndex={symbolIndex}
             contextFiles={workspace.contextFiles}
+            profileId={profileId}
             onApplied={() => {
               void workspace.refresh();
               if (workspace.previewPath) void workspace.loadPreview(workspace.previewPath);

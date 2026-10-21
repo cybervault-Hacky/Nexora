@@ -5,7 +5,9 @@ import { EmptyState } from "../components/EmptyState";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { Icon } from "../components/Icon";
 import { MessageList } from "../components/MessageList";
+import { ModelSelector } from "../components/ModelSelector";
 import { RetrievalBar } from "../components/RetrievalBar";
+import { UsageMeter } from "../components/UsageMeter";
 import { RouterLink } from "../components/RouterLink";
 import { planContextBudget } from "../features/workspace/contextBudget";
 import type { RetrievalResult } from "../features/workspace/retrieval";
@@ -13,6 +15,8 @@ import type { buildEvidenceReport } from "../lib/evidence";
 import type { AppStatus } from "../lib/ipc";
 import { isNearBottom } from "../lib/scroll";
 import type { usePersistentConversation } from "../features/chat/usePersistentConversation";
+import type { ModelCatalog } from "../features/models/useModelCatalog";
+import type { UsageView } from "../features/usage/useUsage";
 import type { useWorkspace } from "../features/workspace/useWorkspace";
 
 type ConversationState = ReturnType<typeof usePersistentConversation>;
@@ -35,6 +39,10 @@ interface ChatPageProps {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   focusNonce: number;
   onSubmit: () => void;
+  /** Authoritative daily allowance; `null` status means the browser preview. */
+  usage: UsageView;
+  /** Registered models and their real availability, from the desktop core. */
+  models: ModelCatalog;
 }
 
 /** One place that turns engine state into a label and a tone. */
@@ -82,6 +90,8 @@ export function ChatPage({
   textareaRef,
   focusNonce,
   onSubmit,
+  usage,
+  models,
 }: ChatPageProps) {
   const {
     conversationLoading,
@@ -113,6 +123,9 @@ export function ChatPage({
 
   const hasMessages = messages.length > 0;
   const engineChip = describeEngineChip(engineStatus, statusError, engineReady);
+  // The browser preview has no record, so it neither blocks nor renders a meter.
+  const allowanceExhausted = usage.status?.exhausted ?? false;
+  const showUsage = usage.status !== null || usage.error !== null;
   const conversationTitle = activeId
     ? activeTitle
     : hasMessages
@@ -436,12 +449,23 @@ export function ChatPage({
         </div>
       ) : null}
 
+      {showUsage ? <UsageMeter usage={usage} /> : null}
+
+      {desktop ? <ModelSelector catalog={models} disabled={streaming} /> : null}
+
       <Composer
         value={draft}
         error={error}
         textareaRef={textareaRef}
         busy={streaming}
-        canGenerate={engineReady && !conversationLoading}
+        canGenerate={
+          engineReady && !conversationLoading && !allowanceExhausted && !models.selectionError
+        }
+        blockedReason={
+          allowanceExhausted
+            ? "Daily free allowance reached — it resets at 00:00 UTC"
+            : (models.selectionError ?? null)
+        }
         onChange={setDraft}
         onSubmit={() => {
           stickToBottomRef.current = true;

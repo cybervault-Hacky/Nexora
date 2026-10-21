@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { markDesktop } from "./test/fixtures";
+import { markDesktop, makeUsage } from "./test/fixtures";
 
 // Mock Tauri invoke IPC
 vi.mock("@tauri-apps/api/core", () => ({
@@ -23,6 +23,8 @@ function installTauriMocks() {
 
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
     switch (command) {
+      case "get_usage_status":
+        return makeUsage();
       case "get_app_status":
         return {
           name: "Nexora",
@@ -84,6 +86,9 @@ function installTauriMocks() {
           sizeGib: 13.97,
           ggufVersion: 3,
           tensorCount: 380,
+          architecture: "qwen2",
+          name: null,
+          contextLength: 32768,
           estimatedMinRamGib: 16.5,
           fitsAvailableRam: true,
           warnings: [],

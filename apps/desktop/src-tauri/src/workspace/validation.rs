@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::patch::{hash_content, PatchProposal};
 use super::scanner::{
-    canonicalize_root, is_sensitive_file, validate_relative_path, MAX_PREVIEW_BYTES, MAX_PATH_CHARS,
+    canonicalize_root, is_sensitive_file, validate_relative_path, MAX_PATH_CHARS, MAX_PREVIEW_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,10 +49,10 @@ pub struct ValidationReport {
     pub overall: CheckStatus,
     pub checks: Vec<ValidationCheck>,
     pub summary: String,
-    pub durationMs: u64,
-    pub proposalId: String,
-    pub proposalPath: String,
-    pub generatedAt: u64,
+    pub duration_ms: u64,
+    pub proposal_id: String,
+    pub proposal_path: String,
+    pub generated_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +95,11 @@ fn check_balanced(path: &str, content: &str) -> Result<(), Vec<Diagnostic>> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        let next = if i + 1 < chars.len() { Some(chars[i + 1]) } else { None };
+        let next = if i + 1 < chars.len() {
+            Some(chars[i + 1])
+        } else {
+            None
+        };
 
         // Track line/col before processing char (col refers to this char)
         let cur_line = line;
@@ -291,10 +295,20 @@ fn check_balanced(path: &str, content: &str) -> Result<(), Vec<Diagnostic>> {
 
     // If still inside string/comment at EOF, that's a diagnostic (unclosed)
     if in_single {
-        return Err(vec![diag(path, line, None, "Unclosed single-quoted string")]);
+        return Err(vec![diag(
+            path,
+            line,
+            None,
+            "Unclosed single-quoted string",
+        )]);
     }
     if in_double {
-        return Err(vec![diag(path, line, None, "Unclosed double-quoted string")]);
+        return Err(vec![diag(
+            path,
+            line,
+            None,
+            "Unclosed double-quoted string",
+        )]);
     }
     if in_backtick {
         return Err(vec![diag(path, line, None, "Unclosed backtick string")]);
@@ -344,7 +358,7 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
     {
         let mut diags = Vec::new();
         let mut status = CheckStatus::Passed;
-        let mut note = None;
+        let note = None;
 
         // Recompute hashes
         let recomputed_original = hash_content(&proposal.original_content);
@@ -385,9 +399,14 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         }
         if proposal.proposed_content.contains('\0') {
             status = CheckStatus::Failed;
-            diags.push(diag(&proposal.path, 1, None, "Proposed content contains NUL (binary)"));
+            diags.push(diag(
+                &proposal.path,
+                1,
+                None,
+                "Proposed content contains NUL (binary)",
+            ));
         }
-        if proposal.proposed_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.proposed_content.len() as u64 > MAX_PREVIEW_BYTES {
             status = CheckStatus::Failed;
             diags.push(diag(
                 &proposal.path,
@@ -402,7 +421,12 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         }
         if proposal.proposed_content.chars().count() > 200_000 {
             status = CheckStatus::Failed;
-            diags.push(diag(&proposal.path, 1, None, "Proposed content exceeds 200,000 char limit"));
+            diags.push(diag(
+                &proposal.path,
+                1,
+                None,
+                "Proposed content exceeds 200,000 char limit",
+            ));
         }
         if proposal.path.trim().is_empty() {
             status = CheckStatus::Failed;
@@ -422,11 +446,16 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
     {
         let mut diags = Vec::new();
         let mut status = CheckStatus::Passed;
-        let mut note = None;
+        let note = None;
 
         if let Err(e) = validate_relative_path(&proposal.path) {
             status = CheckStatus::Failed;
-            diags.push(diag(&proposal.path, 1, None, format!("Invalid target path: {}", e.message)));
+            diags.push(diag(
+                &proposal.path,
+                1,
+                None,
+                format!("Invalid target path: {}", e.message),
+            ));
         }
         if proposal.path.chars().count() > MAX_PATH_CHARS {
             status = CheckStatus::Failed;
@@ -458,7 +487,12 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                             if let Ok(meta) = fs::metadata(&canonical_file) {
                                 if meta.is_dir() {
                                     status = CheckStatus::Failed;
-                                    diags.push(diag(&proposal.path, 1, None, "Target is a directory"));
+                                    diags.push(diag(
+                                        &proposal.path,
+                                        1,
+                                        None,
+                                        "Target is a directory",
+                                    ));
                                 }
                             }
                         }
@@ -474,7 +508,12 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
             }
             Err(e) => {
                 status = CheckStatus::Failed;
-                diags.push(diag(&proposal.path, 1, None, format!("Invalid workspace root: {}", e.message)));
+                diags.push(diag(
+                    &proposal.path,
+                    1,
+                    None,
+                    format!("Invalid workspace root: {}", e.message),
+                ));
             }
         }
 
@@ -493,24 +532,35 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         let mut status = CheckStatus::Passed;
         let path_sensitive = is_sensitive_file(Path::new(&proposal.path));
         let lower = proposal.path.to_ascii_lowercase();
-        let env_sensitive = lower == ".env" || lower.starts_with(".env.") || lower.contains("/.env");
+        let env_sensitive =
+            lower == ".env" || lower.starts_with(".env.") || lower.contains("/.env");
         if path_sensitive || env_sensitive {
             status = CheckStatus::Failed;
-            diags.push(diag(&proposal.path, 1, None, "Sensitive file — patching excluded"));
+            diags.push(diag(
+                &proposal.path,
+                1,
+                None,
+                "Sensitive file — patching excluded",
+            ));
         }
         if proposal.original_content.contains('\0') || proposal.proposed_content.contains('\0') {
             if status != CheckStatus::Failed {
                 status = CheckStatus::Failed;
             }
-            diags.push(diag(&proposal.path, 1, None, "Binary content detected (NUL)"));
+            diags.push(diag(
+                &proposal.path,
+                1,
+                None,
+                "Binary content detected (NUL)",
+            ));
         }
         // Binary via non-utf8 already handled as String, but we also check for high control? Not needed.
 
-        if proposal.original_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.original_content.len() as u64 > MAX_PREVIEW_BYTES {
             status = CheckStatus::Failed;
             diags.push(diag(&proposal.path, 1, None, "Original content too large"));
         }
-        if proposal.proposed_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.proposed_content.len() as u64 > MAX_PREVIEW_BYTES {
             if status != CheckStatus::Failed {
                 status = CheckStatus::Failed;
             }
@@ -552,7 +602,10 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                                     if bytes.contains(&0) {
                                         // Binary stale not checked
                                         status = CheckStatus::NotRun;
-                                        note = Some("Stale check not run — current file is binary".to_string());
+                                        note = Some(
+                                            "Stale check not run — current file is binary"
+                                                .to_string(),
+                                        );
                                     } else if let Ok(current) = String::from_utf8(bytes) {
                                         let current_hash = hash_content(&current);
                                         if current_hash != proposal.original_hash {
@@ -566,11 +619,17 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                                         }
                                     } else {
                                         status = CheckStatus::NotRun;
-                                        note = Some("Stale check not run — current file not UTF-8".to_string());
+                                        note = Some(
+                                            "Stale check not run — current file not UTF-8"
+                                                .to_string(),
+                                        );
                                     }
                                 } else {
                                     status = CheckStatus::NotRun;
-                                    note = Some("Stale check not run — could not read current file".to_string());
+                                    note = Some(
+                                        "Stale check not run — could not read current file"
+                                            .to_string(),
+                                    );
                                 }
                             }
                         }
@@ -621,7 +680,12 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                             .and_then(|n| n.parse::<usize>().ok());
                         (
                             CheckStatus::Failed,
-                            vec![diag(&proposal.path, line, col, format!("JSON syntax: {}", msg))],
+                            vec![diag(
+                                &proposal.path,
+                                line,
+                                col,
+                                format!("JSON syntax: {}", msg),
+                            )],
                             None,
                         )
                     }
@@ -635,9 +699,13 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                 // This is heuristic — false positives possible, but we report actual diagnostics.
                 match check_balanced(&proposal.path, &proposal.proposed_content) {
                     Ok(()) => (CheckStatus::Passed, vec![], None),
-                    Err(mut ds) => {
+                    Err(ds) => {
                         // If proposed content is trivial (e.g., single line), mark as Failed still but note it's heuristic
-                        (CheckStatus::Failed, ds, Some("Heuristic balanced-delimiter check (no compiler)".to_string()))
+                        (
+                            CheckStatus::Failed,
+                            ds,
+                            Some("Heuristic balanced-delimiter check (no compiler)".to_string()),
+                        )
                     }
                 }
             }
@@ -656,7 +724,17 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
 
         push(ValidationCheck {
             id: "syntax".to_string(),
-            label: format!("Syntax (.{}) — {}", ext, if ext == "json" { "JSON parse" } else if ["rs","ts","tsx","js","jsx","py"].contains(&ext.as_str()) { "balanced delimiters" } else { "unsupported" }),
+            label: format!(
+                "Syntax (.{}) — {}",
+                ext,
+                if ext == "json" {
+                    "JSON parse"
+                } else if ["rs", "ts", "tsx", "js", "jsx", "py"].contains(&ext.as_str()) {
+                    "balanced delimiters"
+                } else {
+                    "unsupported"
+                }
+            ),
             status,
             diagnostics: diags,
             note,
@@ -688,9 +766,15 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
     };
 
     let summary = match overall {
-        CheckStatus::Passed => "All supported checks passed — proposal appears safe to review".to_string(),
-        CheckStatus::Failed => "Validation failed — proposal has errors that must be addressed".to_string(),
-        CheckStatus::Inconclusive => "Validation inconclusive — some checks could not be fully determined".to_string(),
+        CheckStatus::Passed => {
+            "All supported checks passed — proposal appears safe to review".to_string()
+        }
+        CheckStatus::Failed => {
+            "Validation failed — proposal has errors that must be addressed".to_string()
+        }
+        CheckStatus::Inconclusive => {
+            "Validation inconclusive — some checks could not be fully determined".to_string()
+        }
         CheckStatus::NotRun => "Validation not run".to_string(),
         CheckStatus::Unsupported => "Validation unsupported".to_string(),
     };
@@ -701,10 +785,10 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         overall,
         checks,
         summary,
-        durationMs: duration_ms,
-        proposalId: proposal.id.clone(),
-        proposalPath: proposal.path.clone(),
-        generatedAt: generated_at,
+        duration_ms,
+        proposal_id: proposal.id.clone(),
+        proposal_path: proposal.path.clone(),
+        generated_at,
     }
 }
 
@@ -757,7 +841,10 @@ mod tests {
         let r = validate_detailed(dir.path(), &p);
         let c = r.checks.iter().find(|c| c.id == "contract_schema").unwrap();
         assert_eq!(c.status, CheckStatus::Failed);
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("Proposed hash")));
+        assert!(c
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Proposed hash")));
         assert_eq!(r.overall, CheckStatus::Failed);
     }
 
@@ -780,7 +867,10 @@ mod tests {
         let r = validate_detailed(dir.path(), &p);
         let c = r.checks.iter().find(|c| c.id == "target_boundary").unwrap();
         assert_eq!(c.status, CheckStatus::Failed);
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("Invalid") || d.message.contains("traversal")));
+        assert!(c
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Invalid") || d.message.contains("traversal")));
     }
 
     #[test]
@@ -788,9 +878,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let p = make_proposal(".env", "old", "new");
         let r = validate_detailed(dir.path(), &p);
-        let c = r.checks.iter().find(|c| c.id == "sensitive_binary_size").unwrap();
+        let c = r
+            .checks
+            .iter()
+            .find(|c| c.id == "sensitive_binary_size")
+            .unwrap();
         assert_eq!(c.status, CheckStatus::Failed);
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("Sensitive")));
+        assert!(c
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Sensitive")));
     }
 
     #[test]
@@ -812,7 +909,11 @@ mod tests {
     #[test]
     fn balanced_rs_passes() {
         let dir = temp_root_with("src/main.rs", "fn main() {}");
-        let p = make_proposal("src/main.rs", "fn main() {}", "fn main() { let x = (1 + 2); }");
+        let p = make_proposal(
+            "src/main.rs",
+            "fn main() {}",
+            "fn main() { let x = (1 + 2); }",
+        );
         let r = validate_detailed(dir.path(), &p);
         let c = r.checks.iter().find(|c| c.id == "syntax").unwrap();
         assert_eq!(c.status, CheckStatus::Passed);
@@ -821,11 +922,19 @@ mod tests {
     #[test]
     fn balanced_rs_fails_on_mismatch() {
         let dir = temp_root_with("src/main.rs", "fn main() {}");
-        let p = make_proposal("src/main.rs", "fn main() {}", "fn main() { let x = (1 + 2; }");
+        let p = make_proposal(
+            "src/main.rs",
+            "fn main() {}",
+            "fn main() { let x = (1 + 2; }",
+        );
         let r = validate_detailed(dir.path(), &p);
         let c = r.checks.iter().find(|c| c.id == "syntax").unwrap();
         assert_eq!(c.status, CheckStatus::Failed);
-        assert!(c.diagnostics[0].message.contains("Mismatched") || c.diagnostics[0].message.contains("Unclosed") || c.diagnostics[0].message.contains("Unmatched"));
+        assert!(
+            c.diagnostics[0].message.contains("Mismatched")
+                || c.diagnostics[0].message.contains("Unclosed")
+                || c.diagnostics[0].message.contains("Unmatched")
+        );
     }
 
     #[test]
@@ -844,7 +953,7 @@ mod tests {
         let r = validate_detailed(dir.path(), &p);
         let c = r.checks.iter().find(|c| c.id == "static_analysis").unwrap();
         assert_eq!(c.status, CheckStatus::NotRun);
-        assert!(c.note.unwrap().contains("Not run"));
+        assert!(c.note.as_deref().unwrap().contains("Not run"));
     }
 
     #[test]
@@ -859,10 +968,16 @@ mod tests {
     fn cleans_temp_not_in_root() {
         // Ensure validation does not write into root (we use in-memory only, so root should stay clean)
         let dir = temp_root_with("src/a.txt", "old");
-        let before: Vec<String> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        let before: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
         let p = make_proposal("src/a.txt", "old", "new");
         let _ = validate_detailed(dir.path(), &p);
-        let after: Vec<String> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        let after: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
         assert_eq!(before, after);
     }
 }

@@ -91,6 +91,7 @@ pub async fn stream_chat(
     on_event: &Channel<GenerationEvent>,
     cancel: Arc<Notify>,
     cancelled: Arc<AtomicBool>,
+    accepted: &AtomicBool,
 ) -> InferenceResult<GenerationOutcome> {
     let client = reqwest::Client::builder().no_proxy().build()?;
 
@@ -128,6 +129,11 @@ pub async fn stream_chat(
             format!("The local engine rejected the request ({status}): {detail}"),
         ));
     }
+
+    // The engine has taken the request and is streaming. Everything before
+    // this point is a failure that costs the user nothing; everything after it
+    // is work the model really did.
+    accepted.store(true, Ordering::SeqCst);
 
     let _ = on_event.send(GenerationEvent::Started {
         request_id: request_id.to_string(),
@@ -213,11 +219,29 @@ pub async fn stream_chat(
         return Ok(cancelled_outcome(request_id));
     }
 
+    // A stream can close without `[DONE]`: the process can exit, the socket can
+    // be cut, or the runtime can fail mid-reply. That used to look like a
+    // short but successful answer. It is not one.
+    if !stream_completed(finished, finish_reason.as_deref()) {
+        return Err(InferenceError::network(
+            "The local engine ended the reply before reporting it finished. The answer may be incomplete; send the message again.",
+        ));
+    }
+
     Ok(GenerationOutcome {
         request_id: request_id.to_string(),
         finish_reason,
         cancelled: false,
     })
+}
+
+/// Whether the stream ended in a way that proves the model finished.
+///
+/// Either the `[DONE]` sentinel arrived, or the last JSON chunk carried a
+/// `finish_reason`. Anything else is a truncated reply and must not be shown as
+/// a complete one.
+pub fn stream_completed(done_sentinel: bool, finish_reason: Option<&str>) -> bool {
+    done_sentinel || finish_reason.is_some_and(|reason| !reason.trim().is_empty())
 }
 
 /// Builds the "user stopped it" outcome.
@@ -251,9 +275,9 @@ pub fn status_error_code(status: u16) -> &'static str {
 
 /// Pulls `error.message` out of the runtime's OpenAI-compatible error body.
 ///
-/// Real bodies observed from a locally built b11714 server:
-/// `{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}`
-/// and `{"error":{"code":400,"message":"model 'local' not found","type":"invalid_request_error"}}`.
+/// The runtime (like the OpenAI API it mimics) puts a human message in
+/// `error.message`; `tools/server/server-http.cpp` defines the shape. The
+/// fixtures below are transcribed from that contract, not captured here.
 pub fn error_message(body: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Envelope {
@@ -315,10 +339,10 @@ mod tests {
         assert_eq!(extract_delta(r#"{"choices":[]}"#), DeltaPiece::default());
     }
 
-    /// Bodies copied from a locally built b11714 server.
-    const REAL_401: &str =
+    /// Error envelopes shaped like the runtime's documented contract.
+    const ENVELOPE_401: &str =
         r#"{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}"#;
-    const REAL_400: &str = r#"{"error":{"code":400,"message":"model 'local' not found","type":"invalid_request_error"}}"#;
+    const ENVELOPE_400: &str = r#"{"error":{"code":400,"message":"'messages' is required","type":"invalid_request_error"}}"#;
 
     #[test]
     fn maps_http_rejections_to_specific_codes() {
@@ -331,10 +355,13 @@ mod tests {
 
     #[test]
     fn reads_the_runtime_error_message() {
-        assert_eq!(error_message(REAL_401).as_deref(), Some("Invalid API Key"));
         assert_eq!(
-            error_message(REAL_400).as_deref(),
-            Some("model 'local' not found")
+            error_message(ENVELOPE_401).as_deref(),
+            Some("Invalid API Key")
+        );
+        assert_eq!(
+            error_message(ENVELOPE_400).as_deref(),
+            Some("'messages' is required")
         );
     }
 
@@ -349,6 +376,25 @@ mod tests {
         // Regression: every rejection used to be "load_failed", which hid an
         // auth problem behind a model message.
         assert_ne!(status_error_code(401), "load_failed");
+    }
+
+    #[test]
+    fn a_done_sentinel_completes_the_stream() {
+        assert!(stream_completed(true, None));
+        assert!(stream_completed(true, Some("stop")));
+    }
+
+    #[test]
+    fn a_finish_reason_completes_the_stream_without_the_sentinel() {
+        assert!(stream_completed(false, Some("stop")));
+        assert!(stream_completed(false, Some("length")));
+    }
+
+    #[test]
+    fn a_stream_that_just_stops_is_not_complete() {
+        // The runtime exited, or the connection dropped, between tokens.
+        assert!(!stream_completed(false, None));
+        assert!(!stream_completed(false, Some("   ")));
     }
 
     #[test]

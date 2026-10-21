@@ -16,34 +16,10 @@ pub fn compute_licence_checksum(prefix: &str) -> String {
     hasher.update(prefix.as_bytes());
     hasher.update(LICENCE_SALT);
     let hash = hasher.finalize();
-    format!("{:02X}{:02X}{:02X}{:02X}", hash[0], hash[1], hash[2], hash[3])
-}
-
-/// Generates a valid test/developer licence key for a given tier, licensee, and optional expiry.
-pub fn generate_licence_key(tier: LicenceTier, licensee: &str, expires_at: Option<i64>) -> String {
-    let tier_str = match tier {
-        LicenceTier::Community => "COMMUNITY",
-        LicenceTier::Pro => "PRO",
-        LicenceTier::Team => "TEAM",
-        LicenceTier::Enterprise => "ENT",
-    };
-
-    let exp_str = match expires_at {
-        Some(ts) => format!("EXP{}", ts),
-        None => "PERPETUAL".to_string(),
-    };
-
-    let sanitized_licensee: String = licensee
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(12)
-        .collect::<String>()
-        .to_uppercase();
-
-    let body = format!("{}_{}", exp_str, sanitized_licensee);
-    let prefix = format!("NEXORA-{}-{}", tier_str, body);
-    let checksum = compute_licence_checksum(&prefix);
-    format!("{}-{}", prefix, checksum)
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}",
+        hash[0], hash[1], hash[2], hash[3]
+    )
 }
 
 /// Validates an offline licence key without requiring network connectivity.
@@ -85,8 +61,12 @@ pub fn validate_licence_key(raw_key: &str) -> Result<ValidatedLicence, LicenceEr
     };
 
     let body_parts: Vec<&str> = body.split('_').collect();
-    let exp_part = body_parts.get(0).copied().unwrap_or("PERPETUAL");
-    let licensee = body_parts.get(1).copied().unwrap_or("REGISTERED_DEVELOPER").to_string();
+    let exp_part = body_parts.first().copied().unwrap_or("PERPETUAL");
+    let licensee = body_parts
+        .get(1)
+        .copied()
+        .unwrap_or("REGISTERED_DEVELOPER")
+        .to_string();
 
     let expires_at = if exp_part == "PERPETUAL" {
         None
@@ -112,7 +92,7 @@ pub fn validate_licence_key(raw_key: &str) -> Result<ValidatedLicence, LicenceEr
     };
 
     let mut features = vec![
-        "unlimited_local_inference".to_string(),
+        "daily_local_inference".to_string(),
         "gguf_model_execution".to_string(),
         "offline_ai_chat".to_string(),
         "workspace_code_intelligence".to_string(),
@@ -140,7 +120,10 @@ pub fn validate_licence_key(raw_key: &str) -> Result<ValidatedLicence, LicenceEr
     })
 }
 
-pub fn to_licence_status(validated: Option<&ValidatedLicence>, raw_key: Option<String>) -> LicenceStatus {
+pub fn to_licence_status(
+    validated: Option<&ValidatedLicence>,
+    raw_key: Option<String>,
+) -> LicenceStatus {
     match validated {
         Some(v) => {
             let plan_name = match v.tier {

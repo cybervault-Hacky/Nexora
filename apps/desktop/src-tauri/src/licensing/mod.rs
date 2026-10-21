@@ -3,19 +3,14 @@ pub mod validator;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LicenceTier {
+    #[default]
     Community,
     Pro,
     Team,
     Enterprise,
-}
-
-impl Default for LicenceTier {
-    fn default() -> Self {
-        LicenceTier::Community
-    }
 }
 
 impl std::fmt::Display for LicenceTier {
@@ -51,7 +46,7 @@ impl Default for LicenceStatus {
             licensee: None,
             expires_at: None,
             features: vec![
-                "unlimited_local_inference".to_string(),
+                "daily_local_inference".to_string(),
                 "gguf_model_execution".to_string(),
                 "offline_ai_chat".to_string(),
                 "workspace_code_intelligence".to_string(),

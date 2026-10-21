@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
@@ -30,26 +30,6 @@ pub enum SymbolKind {
     Export,
     Module,
     File,
-}
-
-impl SymbolKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Function => "function",
-            Self::Method => "method",
-            Self::Class => "class",
-            Self::Interface => "interface",
-            Self::Type => "type",
-            Self::Struct => "struct",
-            Self::Enum => "enum",
-            Self::Trait => "trait",
-            Self::Constant => "constant",
-            Self::Import => "import",
-            Self::Export => "export",
-            Self::Module => "module",
-            Self::File => "file",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,22 +83,13 @@ fn is_supported_ext(ext: &str) -> bool {
     matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "py")
 }
 
-fn language_for_path(path: &str) -> &'static str {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "rs" => "rust",
-        "ts" => "typescript",
-        "tsx" => "tsx",
-        "js" => "javascript",
-        "jsx" => "jsx",
-        "py" => "python",
-        _ => "unsupported",
-    }
-}
-
 // Helper to compute line number from byte offset
 fn line_number(content: &str, offset: usize) -> u32 {
-    content[..offset.min(content.len())].chars().filter(|&c| c == '\n').count() as u32 + 1
+    content[..offset.min(content.len())]
+        .chars()
+        .filter(|&c| c == '\n')
+        .count() as u32
+        + 1
 }
 
 fn push_symbol(
@@ -133,8 +104,18 @@ fn push_symbol(
         return;
     }
     // sanitize name length
-    let name = if name.len() > 200 { name[..200].to_string() } else { name };
-    let detail = detail.map(|d| if d.len() > 300 { d[..300].to_string() } else { d });
+    let name = if name.len() > 200 {
+        name[..200].to_string()
+    } else {
+        name
+    };
+    let detail = detail.map(|d| {
+        if d.len() > 300 {
+            d[..300].to_string()
+        } else {
+            d
+        }
+    });
     out.push(Symbol {
         name,
         kind,
@@ -148,7 +129,10 @@ fn push_symbol(
 fn extract_rust(content: &str, path: &str, out: &mut Vec<Symbol>) {
     // Order matters: more specific first
     let patterns: &[(&str, SymbolKind)] = &[
-        (r"(?m)^\s*pub\s+(?:unsafe\s+)?fn\s+(\w+)", SymbolKind::Function),
+        (
+            r"(?m)^\s*pub\s+(?:unsafe\s+)?fn\s+(\w+)",
+            SymbolKind::Function,
+        ),
         (r"(?m)^\s*fn\s+(\w+)", SymbolKind::Function),
         (r"(?m)^\s*pub\s+struct\s+(\w+)", SymbolKind::Struct),
         (r"(?m)^\s*struct\s+(\w+)", SymbolKind::Struct),
@@ -175,9 +159,15 @@ fn extract_rust(content: &str, path: &str, out: &mut Vec<Symbol>) {
             }
             let m = mat.get(0).unwrap();
             let line = line_number(content, m.start());
-            let name = mat.get(1).map(|g| g.as_str().trim().to_string()).unwrap_or_else(|| m.as_str().trim().to_string());
+            let name = mat
+                .get(1)
+                .map(|g| g.as_str().trim().to_string())
+                .unwrap_or_else(|| m.as_str().trim().to_string());
             // For imports, name is the whole import path, truncate
-            let detail = content[m.start()..m.end().min(m.start()+200)].lines().next().map(|s| s.trim().to_string());
+            let detail = content[m.start()..m.end().min(m.start() + 200)]
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string());
             push_symbol(out, name, kind.clone(), path, line, detail);
             if out.len() >= MAX_SYMBOLS_PER_FILE {
                 break;
@@ -188,7 +178,10 @@ fn extract_rust(content: &str, path: &str, out: &mut Vec<Symbol>) {
 
 fn extract_typescript(content: &str, path: &str, out: &mut Vec<Symbol>) {
     let patterns: &[(&str, SymbolKind)] = &[
-        (r"(?m)^\s*export\s+(?:async\s+)?function\s+(\w+)", SymbolKind::Function),
+        (
+            r"(?m)^\s*export\s+(?:async\s+)?function\s+(\w+)",
+            SymbolKind::Function,
+        ),
         (r"(?m)^\s*function\s+(\w+)", SymbolKind::Function),
         (r"(?m)^\s*export\s+class\s+(\w+)", SymbolKind::Class),
         (r"(?m)^\s*class\s+(\w+)", SymbolKind::Class),
@@ -198,10 +191,19 @@ fn extract_typescript(content: &str, path: &str, out: &mut Vec<Symbol>) {
         (r"(?m)^\s*type\s+(\w+)\s*=", SymbolKind::Type),
         (r"(?m)^\s*export\s+enum\s+(\w+)", SymbolKind::Enum),
         (r"(?m)^\s*enum\s+(\w+)", SymbolKind::Enum),
-        (r#"(?m)^\s*import\s+.*from\s+['"]([^'"]+)['"]"#, SymbolKind::Import),
+        (
+            r#"(?m)^\s*import\s+.*from\s+['"]([^'"]+)['"]"#,
+            SymbolKind::Import,
+        ),
         (r"(?m)^\s*import\s+\{([^}]+)\}", SymbolKind::Import),
-        (r"(?m)export\s+(?:const|let|var)\s+(\w+)", SymbolKind::Export),
-        (r"(?m)^\s*const\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>", SymbolKind::Function),
+        (
+            r"(?m)export\s+(?:const|let|var)\s+(\w+)",
+            SymbolKind::Export,
+        ),
+        (
+            r"(?m)^\s*const\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>",
+            SymbolKind::Function,
+        ),
     ];
     for (pat, kind) in patterns {
         if out.len() >= MAX_SYMBOLS_PER_FILE {
@@ -217,8 +219,14 @@ fn extract_typescript(content: &str, path: &str, out: &mut Vec<Symbol>) {
             }
             let m = mat.get(0).unwrap();
             let line = line_number(content, m.start());
-            let name = mat.get(1).map(|g| g.as_str().trim().to_string()).unwrap_or_else(|| m.as_str().trim().to_string());
-            let detail = content[m.start()..m.end().min(m.start()+200)].lines().next().map(|s| s.trim().to_string());
+            let name = mat
+                .get(1)
+                .map(|g| g.as_str().trim().to_string())
+                .unwrap_or_else(|| m.as_str().trim().to_string());
+            let detail = content[m.start()..m.end().min(m.start() + 200)]
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string());
             push_symbol(out, name, kind.clone(), path, line, detail);
         }
     }
@@ -245,16 +253,22 @@ fn extract_python(content: &str, path: &str, out: &mut Vec<Symbol>) {
             }
             let m = mat.get(0).unwrap();
             let line = line_number(content, m.start());
-            let name = mat.get(1).map(|g| g.as_str().trim().to_string()).unwrap_or_else(|| m.as_str().trim().to_string());
-            let detail = content[m.start()..m.end().min(m.start()+200)].lines().next().map(|s| s.trim().to_string());
+            let name = mat
+                .get(1)
+                .map(|g| g.as_str().trim().to_string())
+                .unwrap_or_else(|| m.as_str().trim().to_string());
+            let detail = content[m.start()..m.end().min(m.start() + 200)]
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string());
             push_symbol(out, name, kind.clone(), path, line, detail);
         }
     }
 }
 
 pub fn extract_symbols_for_file(content: &str, path: &str) -> (Vec<Symbol>, bool) {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
-    let mut out = Vec::new();
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+    let out = Vec::new();
     let supported = is_supported_ext(&ext);
     if !supported {
         return (out, false);
@@ -279,7 +293,9 @@ pub fn extract_symbols_for_file(content: &str, path: &str) -> (Vec<Symbol>, bool
 pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
     // Use scan_workspace to get eligible files
     let inventory = scan_workspace(root)?;
-    let canonical_root = root.canonicalize().map_err(|_| WorkspaceError::not_found("Project not found"))?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| WorkspaceError::not_found("Project not found"))?;
     let root_str = canonical_root.to_string_lossy().to_string();
 
     let mut symbols = Vec::new();
@@ -310,14 +326,14 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
         }
 
         // Check extension supported
-        let ext = rel_path.split('.').last().unwrap_or("").to_lowercase();
+        let ext = rel_path.rsplit('.').next().unwrap_or("").to_lowercase();
         if !is_supported_ext(&ext) {
             unsupported += 1;
             continue;
         }
 
         // Size check before reading
-        if entry.size > MAX_PREVIEW_BYTES as u64 {
+        if entry.size > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -356,7 +372,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
             }
         };
 
-        if content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if content.len() as u64 > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -365,7 +381,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
             continue;
         }
 
-        total_bytes += content.as_bytes().len();
+        total_bytes += content.len();
         if total_bytes > MAX_INDEXED_BYTES {
             truncated = true;
             break;
@@ -477,10 +493,18 @@ mod tests {
         "#;
         let (syms, ok) = extract_symbols_for_file(content, "src/main.rs");
         assert!(ok);
-        assert!(syms.iter().any(|s| s.name == "hello" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Foo" && s.kind == SymbolKind::Struct));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Baz" && s.kind == SymbolKind::Trait));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "hello" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Foo" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Baz" && s.kind == SymbolKind::Trait));
         assert!(syms.iter().any(|s| s.kind == SymbolKind::Import));
     }
 
@@ -498,17 +522,24 @@ mod tests {
         let (syms, ok) = extract_symbols_for_file(content, "src/app.ts");
         assert!(ok);
         assert!(syms.iter().any(|s| s.name == "greet"));
-        assert!(syms.iter().any(|s| s.name == "MyClass" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Props" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MyClass" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Props" && s.kind == SymbolKind::Interface));
     }
 
     #[test]
     fn extracts_python_symbols() {
-        let content = "import os\ndef foo():\n    pass\nclass Bar:\n    def method(self):\n        pass\n";
+        let content =
+            "import os\ndef foo():\n    pass\nclass Bar:\n    def method(self):\n        pass\n";
         let (syms, ok) = extract_symbols_for_file(content, "main.py");
         assert!(ok);
         assert!(syms.iter().any(|s| s.name == "foo"));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
     }
 
     #[test]
@@ -571,10 +602,38 @@ mod tests {
     fn search_ranking() {
         let mut idx = SymbolIndex::default();
         idx.symbols = vec![
-            Symbol { name: "hello".into(), kind: SymbolKind::Function, path: "a.rs".into(), start_line: 1, end_line: 1, detail: None },
-            Symbol { name: "hello_world".into(), kind: SymbolKind::Function, path: "b.rs".into(), start_line: 1, end_line: 1, detail: None },
-            Symbol { name: "world_hello".into(), kind: SymbolKind::Function, path: "c.rs".into(), start_line: 1, end_line: 1, detail: None },
-            Symbol { name: "other".into(), kind: SymbolKind::Function, path: "hello.rs".into(), start_line: 1, end_line: 1, detail: None },
+            Symbol {
+                name: "hello".into(),
+                kind: SymbolKind::Function,
+                path: "a.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                detail: None,
+            },
+            Symbol {
+                name: "hello_world".into(),
+                kind: SymbolKind::Function,
+                path: "b.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                detail: None,
+            },
+            Symbol {
+                name: "world_hello".into(),
+                kind: SymbolKind::Function,
+                path: "c.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                detail: None,
+            },
+            Symbol {
+                name: "other".into(),
+                kind: SymbolKind::Function,
+                path: "hello.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                detail: None,
+            },
         ];
         let res = search_symbols(&idx, "hello", 10);
         assert_eq!(res[0].name, "hello"); // exact

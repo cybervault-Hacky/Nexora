@@ -33,7 +33,7 @@ fn lock_err() -> WorkspaceError {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn validate_context_files(root: &Path, paths: &[String]) -> WorkspaceResult<Vec<(String, String)>> {
+fn gather_context_files(root: &Path, paths: &[String]) -> WorkspaceResult<Vec<FilePreview>> {
     if paths.len() > MAX_CONTEXT_FILES {
         return Err(WorkspaceError::invalid_request(format!(
             "Too many context files ({} max {}).",
@@ -41,22 +41,31 @@ fn validate_context_files(root: &Path, paths: &[String]) -> WorkspaceResult<Vec<
             MAX_CONTEXT_FILES
         )));
     }
+
     let mut total = 0usize;
     let mut out = Vec::new();
+
     for rel in paths {
         let preview = read_workspace_file(root, rel)?;
-        // Additional sensitive check already inside read
-        let bytes = preview.content.len();
-        total += bytes;
+        total += preview.content.len();
+
         if total > MAX_CONTEXT_TOTAL_BYTES {
             return Err(WorkspaceError::too_large(format!(
                 "Context too large ({} bytes, max {}).",
                 total, MAX_CONTEXT_TOTAL_BYTES
             )));
         }
-        // Binary already rejected
-        out.push((preview.path, preview.content));
+
+        // Defensive: block sensitive even if a caller bypassed the preview check.
+        if is_sensitive_file(Path::new(rel)) {
+            return Err(WorkspaceError::secret_excluded(
+                "Sensitive files cannot be used as context.",
+            ));
+        }
+
+        out.push(preview);
     }
+
     Ok(out)
 }
 
@@ -142,35 +151,10 @@ pub fn get_workspace_context(
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    if paths.len() > MAX_CONTEXT_FILES {
-        return Err(WorkspaceError::invalid_request(format!(
-            "Too many files selected ({} > {}).",
-            paths.len(),
-            MAX_CONTEXT_FILES
-        )));
-    }
     let root_path = PathBuf::from(root.trim());
     let canonical_root = canonicalize_root(&root_path)?;
-    let mut total = 0usize;
-    let mut out = Vec::new();
-    for rel in paths {
-        let preview = read_workspace_file(&canonical_root, &rel)?;
-        total += preview.content.len();
-        if total > MAX_CONTEXT_TOTAL_BYTES {
-            return Err(WorkspaceError::too_large(format!(
-                "Selected files exceed the {} byte context limit.",
-                MAX_CONTEXT_TOTAL_BYTES
-            )));
-        }
-        // Defensive: block sensitive even if caller bypassed preview check
-        if is_sensitive_file(Path::new(&rel)) {
-            return Err(WorkspaceError::secret_excluded(
-                "Sensitive files cannot be used as context.",
-            ));
-        }
-        out.push(preview);
-    }
-    Ok(out)
+
+    gather_context_files(&canonical_root, &paths)
 }
 
 /// Close the current workspace (forget root). Does not delete files.
@@ -463,7 +447,9 @@ pub fn search_symbols(
         return Err(WorkspaceError::not_found("No index — build it first."));
     };
     if cached_root != &canonical {
-        return Err(WorkspaceError::invalid_request("Workspace changed — refresh the index."));
+        return Err(WorkspaceError::invalid_request(
+            "Workspace changed — refresh the index.",
+        ));
     }
     let lim = limit.unwrap_or(20).clamp(1, 50);
     Ok(super::symbol_index::search_symbols(idx, &query, lim))
@@ -606,14 +592,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn temp_with_file(content: &str) -> (TempDir, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("src/main.rs");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, content).unwrap();
-        (dir, file)
-    }
-
     #[test]
     fn set_and_scan_current() {
         let dir = TempDir::new().unwrap();
@@ -629,30 +607,27 @@ mod tests {
     #[test]
     fn context_limits() {
         let dir = TempDir::new().unwrap();
-        for i in 0..10 {
+        for i in 0..(MAX_CONTEXT_FILES + 2) {
             fs::write(dir.path().join(format!("f{}.txt", i)), "x").unwrap();
         }
-        let paths: Vec<String> = (0..9).map(|i| format!("f{}.txt", i)).collect();
-        let err = get_workspace_context_inner(dir.path(), paths);
-        assert!(err.is_err());
-        assert_eq!(err.unwrap_err().code, "invalid_request");
-    }
 
-    fn get_workspace_context_inner(
-        root: &Path,
-        paths: Vec<String>,
-    ) -> WorkspaceResult<Vec<FilePreview>> {
-        let mut total = 0usize;
-        let mut out = Vec::new();
-        for rel in paths {
-            let preview = read_workspace_file(root, &rel)?;
-            total += preview.content.len();
-            if total > MAX_CONTEXT_TOTAL_BYTES {
-                return Err(WorkspaceError::too_large("too large"));
-            }
-            out.push(preview);
-        }
-        Ok(out)
+        // Exactly the limit is allowed: the files exist and are tiny.
+        let at_limit: Vec<String> = (0..MAX_CONTEXT_FILES)
+            .map(|i| format!("f{}.txt", i))
+            .collect();
+        assert_eq!(
+            gather_context_files(dir.path(), &at_limit)
+                .expect("limit-sized selection")
+                .len(),
+            MAX_CONTEXT_FILES
+        );
+
+        // One more than the limit is refused before any file is read.
+        let over_limit: Vec<String> = (0..MAX_CONTEXT_FILES + 1)
+            .map(|i| format!("f{}.txt", i))
+            .collect();
+        let err = gather_context_files(dir.path(), &over_limit).unwrap_err();
+        assert_eq!(err.code, "invalid_request");
     }
 
     #[test]

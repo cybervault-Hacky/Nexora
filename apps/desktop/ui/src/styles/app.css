@@ -1440,6 +1440,61 @@ button:disabled {
   padding: 12px clamp(16px, 2.4vw, 28px) 14px;
 }
 
+/* Phase 9: compact model switch above the composer. */
+.model-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.model-select__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-select__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.model-select__control {
+  min-width: 0;
+  max-width: 320px;
+  padding: 4px 26px 4px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-chip, 8px);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.model-select__control:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.model-select__control:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.model-select__status {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+}
+
+.model-select__status--warning {
+  color: var(--warning);
+}
+
 .composer {
   padding: 13px 16px 11px;
   border: 1px solid var(--glass-border);
@@ -1617,6 +1672,38 @@ button:disabled {
 .setup__lead strong {
   color: var(--text-primary);
   font-weight: 550;
+}
+
+.setup__mini {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  background: var(--accent-wash);
+}
+
+.setup__mini-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setup__mini-title {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.setup__mini-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .setup__grid {
@@ -5879,4 +5966,545 @@ button:disabled {
   background: var(--glass-scrim);
   backdrop-filter: var(--glass-blur-scrim);
   -webkit-backdrop-filter: var(--glass-blur-scrim);
+}
+
+/* ---------- Phase 6 — Download Mode exports ---------- */
+
+.export {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.export__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.export__title {
+  display: flex;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.export__title .eyebrow {
+  margin: 0;
+}
+
+.export__heading {
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.export__badge {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.export__copy {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.export__copy strong {
+  color: var(--text-secondary);
+}
+
+.export__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.export__scopes .button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-wash);
+  color: var(--text-primary);
+}
+
+.export__review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.export__list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 160px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-input);
+  background: var(--bg-code);
+  list-style: none;
+}
+
+.export__list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.export__list-more {
+  color: var(--text-tertiary);
+}
+
+.export__mono {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family:
+    "Cascadia Mono",
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 11px;
+}
+
+.export__size {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.export__exclusions {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.export__destination {
+  margin-top: 2px;
+}
+
+.export__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.export__count {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.export__conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(var(--warning-rgb), 0.35);
+  border-radius: var(--radius-card);
+  background: rgba(var(--warning-rgb), 0.07);
+}
+
+.export__conflict p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.export__progress {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.export__success {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(var(--success-rgb), 0.3);
+  border-radius: var(--radius-card);
+  background: rgba(var(--success-rgb), 0.06);
+  color: var(--success);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.export__error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.export__note {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.export__dismiss {
+  flex: none;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.export__dismiss:hover {
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------------------
+   Phase 7 — daily free usage
+   A quiet strip above the composer. It reports the allowance the Rust core
+   enforces; it never advertises, upsells or promises more usage.
+   --------------------------------------------------------------------------- */
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.usage__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.usage__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.usage__value {
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage__bar {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.usage__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0.75;
+  transition: width 240ms ease;
+}
+
+.usage__hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.usage__hint--error {
+  color: var(--danger);
+}
+
+.usage__policy {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+
+.usage--exhausted {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.usage--exhausted .usage__fill {
+  background: var(--text-tertiary);
+  opacity: 0.5;
+}
+
+.usage--exhausted .usage__value {
+  color: var(--text-secondary);
+}
+
+.usage--error {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage__fill {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Model readiness
+   Renders the core's verdict. Colour is always paired with a text label, and
+   the badge states are the backend's own state names via `data-state`.
+   --------------------------------------------------------------------------- */
+
+.readiness {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.readiness__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.readiness__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.readiness__badge--ok {
+  border-color: rgba(var(--success-rgb), 0.26);
+  background: rgba(var(--success-rgb), 0.07);
+  color: var(--success);
+}
+
+.readiness__badge--busy {
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.readiness__badge--warning {
+  border-color: rgba(var(--warning-rgb), 0.24);
+  background: rgba(var(--warning-rgb), 0.06);
+  color: var(--warning);
+}
+
+.readiness__badge--danger {
+  border-color: rgba(var(--danger-rgb), 0.24);
+  background: rgba(var(--danger-rgb), 0.06);
+  color: var(--danger);
+}
+
+.readiness__badge--neutral {
+  color: var(--text-secondary);
+}
+
+.readiness__headline {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.readiness__refresh {
+  margin-left: auto;
+}
+
+.readiness__detail {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.readiness__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.readiness__fact {
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-input);
+  background: var(--bg-panel);
+}
+
+.readiness__fact dt {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.readiness__fact dd {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.readiness__hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.readiness__checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness__check {
+  display: grid;
+  grid-template-columns: 14px 62px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 0.79rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.readiness__check svg {
+  margin-top: 2px;
+}
+
+.readiness__check-label {
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+}
+
+.readiness__check--ok .readiness__check-label {
+  color: var(--success);
+}
+
+.readiness__check--warning .readiness__check-label {
+  color: var(--warning);
+}
+
+.readiness__check--blocked .readiness__check-label {
+  color: var(--danger);
+}
+
+.readiness__check--ok svg {
+  color: var(--success);
+}
+
+.readiness__check--warning svg,
+.readiness__check--blocked svg {
+  color: var(--warning);
+}
+
+.readiness__check--blocked svg {
+  color: var(--danger);
+}
+
+.readiness__disclaimer {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.readiness__pending,
+.readiness__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+}
+
+.readiness__error {
+  color: var(--danger);
+}
+
+.model-select__status[data-state="insufficient_memory"],
+.model-select__status[data-state="insufficient_storage"],
+.model-select__status[data-state="verification_failed"],
+.model-select__status[data-state="download_incomplete"],
+.model-select__status[data-state="unverified"],
+.model-select__status[data-state="detection_unavailable"],
+.model-select__status[data-state="runtime_failure"] {
+  color: var(--warning);
+}
+
+.model-select__status[data-state="verification_failed"],
+.model-select__status[data-state="runtime_failure"] {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .readiness__badge--busy {
+    animation: readiness-pulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes readiness-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }

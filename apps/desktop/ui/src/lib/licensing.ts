@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isDesktopShell } from "./ipc";
+import { PUBLISHED_DAILY_ALLOWANCE } from "./usage";
 import { recordIpcCall } from "./telemetry";
 
 export type LicenceTier = "community" | "pro" | "team" | "enterprise";
@@ -47,7 +48,7 @@ export const PLAN_TIERS: PlanDefinition[] = [
     cadence: "forever free",
     badge: "Active by Default",
     features: [
-      { name: "Unlimited local GGUF inference", included: true },
+      { name: `${PUBLISHED_DAILY_ALLOWANCE} local generations per day`, included: true },
       { name: "Complete offline AI chat & generation", included: true },
       { name: "Full workspace & codebase indexing", included: true },
       { name: "Single-file & multi-file patch generation", included: true },
@@ -65,7 +66,7 @@ export const PLAN_TIERS: PlanDefinition[] = [
     cadence: "per month / perpetual key",
     badge: "Most Popular",
     features: [
-      { name: "Unlimited local GGUF inference", included: true },
+      { name: `${PUBLISHED_DAILY_ALLOWANCE} local generations per day`, included: true },
       { name: "Complete offline AI chat & generation", included: true },
       { name: "Full workspace & codebase indexing", included: true },
       { name: "Single-file & multi-file patch generation", included: true },
@@ -83,7 +84,7 @@ export const PLAN_TIERS: PlanDefinition[] = [
     cadence: "per seat / month",
     badge: "Enterprise",
     features: [
-      { name: "Unlimited local GGUF inference", included: true },
+      { name: `${PUBLISHED_DAILY_ALLOWANCE} local generations per day`, included: true },
       { name: "Complete offline AI chat & generation", included: true },
       { name: "Full workspace & codebase indexing", included: true },
       { name: "Single-file & multi-file patch generation", included: true },
@@ -103,7 +104,7 @@ const DEFAULT_COMMUNITY_STATUS: LicenceStatus = {
   licensee: null,
   expiresAt: null,
   features: [
-    "unlimited_local_inference",
+    "daily_local_inference",
     "gguf_model_execution",
     "offline_ai_chat",
     "workspace_code_intelligence",

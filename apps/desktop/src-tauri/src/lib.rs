@@ -1,7 +1,9 @@
 mod auth;
+mod export;
 mod history;
 mod inference;
 mod licensing;
+mod usage;
 mod workspace;
 
 use tauri::Manager;
@@ -10,18 +12,21 @@ use tauri::Manager;
 ///
 /// The only capabilities exposed to the webview are the read-only status
 /// snapshot, model/runtime configuration with validation, engine start/stop,
-/// and one streaming generation request. There is no shell, no filesystem
-/// browsing, and no network access from the UI.
+/// one streaming generation request, and a read-only daily usage snapshot.
+/// There is no shell, no filesystem browsing, and no network access from the
+/// UI.
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&config_dir)?;
             app.manage(inference::InferenceState::load(config_dir.clone()));
+            app.manage(usage::UsageState::load(&config_dir));
             app.manage(history::commands::HistoryState::new(
                 app.path().app_data_dir()?,
             ));
             app.manage(workspace::commands::WorkspaceState::new());
+            app.manage(export::ExportState::new());
             app.manage(workspace::commands::WorkspaceSettingsState::new(
                 config_dir.clone(),
             ));
@@ -45,14 +50,23 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inference::commands::get_app_status,
             inference::commands::get_system_info,
+            inference::commands::get_disk_space,
             inference::commands::get_settings,
+            inference::commands::get_model_profile,
+            inference::commands::select_model,
+            inference::commands::get_model_catalog,
+            inference::commands::check_model_readiness,
             inference::commands::save_settings,
             inference::commands::validate_model,
             inference::commands::probe_runtime,
             inference::commands::load_model,
             inference::commands::unload_model,
             inference::commands::start_generation,
+            usage::commands::get_usage_status,
             inference::commands::cancel_generation,
+            inference::commands::start_model_download,
+            inference::commands::cancel_model_download,
+            inference::commands::verify_model,
             history::commands::list_conversations,
             history::commands::load_conversation,
             history::commands::create_conversation,
@@ -86,6 +100,11 @@ pub fn run() {
             workspace::commands::get_file_relationships,
             workspace::commands::get_change_impact,
             workspace::commands::clear_analysis_graph,
+            export::commands::plan_workspace_export,
+            export::commands::suggest_export_path,
+            export::commands::export_single_file,
+            export::commands::export_zip,
+            export::commands::cancel_export,
             auth::commands::auth_get_session,
             auth::commands::auth_login,
             auth::commands::auth_register,

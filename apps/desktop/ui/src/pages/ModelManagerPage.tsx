@@ -3,11 +3,19 @@ import { EngineStatus } from "../components/EngineStatus";
 import { Icon } from "../components/Icon";
 import { ModelSetup } from "../components/ModelSetup";
 import { RouterLink } from "../components/RouterLink";
-import { fetchSystemInfo } from "../lib/inference";
-import type { AppStatus, SystemInfo } from "../lib/ipc";
+import { fetchDiskSpace, fetchSystemInfo } from "../lib/inference";
+import type { AppStatus, DiskSpace, SystemInfo } from "../lib/ipc";
 import { PageHeader } from "./PageHeader";
 
+const GIB = 1024 ** 3;
+
+function gib(bytes: number): string {
+  return (bytes / GIB).toFixed(1);
+}
+
 export interface ModelManagerPageProps {
+  /** Selected profile id; passed through so setup follows the chat selector. */
+  profileId?: string | null;
   status: AppStatus | null;
   statusError: string | null;
   desktop: boolean;
@@ -15,6 +23,8 @@ export interface ModelManagerPageProps {
   onStatus: (status: AppStatus) => void;
   onRefresh: () => void;
   onUnload?: () => void;
+  /** Re-reads the catalogue rows after a download, verify, or load. */
+  onModelsChanged?: () => void;
 }
 
 /**
@@ -23,6 +33,7 @@ export interface ModelManagerPageProps {
  * Nexora never downloads a runtime or model — both paths come from the machine.
  */
 export function ModelManagerPage({
+  profileId = null,
   status,
   statusError,
   desktop,
@@ -30,8 +41,24 @@ export function ModelManagerPage({
   onStatus,
   onRefresh,
   onUnload,
+  onModelsChanged,
 }: ModelManagerPageProps) {
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [disk, setDisk] = useState<DiskSpace | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetchDiskSpace()
+      .then((info) => {
+        if (active) setDisk(info);
+      })
+      .catch(() => {
+        // Disk detection is informational; null renders as "unavailable".
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -52,7 +79,7 @@ export function ModelManagerPage({
       <PageHeader
         eyebrow="On-device inference"
         title="Local models"
-        copy="Connect the llama.cpp runtime and GGUF model you already have. Both are validated by the desktop core before anything is launched, and nothing is downloaded."
+        copy="Download the approved Nexora Mini file, or connect a llama.cpp runtime and GGUF model you already have. Both are validated by the desktop core before anything is launched, and nothing is fetched at startup."
       />
 
       {!desktop ? (
@@ -78,6 +105,16 @@ export function ModelManagerPage({
               <span className="model-manager__hardware-val">
                 {system && system.totalRamGib
                   ? `${system.availableRamGib ?? "?"} of ${system.totalRamGib} GiB available`
+                  : "Detection unavailable"}
+              </span>
+            </div>
+            <div className="model-manager__hardware-item">
+              <span className="model-manager__hardware-label">Model storage</span>
+              <span className="model-manager__hardware-val" data-testid="model-storage">
+                {disk?.freeBytes !== null && disk?.freeBytes !== undefined
+                  ? `${gib(disk.freeBytes)} GiB free${
+                      disk.totalBytes !== null ? ` of ${gib(disk.totalBytes)} GiB` : ""
+                    }`
                   : "Detection unavailable"}
               </span>
             </div>
@@ -118,7 +155,13 @@ export function ModelManagerPage({
         </section>
 
         {desktop ? (
-          <ModelSetup status={status} onStatus={onStatus} onRefresh={onRefresh} />
+          <ModelSetup
+          status={status}
+          onStatus={onStatus}
+          onRefresh={onRefresh}
+          profileId={profileId}
+          onModelsChanged={onModelsChanged}
+        />
         ) : (
           <p className="page-note">
             Model setup is available in the desktop app only. The form, probes,

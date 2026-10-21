@@ -7,7 +7,14 @@ import {
   type GenerationEvent,
   type GenerationOutcome,
   type InferenceError,
+  type IntegrityReport,
+  type ModelDownloadEvent,
+  type ModelDownloadOutcome,
+  type DiskSpace,
+  type ModelCatalog,
   type ModelInfo,
+  type Readiness,
+  type ModelProfile,
   type RuntimeInfo,
   type Settings,
   type SystemInfo,
@@ -73,6 +80,102 @@ export function fetchSettings(): Promise<Settings> {
 
 export function saveSettings(settings: Settings): Promise<Settings> {
   return call<Settings>("save_settings", { settings });
+}
+
+/**
+ * Metadata for the selected model profile. Read-only: it does not report
+ * whether the model is installed or running — use `fetchModelCatalog`.
+ */
+export function fetchModelProfile(): Promise<ModelProfile> {
+  return call<ModelProfile>("get_model_profile");
+}
+
+/**
+ * Every registered profile with its real availability.
+ *
+ * The core decides `status`; the UI must not derive readiness from a path.
+ */
+export function fetchModelCatalog(): Promise<ModelCatalog> {
+  return call<ModelCatalog>("get_model_catalog");
+}
+
+/**
+ * The backend's readiness for the selected profile, re-measured on every call.
+ *
+ * Used by the model manager so a row can refresh its state without re-reading
+ * the whole catalogue. The UI must render this result, never recompute it.
+ */
+export function fetchModelReadiness(): Promise<Readiness> {
+  return call<Readiness>("check_model_readiness");
+}
+
+/**
+ * Free space where models are stored, or at `targetDir` when given.
+ *
+ * `null` fields mean the platform could not measure it. Never substitute a
+ * guess for a null here.
+ */
+export function fetchDiskSpace(targetDir?: string | null): Promise<DiskSpace> {
+  return call<DiskSpace>("get_disk_space", { targetDir: targetDir ?? null });
+}
+
+/**
+ * Persists the selected profile. Does not download, load, or change paths —
+ * the chat guard refuses a request when the loaded model is not the chosen one.
+ */
+export function selectModel(id: string): Promise<Settings> {
+  return call<Settings>("select_model", { id });
+}
+
+/**
+ * Downloads a profile's approved artefact and reports progress.
+ *
+ * Only ever called from an explicit user action. The file is verified against
+ * the registry before it is published; `cancelled` means nothing was installed.
+ * A profile whose artefact is `pending` is refused by the core.
+ */
+export async function startModelDownload(
+  targetDir: string | null,
+  profileId: string,
+  onEvent: (event: ModelDownloadEvent) => void,
+): Promise<ModelDownloadOutcome> {
+  if (!isDesktopShell()) {
+    throw DESKTOP_ONLY;
+  }
+
+  const channel = new Channel<ModelDownloadEvent>();
+  channel.onmessage = (event) => onEvent(event);
+
+  try {
+    return await invoke<ModelDownloadOutcome>("start_model_download", {
+      targetDir,
+      profileId,
+      onEvent: channel,
+    });
+  } catch (cause) {
+    throw toInferenceError(cause);
+  }
+}
+
+export async function cancelModelDownload(): Promise<boolean> {
+  if (!isDesktopShell()) {
+    return false;
+  }
+
+  try {
+    return await invoke<boolean>("cancel_model_download");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hashes a chosen file and compares it with a profile's approved digest.
+ *
+ * Omitting `profileId` uses the selected profile in the desktop core.
+ */
+export function verifyModel(path: string, profileId?: string): Promise<IntegrityReport> {
+  return call<IntegrityReport>("verify_model", { path, profileId: profileId ?? null });
 }
 
 export function validateModel(

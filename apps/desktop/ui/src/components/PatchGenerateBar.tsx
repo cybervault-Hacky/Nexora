@@ -16,6 +16,8 @@ interface Props {
   engineStatus: AppStatus | null;
   symbolIndex?: SymbolIndex | null;
   contextFiles?: Array<{ path: string; content: string; size: number }>;
+  /** The profile selected in the core; patch requests name it. */
+  profileId?: string | null;
   onApplied?: () => void;
   onInvalidate?: () => void;
 }
@@ -28,11 +30,12 @@ export function PatchGenerateBar({
   engineStatus,
   symbolIndex,
   contextFiles,
+  profileId = null,
   onApplied,
   onInvalidate,
 }: Props) {
   const [instruction, setInstruction] = useState("");
-  const generation = usePatchGeneration({ workspacePath, engineStatus });
+  const generation = usePatchGeneration({ workspacePath, engineStatus, profileId });
   const validation = useValidation(workspacePath);
   const repair = usePatchRepair({
     workspacePath,
@@ -40,6 +43,7 @@ export function PatchGenerateBar({
     symbolIndex: symbolIndex ?? null,
     contextFiles: contextFiles ?? [],
     originalInstruction: instruction,
+    profileId,
   });
 
   // Invalidate when target changes

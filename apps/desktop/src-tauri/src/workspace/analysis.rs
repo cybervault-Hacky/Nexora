@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::scanner::{is_sensitive_file, scan_workspace, WorkspaceError, MAX_PREVIEW_BYTES};
-use super::symbol_index::{extract_symbols_for_file, Symbol, SymbolKind};
+use super::symbol_index::{Symbol, SymbolKind};
 
 // Limits - reuse symbol_index limits where possible, keep bounded
 pub const MAX_ANALYSIS_FILES: usize = 500;
@@ -28,39 +28,23 @@ fn now_millis() -> u64 {
 }
 
 fn line_number(content: &str, offset: usize) -> u32 {
-    content[..offset.min(content.len())].chars().filter(|&c| c == '\n').count() as u32 + 1
+    content[..offset.min(content.len())]
+        .chars()
+        .filter(|&c| c == '\n')
+        .count() as u32
+        + 1
 }
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EdgeKind {
-    Import,
-    Export,
-    Reference,
-    Uses,
-}
-
-impl EdgeKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Import => "import",
-            Self::Export => "export",
-            Self::Reference => "reference",
-            Self::Uses => "uses",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DependencyEdge {
     pub from: String,
-    pub to: String,           // resolved path or raw spec if unresolved
-    pub raw: String,          // original spec
+    pub to: String,  // resolved path or raw spec if unresolved
+    pub raw: String, // original spec
     pub line: u32,
     pub verified: bool,       // true if resolved to existing workspace file
     pub kind: String,         // import/export/uses
@@ -151,7 +135,10 @@ fn extract_imports_ts(content: &str, path: &str) -> Vec<(String, u32, String)> {
         };
         for caps in re.captures_iter(content) {
             let m = caps.get(0).unwrap();
-            let spec = caps.get(1).map(|g| g.as_str().to_string()).unwrap_or_default();
+            let spec = caps
+                .get(1)
+                .map(|g| g.as_str().to_string())
+                .unwrap_or_default();
             if spec.trim().is_empty() || spec.len() > 300 {
                 continue;
             }
@@ -197,7 +184,10 @@ fn extract_imports_py(content: &str, path: &str) -> Vec<(String, u32, String)> {
                 break;
             }
             let m = caps.get(0).unwrap();
-            let spec = caps.get(1).map(|g| g.as_str().to_string()).unwrap_or_default();
+            let spec = caps
+                .get(1)
+                .map(|g| g.as_str().to_string())
+                .unwrap_or_default();
             if spec.trim().is_empty() || spec.len() > 300 {
                 continue;
             }
@@ -234,7 +224,10 @@ fn extract_imports_rs(content: &str, path: &str) -> Vec<(String, u32, String)> {
                 break;
             }
             let m = caps.get(0).unwrap();
-            let spec = caps.get(1).map(|g| g.as_str().trim().to_string()).unwrap_or_default();
+            let spec = caps
+                .get(1)
+                .map(|g| g.as_str().trim().to_string())
+                .unwrap_or_default();
             if spec.trim().is_empty() || spec.len() > 300 {
                 continue;
             }
@@ -256,7 +249,7 @@ fn extract_imports_rs(content: &str, path: &str) -> Vec<(String, u32, String)> {
 }
 
 fn extract_imports_for_file(content: &str, path: &str) -> Vec<(String, u32, String)> {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
         "ts" | "tsx" | "js" | "jsx" => extract_imports_ts(content, path),
         "py" => extract_imports_py(content, path),
@@ -268,6 +261,21 @@ fn extract_imports_for_file(content: &str, path: &str) -> Vec<(String, u32, Stri
 // ---------------------------------------------------------------------------
 // Resolve import spec to workspace-relative path
 // ---------------------------------------------------------------------------
+
+/// Refuses a parent segment before `normalize_posix` can erase it.
+///
+/// `normalize_posix` pops the previous component for every `..`, so
+/// `../outside.ts` becomes `outside.ts`. A traversal check made on the
+/// normalised string therefore never sees what the caller actually asked for.
+fn reject_parent_segments(raw: &str) -> Result<(), WorkspaceError> {
+    if raw.split(['/', '\\']).any(|component| component == "..") {
+        return Err(WorkspaceError::invalid_request(
+            "Path traversal not allowed.",
+        ));
+    }
+
+    Ok(())
+}
 
 fn normalize_posix(p: &str) -> String {
     // Collapse //, remove ./, handle ../ naively but validation already ensures files are within root
@@ -377,7 +385,23 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
     if trimmed.contains("::") {
         // external crates like std, core, alloc, serde etc are external
         let first = trimmed.split("::").next().unwrap_or("").trim();
-        if matches!(first, "std" | "core" | "alloc" | "serde" | "serde_json" | "tauri" | "tokio" | "regex" | "sha2" | "similar" | "tempfile" | "reqwest" | "futures_util" | "getrandom") {
+        if matches!(
+            first,
+            "std"
+                | "core"
+                | "alloc"
+                | "serde"
+                | "serde_json"
+                | "tauri"
+                | "tokio"
+                | "regex"
+                | "sha2"
+                | "similar"
+                | "tempfile"
+                | "reqwest"
+                | "futures_util"
+                | "getrandom"
+        ) {
             return None;
         }
         // For crate::..., try to resolve to src/...
@@ -385,7 +409,7 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
             trimmed.trim_start_matches("crate::").replace("::", "/")
         } else if trimmed.starts_with("self::") || trimmed.starts_with("super::") {
             // relative to current file's module — approximate: use from_dir
-            let last = trimmed.split("::").last().unwrap_or("").to_string();
+            let last = trimmed.rsplit("::").next().unwrap_or("").to_string();
             last
         } else {
             // Unknown absolute — try as file path
@@ -408,7 +432,11 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
             }
         }
         // Try single file part
-        let simple = path_part.split('/').last().unwrap_or(&path_part).to_string();
+        let simple = path_part
+            .rsplit('/')
+            .next()
+            .unwrap_or(&path_part)
+            .to_string();
         let mod_candidates = [
             format!("{}/{}.rs", base_dir, simple),
             format!("{}/mod.rs", simple),
@@ -441,9 +469,13 @@ fn resolve_rs_mod(spec: &str, from_path: &str, existing: &HashSet<String>) -> Op
     }
 }
 
-fn resolve_spec(spec: &str, from_path: &str, existing: &HashSet<String>) -> (Option<String>, Option<String>) {
+fn resolve_spec(
+    spec: &str,
+    from_path: &str,
+    existing: &HashSet<String>,
+) -> (Option<String>, Option<String>) {
     // Returns (resolved_path, note)
-    let ext = from_path.split('.').last().unwrap_or("").to_lowercase();
+    let ext = from_path.rsplit('.').next().unwrap_or("").to_lowercase();
     let resolved = match ext.as_str() {
         "ts" | "tsx" | "js" | "jsx" => resolve_ts_spec(spec, from_path, existing),
         "py" => resolve_py_spec(spec, existing),
@@ -454,10 +486,11 @@ fn resolve_spec(spec: &str, from_path: &str, existing: &HashSet<String>) -> (Opt
         (Some(p), None)
     } else {
         // Decide note
-        let is_external = !spec.starts_with('.') && !spec.starts_with('/') && ext != "py" && ext != "rs" || {
-            // bare TS import that is not resolved -> likely external
-            !spec.starts_with('.') && matches!(ext.as_str(), "ts" | "tsx" | "js" | "jsx")
-        };
+        let is_external =
+            !spec.starts_with('.') && !spec.starts_with('/') && ext != "py" && ext != "rs" || {
+                // bare TS import that is not resolved -> likely external
+                !spec.starts_with('.') && matches!(ext.as_str(), "ts" | "tsx" | "js" | "jsx")
+            };
         // For py/rs, also external if not found
         let note = if is_external && !spec.contains('/') && !spec.contains('.') {
             // single word like "react", "fs", "os", "std"
@@ -480,7 +513,9 @@ fn resolve_spec(spec: &str, from_path: &str, existing: &HashSet<String>) -> (Opt
 
 pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceError> {
     let inventory = scan_workspace(root)?;
-    let canonical_root = root.canonicalize().map_err(|_| WorkspaceError::not_found("Project not found"))?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| WorkspaceError::not_found("Project not found"))?;
     let root_str = canonical_root.to_string_lossy().to_string();
 
     // Collect eligible files (same logic as symbol_index)
@@ -491,10 +526,10 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
         if is_sensitive_file(Path::new(rel)) {
             continue;
         }
-        if entry.size > MAX_PREVIEW_BYTES as u64 {
+        if entry.size > MAX_PREVIEW_BYTES {
             continue;
         }
-        let ext = rel.split('.').last().unwrap_or("").to_lowercase();
+        let ext = rel.rsplit('.').next().unwrap_or("").to_lowercase();
         let is_supported = matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py");
         if !is_supported {
             // Track unsupported but still add to existing for resolution? For unsupported we don't need graph, but we still want existing_set for resolution target check?
@@ -519,13 +554,15 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
 
     // Apply limits
     let mut truncated = false;
-    let mut unsupported = 0usize;
     // Count unsupported files that were skipped due to ext
-    let unsupported_count = inventory.entries.iter().filter(|e| {
-        let ext = e.path.split('.').last().unwrap_or("").to_lowercase();
-        !matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py") && e.kind == "file"
-    }).count();
-    unsupported = unsupported_count;
+    let mut unsupported = inventory
+        .entries
+        .iter()
+        .filter(|e| {
+            let ext = e.path.rsplit('.').next().unwrap_or("").to_lowercase();
+            !matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py") && e.kind == "file"
+        })
+        .count();
 
     if eligible.len() > MAX_ANALYSIS_FILES {
         eligible.truncate(MAX_ANALYSIS_FILES);
@@ -555,7 +592,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
                 continue;
             }
         };
-        if content.as_bytes().len() > MAX_PREVIEW_BYTES {
+        if content.len() as u64 > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -563,7 +600,7 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
             unsupported += 1;
             continue;
         }
-        total_bytes += content.as_bytes().len();
+        total_bytes += content.len();
         if total_bytes > MAX_ANALYSIS_BYTES {
             truncated = true;
             break;
@@ -613,7 +650,10 @@ pub fn build_dependency_graph(root: &Path) -> Result<AnalysisGraph, WorkspaceErr
     let mut imported_by_map: HashMap<String, Vec<String>> = HashMap::new();
     for edge in &edges {
         if edge.verified {
-            imported_by_map.entry(edge.to.clone()).or_default().push(edge.from.clone());
+            imported_by_map
+                .entry(edge.to.clone())
+                .or_default()
+                .push(edge.from.clone());
         }
     }
     for node in &mut nodes {
@@ -648,7 +688,9 @@ fn detect_cycles(nodes: &[FileNode], edges: &[DependencyEdge]) -> Vec<Vec<String
     // Build adjacency for verified edges only
     let mut adj: HashMap<String, Vec<String>> = HashMap::new();
     for edge in edges.iter().filter(|e| e.verified) {
-        adj.entry(edge.from.clone()).or_default().push(edge.to.clone());
+        adj.entry(edge.from.clone())
+            .or_default()
+            .push(edge.to.clone());
     }
     // Also ensure nodes with no outgoing still present
     for node in nodes {
@@ -712,7 +754,14 @@ fn detect_cycles(nodes: &[FileNode], edges: &[DependencyEdge]) -> Vec<Vec<String
             break;
         }
         if !visited.contains(&k) {
-            dfs(&k, &adj, &mut visited, &mut stack, &mut on_stack, &mut cycles);
+            dfs(
+                &k,
+                &adj,
+                &mut visited,
+                &mut stack,
+                &mut on_stack,
+                &mut cycles,
+            );
         }
     }
 
@@ -723,18 +772,20 @@ fn detect_cycles(nodes: &[FileNode], edges: &[DependencyEdge]) -> Vec<Vec<String
 // File relationships
 // ---------------------------------------------------------------------------
 
-pub fn file_relationships(
-    root: &Path,
-    target: &str,
-) -> Result<FileRelationships, WorkspaceError> {
-    // Validate target path
-    let target_norm = normalize_posix(target.trim());
+pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships, WorkspaceError> {
+    // Validate target path. The raw form is checked first: normalising away a
+    // leading `../` would otherwise make the traversal look like a local file.
+    let raw = target.trim();
+    reject_parent_segments(raw)?;
+    let target_norm = normalize_posix(raw);
     if target_norm.is_empty() {
         return Err(WorkspaceError::invalid_request("Target path is empty."));
     }
     // Use scanner validation: validate_relative_path via read? For now check sensitive and traversal
     if target_norm.contains("..") {
-        return Err(WorkspaceError::invalid_request("Path traversal not allowed."));
+        return Err(WorkspaceError::invalid_request(
+            "Path traversal not allowed.",
+        ));
     }
     if is_sensitive_file(Path::new(&target_norm)) {
         return Err(WorkspaceError::secret_excluded("Sensitive file."));
@@ -759,14 +810,18 @@ pub fn file_relationships(
     let node = graph.nodes.iter().find(|n| n.path == target_norm);
     let imports = node.map(|n| n.imports.clone()).unwrap_or_default();
     let imported_by = node.map(|n| n.imported_by.clone()).unwrap_or_default();
-    let unresolved: Vec<DependencyEdge> = imports.iter().filter(|e| !e.verified).cloned().collect();
+    let unresolved: Vec<DependencyEdge> = imports
+        .iter()
+        .cloned()
+        .filter(|edge| !edge.verified)
+        .collect();
 
     // Defined symbols
     let defined_symbols: Vec<Symbol> = symbol_index
         .symbols
         .iter()
-        .filter(|s| s.path == target_norm)
         .cloned()
+        .filter(|symbol| symbol.path == target_norm)
         .take(200)
         .collect();
 
@@ -781,7 +836,9 @@ pub fn file_relationships(
             .collect();
         if !names.is_empty() {
             // For each eligible file not target, search content for names
-            let canonical_root = root.canonicalize().map_err(|_| WorkspaceError::not_found("Project not found"))?;
+            let canonical_root = root
+                .canonicalize()
+                .map_err(|_| WorkspaceError::not_found("Project not found"))?;
             for node in &graph.nodes {
                 if node.path == target_norm {
                     continue;
@@ -829,8 +886,11 @@ pub fn file_relationships(
     if graph.truncated {
         notes.push("Graph truncated — limits hit; some relationships may be missing.".to_string());
     }
-    if unresolved.len() > 0 {
-        notes.push(format!("{} unresolved imports — verified=false", unresolved.len()));
+    if !unresolved.is_empty() {
+        notes.push(format!(
+            "{} unresolved imports — verified=false",
+            unresolved.len()
+        ));
     }
     let unsupported_note = if graph.unsupported > 0 {
         format!("{} unsupported files skipped", graph.unsupported)
@@ -860,12 +920,16 @@ pub fn file_relationships(
 // ---------------------------------------------------------------------------
 
 pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, WorkspaceError> {
-    let target_norm = normalize_posix(target.trim());
+    let raw = target.trim();
+    reject_parent_segments(raw)?;
+    let target_norm = normalize_posix(raw);
     if target_norm.is_empty() {
         return Err(WorkspaceError::invalid_request("Target path is empty."));
     }
     if target_norm.contains("..") {
-        return Err(WorkspaceError::invalid_request("Path traversal not allowed."));
+        return Err(WorkspaceError::invalid_request(
+            "Path traversal not allowed.",
+        ));
     }
     if is_sensitive_file(Path::new(&target_norm)) {
         return Err(WorkspaceError::secret_excluded("Sensitive file."));
@@ -875,8 +939,14 @@ pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, Workspac
     let mut adj_rev: HashMap<String, Vec<String>> = HashMap::new(); // to -> from
     let mut adj_fwd: HashMap<String, Vec<DependencyEdge>> = HashMap::new();
     for edge in &graph.edges {
-        adj_rev.entry(edge.to.clone()).or_default().push(edge.from.clone());
-        adj_fwd.entry(edge.from.clone()).or_default().push(edge.clone());
+        adj_rev
+            .entry(edge.to.clone())
+            .or_default()
+            .push(edge.from.clone());
+        adj_fwd
+            .entry(edge.from.clone())
+            .or_default()
+            .push(edge.clone());
     }
 
     // BFS for direct and transitive
@@ -895,15 +965,26 @@ pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, Workspac
                 break;
             }
             // Find edge for evidence
-            let edge = graph.edges.iter().find(|e| e.from == dep && e.to == target_norm);
+            let edge = graph
+                .edges
+                .iter()
+                .find(|e| e.from == dep && e.to == target_norm);
             let (evidence, line, confidence) = if let Some(e) = edge {
                 (
                     format!("{} imports {} at line {}", e.from, e.to, e.line),
                     Some(e.line),
-                    if e.verified { "verified".to_string() } else { "inferred".to_string() },
+                    if e.verified {
+                        "verified".to_string()
+                    } else {
+                        "inferred".to_string()
+                    },
                 )
             } else {
-                (format!("{} depends on {}", dep, target_norm), None, "inferred".to_string())
+                (
+                    format!("{} depends on {}", dep, target_norm),
+                    None,
+                    "inferred".to_string(),
+                )
             };
             direct.push(ImpactNode {
                 path: dep.clone(),
@@ -983,7 +1064,9 @@ pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, Workspac
         .take(20)
         .collect();
     if !defined.is_empty() && direct.len() + transitive.len() < MAX_IMPACT_RESULTS {
-        let canonical_root = root.canonicalize().map_err(|_| WorkspaceError::not_found("Project not found"))?;
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|_| WorkspaceError::not_found("Project not found"))?;
         for node in &graph.nodes {
             if visited.contains(&node.path) || node.path == target_norm {
                 continue;
@@ -1001,10 +1084,13 @@ pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, Workspac
                 if content.contains(name) {
                     if let Some(idx) = content.find(name) {
                         let line = line_number(&content, idx);
-                        let evidence = format!("mentions symbol `{}` at {}:{}", name, node.path, line);
+                        let evidence =
+                            format!("mentions symbol `{}` at {}:{}", name, node.path, line);
                         let reason = format!("references symbol `{}` from {}", name, target_norm);
                         // Only add if not already
-                        if !direct.iter().any(|n| n.path == node.path) && !transitive.iter().any(|n| n.path == node.path) {
+                        if !direct.iter().any(|n| n.path == node.path)
+                            && !transitive.iter().any(|n| n.path == node.path)
+                        {
                             transitive.push(ImpactNode {
                                 path: node.path.clone(),
                                 reason,
@@ -1024,17 +1110,29 @@ pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, Workspac
     if !graph.cycles.is_empty() {
         for c in &graph.cycles {
             if c.contains(&target_norm) {
-                risks.push(format!("Target participates in circular dependency: {}", c.join(" -> ")));
+                risks.push(format!(
+                    "Target participates in circular dependency: {}",
+                    c.join(" -> ")
+                ));
             }
         }
         if risks.is_empty() && !graph.cycles.is_empty() {
-            risks.push(format!("Project has {} circular dependencies; changes may propagate unexpectedly", graph.cycles.len()));
+            risks.push(format!(
+                "Project has {} circular dependencies; changes may propagate unexpectedly",
+                graph.cycles.len()
+            ));
         }
     }
     if direct.len() + transitive.len() == 0 {
-        risks.push("No dependents found — change appears isolated (verified imports only)".to_string());
+        risks.push(
+            "No dependents found — change appears isolated (verified imports only)".to_string(),
+        );
     } else {
-        risks.push(format!("{} direct + {} transitive potential dependents — treat as potential risks, not guaranteed".to_string(), direct.len(), transitive.len()));
+        risks.push(format!(
+            "{} direct + {} transitive potential dependents — treat as potential risks, not guaranteed",
+            direct.len(),
+            transitive.len()
+        ));
     }
     risks.push("Static analysis does not prove runtime behavior — verify with tests".to_string());
 
@@ -1115,14 +1213,28 @@ export * from "./other";
     #[test]
     fn graph_simple_chain() {
         let dir = TempDir::new().unwrap();
-        write(&dir, "src/a.ts", r#"import { b } from "./b"; export const a = 1;"#);
-        write(&dir, "src/b.ts", r#"import { c } from "./c"; export const b = 1;"#);
+        write(
+            &dir,
+            "src/a.ts",
+            r#"import { b } from "./b"; export const a = 1;"#,
+        );
+        write(
+            &dir,
+            "src/b.ts",
+            r#"import { c } from "./c"; export const b = 1;"#,
+        );
         write(&dir, "src/c.ts", r#"export const c = 1;"#);
         let graph = build_dependency_graph(dir.path()).unwrap();
         assert_eq!(graph.nodes.len(), 3);
         // a->b, b->c
-        assert!(graph.edges.iter().any(|e| e.from == "src/a.ts" && e.to == "src/b.ts" && e.verified));
-        assert!(graph.edges.iter().any(|e| e.from == "src/b.ts" && e.to == "src/c.ts" && e.verified));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|e| e.from == "src/a.ts" && e.to == "src/b.ts" && e.verified));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|e| e.from == "src/b.ts" && e.to == "src/c.ts" && e.verified));
         // imported_by
         let b_node = graph.nodes.iter().find(|n| n.path == "src/b.ts").unwrap();
         assert!(b_node.imported_by.contains(&"src/a.ts".to_string()));
@@ -1144,23 +1256,41 @@ export * from "./other";
     #[test]
     fn unresolved_import() {
         let dir = TempDir::new().unwrap();
-        write(&dir, "src/app.ts", r#"import { x } from "./missing"; import React from "react";"#);
+        write(
+            &dir,
+            "src/app.ts",
+            r#"import { x } from "./missing"; import React from "react";"#,
+        );
         let graph = build_dependency_graph(dir.path()).unwrap();
         let node = graph.nodes.iter().find(|n| n.path == "src/app.ts").unwrap();
         assert_eq!(node.imports.len(), 2);
         let unresolved = node.imports.iter().filter(|e| !e.verified).count();
         assert_eq!(unresolved, 2);
         // first should be unresolved file not found, second external
-        assert!(node.imports.iter().any(|e| e.note.as_ref().unwrap().contains("not found")));
-        assert!(node.imports.iter().any(|e| e.note.as_ref().unwrap().contains("external")));
+        assert!(node
+            .imports
+            .iter()
+            .any(|e| e.note.as_ref().unwrap().contains("not found")));
+        assert!(node
+            .imports
+            .iter()
+            .any(|e| e.note.as_ref().unwrap().contains("external")));
     }
 
     #[test]
     fn impact_direct_and_transitive() {
         let dir = TempDir::new().unwrap();
         write(&dir, "src/base.ts", r#"export function base() {}"#);
-        write(&dir, "src/mid.ts", r#"import { base } from "./base"; export const mid = base();"#);
-        write(&dir, "src/top.ts", r#"import { mid } from "./mid"; const x = mid;"#);
+        write(
+            &dir,
+            "src/mid.ts",
+            r#"import { base } from "./base"; export const mid = base();"#,
+        );
+        write(
+            &dir,
+            "src/top.ts",
+            r#"import { mid } from "./mid"; const x = mid;"#,
+        );
         write(&dir, "src/unrelated.ts", r#"export const y = 1;"#);
         let impact = change_impact(dir.path(), "src/base.ts").unwrap();
         // direct should contain mid
@@ -1174,9 +1304,21 @@ export * from "./other";
     #[test]
     fn relationships_referenced_by() {
         let dir = TempDir::new().unwrap();
-        write(&dir, "src/foo.ts", r#"export function greet() { return "hi"; }"#);
-        write(&dir, "src/bar.ts", r#"import { greet } from "./foo"; console.log(greet());"#);
-        write(&dir, "src/baz.ts", r#"const x = greet(); // no import but mentions"#);
+        write(
+            &dir,
+            "src/foo.ts",
+            r#"export function greet() { return "hi"; }"#,
+        );
+        write(
+            &dir,
+            "src/bar.ts",
+            r#"import { greet } from "./foo"; console.log(greet());"#,
+        );
+        write(
+            &dir,
+            "src/baz.ts",
+            r#"const x = greet(); // no import but mentions"#,
+        );
         let rel = file_relationships(dir.path(), "src/foo.ts").unwrap();
         assert!(rel.defined_symbols.iter().any(|s| s.name == "greet"));
         // bar should be referenced_by via name search, also imported_by via graph
@@ -1203,11 +1345,19 @@ export * from "./other";
     #[test]
     fn python_and_rust_imports() {
         let dir = TempDir::new().unwrap();
-        write(&dir, "main.py", "import os\nimport mymod\nfrom pkg import foo\n");
+        write(
+            &dir,
+            "main.py",
+            "import os\nimport mymod\nfrom pkg import foo\n",
+        );
         write(&dir, "mymod.py", "x=1");
         write(&dir, "pkg/__init__.py", "");
         write(&dir, "pkg/foo.py", "y=1");
-        write(&dir, "src/main.rs", "use crate::utils::helper;\nmod utils;\n");
+        write(
+            &dir,
+            "src/main.rs",
+            "use crate::utils::helper;\nmod utils;\n",
+        );
         write(&dir, "src/utils.rs", "pub fn helper() {}");
         let graph = build_dependency_graph(dir.path()).unwrap();
         // py mymod should be verified (main.py -> mymod.py)
@@ -1220,7 +1370,11 @@ export * from "./other";
         // mymod.py exists at root, so should be verified
         assert!(mymod_edge.verified);
         // rust mod utils should be verified (src/main.rs -> src/utils.rs)
-        let rs_node = graph.nodes.iter().find(|n| n.path == "src/main.rs").unwrap();
+        let rs_node = graph
+            .nodes
+            .iter()
+            .find(|n| n.path == "src/main.rs")
+            .unwrap();
         assert!(rs_node.imports.iter().any(|e| e.verified));
     }
 
@@ -1228,7 +1382,11 @@ export * from "./other";
     fn limits_truncated() {
         let dir = TempDir::new().unwrap();
         for i in 0..600 {
-            write(&dir, &format!("src/f{}.ts", i), &format!(r#"import {{ x }} from "./f{}";"#, (i+1)%600));
+            write(
+                &dir,
+                &format!("src/f{}.ts", i),
+                &format!(r#"import {{ x }} from "./f{}";"#, (i + 1) % 600),
+            );
         }
         let graph = build_dependency_graph(dir.path()).unwrap();
         assert!(graph.nodes.len() <= MAX_ANALYSIS_FILES);

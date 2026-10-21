@@ -12,7 +12,7 @@ Nexora combines a modern desktop shell with a native Rust core that manages loca
 - **Core Purpose:** Deliver a high-performance, private, local-first coding assistant for Windows developers, engineers, and students who want to interact with codebases without uploading source code to third-party clouds.
 - **Platform Focus:** Exclusively targeted at the Windows desktop ecosystem (Windows 10 22H2+ and Windows 11 x64) using Tauri 2 and Microsoft Edge WebView2.
 - **Implementation Status:**
-  - **Implemented & Verified:** All 32 planned phases of the core architecture and feature set—including the native desktop shell, conversation engine, codebase scanner, AST symbol indexer, dependency graph analyzer, review-before-apply patch proposals, local model manager, system settings, premium glassmorphism, Living Aurora ambient dynamics, and offline licensing verification—are implemented and verified by comprehensive automated test suites (75 test files, 724 tests passing).
+  - **Implemented & Verified:** All 32 planned phases of the core architecture and feature set—including the native desktop shell, conversation engine, codebase scanner, AST symbol indexer, dependency graph analyzer, review-before-apply patch proposals, local model manager, system settings, premium glassmorphism, Living Aurora ambient dynamics, and offline licensing verification—are implemented and verified by comprehensive automated test suites (83 test files, 833 tests passing).
   - **Unverified in Linux Sandbox:** Compilation of the native Rust crate (`nexora_lib`), generation of the Windows NSIS installer (`.exe`), native Windows DWM glass compositing, and live inference with 7B+ GGUF weights require a physical Windows PC or an authorized Windows CI runner.
 
 ---
@@ -47,7 +47,8 @@ Nexora combines a modern desktop shell with a native Rust core that manages loca
 ### 2.6 Local Model Management (`#/models`)
 - Direct integration with user-supplied GGUF models and the `llama-server.exe` binary.
 - Header validation checking GGUF magic bytes, format version 3, and tensor counts.
-- Hardware fit estimation comparing model size and context overhead against available physical RAM.
+- Readiness decided by the Rust core, not the UI: fourteen states from `unavailable` and `ready_to_download` through `unverified`, `ready_to_load`, `loaded` and `runtime_failure`. Each row shows the core's explanation, the model file size, the free space a download needs, and an estimated memory figure for the context you configured. See [docs/nexora-sonnet/READINESS.md](docs/nexora-sonnet/READINESS.md).
+- Hardware fit estimation comparing published model size and context-derived cache against **available** physical RAM — never total RAM, and never a fixed "minimum" figure.
 - Complete process lifecycle control with graceful startup, health probing, and explicit process teardown (`unload_model`).
 
 ### 2.7 Workspace Settings & Preference Persistence (`#/settings`)
@@ -134,18 +135,24 @@ Nexora combines a modern desktop shell with a native Rust core that manages loca
 - **C++ Build Tools:** Visual Studio 2022 C++ Build Tools with "Desktop development with C++" and the Windows 10/11 SDK.
 
 ### 4.3 Hardware Guidelines for Local Model Inference
-Hardware requirements depend heavily on the chosen GGUF model size and quantization:
-- **Minimum Tier (7B-class Q4_K_M models):**
-  - CPU: 4-core x86_64 with AVX2 support.
-  - RAM: 16 GB system memory.
-  - Storage: 20 GB free SSD space for runtime and model weights.
-  - GPU: Optional (CPU inference supported; 6–8 GB VRAM recommended for hardware acceleration).
-- **Recommended Tier (14B–30B Q4_K_M models):**
-  - CPU: 8-core modern processor.
-  - RAM: 32 GB system memory.
-  - Storage: 50 GB free NVMe SSD space.
-  - GPU: Dedicated GPU with 12–16 GB VRAM (NVIDIA RTX series or AMD Vulkan-compatible).
-- **Hardware Honesty Rule:** Nexora reports estimated memory needs based on model parameters and context window; it does not promise specific token generation speeds before actual measurement.
+Nexora does not publish a single "minimum RAM" figure, because the requirement is not a
+property of the model alone: it is the weights plus a KV cache that grows with the context
+window you configure, plus runtime overhead, and it has to fit inside the memory that is
+*available*, not the memory installed.
+
+At the recommended 8,192-token context the estimates are:
+
+| Profile | File | Memory estimate @ 8k | @ 32k |
+| --- | --- | --- | --- |
+| Nexora Mini (7B Q4_K_M) | 4.36 GiB | 5.8 GiB | 7.1 GiB |
+| Nexora Sonnet (14B Q4_K_M) | 8.37 GiB | 10.9 GiB | 15.4 GiB |
+
+Plus 512 MiB of headroom on disk for the download itself. The core measures available RAM and
+free space at the download folder and refuses a load that cannot fit; the numbers above are
+estimates, not guarantees. CPU inference is supported and is the only mode Nexora configures —
+no GPU-offload flags are passed — so a 4-core x86_64 CPU with AVX2 support is the practical
+floor, and a modern 8-core CPU is recommended for 14B-class models. GPU acceleration is not
+claimed. Details and limits: [docs/nexora-sonnet/READINESS.md](docs/nexora-sonnet/READINESS.md).
 
 ---
 

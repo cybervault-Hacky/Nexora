@@ -15,7 +15,21 @@ import { cancelGeneration, generate } from "../../lib/inference";
 import { usePersistentConversation } from "./usePersistentConversation";
 import { clearFallbackStorage } from "../../lib/history";
 
+const MINI_ID = "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m";
+const SONNET_ID = "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m";
+
 const generateMock = vi.mocked(generate);
+
+/** The request of the nth `generate` call; fails loudly when there is none. */
+function sentRequest(index = 0) {
+  const call = generateMock.mock.calls[index];
+
+  if (!call) {
+    throw new Error(`generate was called ${generateMock.mock.calls.length} time(s), not ${index + 1}`);
+  }
+
+  return call[0];
+}
 const cancelMock = vi.mocked(cancelGeneration);
 
 function session() {
@@ -310,6 +324,192 @@ describe("usePersistentConversation", () => {
     await act(async () => finishOld(snapshot("older")));
     expect(result.current.messages[0]?.content).toBe("newer");
     expect(generateMock).not.toHaveBeenCalled();
+  });
+
+  // ---- stream integrity (Phase 6) ------------------------------------------
+
+  it("ignores a delta addressed to a different request", async () => {
+    const run = session();
+    const { result } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+
+    await act(async () => {
+      run.send("mine");
+    });
+    await act(async () => {
+      // Same conversation, different request: an event from an earlier
+      // generation must not be appended to this reply.
+      run.raw({ type: "delta", requestId: "someone-elses-request", text: "not mine" });
+    });
+
+    const reply = result.current.messages[1];
+    expect(reply?.content).toBe("mine");
+    await act(async () => run.settle());
+  });
+
+  it("marks a failed stream as an error and never as a finished answer", async () => {
+    const run = session();
+    const { result } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    await act(async () => {
+      run.send("half an ans");
+      run.fail({
+        code: "network",
+        message: "The local engine ended the reply before reporting it finished.",
+      });
+    });
+
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+
+    const reply = result.current.messages[1];
+    expect(reply?.state).toBe("error");
+    expect(reply?.content).toBe("half an ans");
+    expect(result.current.runtimeError).toContain("before reporting it finished");
+
+    // A failed reply is not resent as if the model had said it: the next
+    // request carries the user turn only, so incomplete output can never be
+    // presented back to the model as a finished answer.
+    const next = session();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    act(() => result.current.setDraft("try again"));
+    act(() => result.current.submit());
+
+    const sent = sentRequest(1).messages;
+    expect(sent.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(sent.map((m) => m.content)).toEqual(["hello", "try again"]);
+    await act(async () => next.settle());
+  });
+
+  it("records a stopped reply as stopped, keeping its partial text", async () => {
+    const run = session();
+    const { result } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    await act(async () => {
+      run.send("partial");
+      run.settle({ cancelled: true, finishReason: "stopped" });
+    });
+
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+
+    const reply = result.current.messages[1];
+    expect(reply?.state).toBe("stopped");
+    expect(reply?.content).toBe("partial");
+
+    const id = result.current.activeId!;
+    act(() => result.current.selectConversation(id));
+    await waitFor(() => expect(result.current.messages.length).toBe(2));
+    // Persisted history never records an in-flight message as complete.
+    expect(result.current.messages[1]?.state).toBe("stopped");
+  });
+
+  // ---- profile routing (Phase 6) -------------------------------------------
+
+  it("names the selected profile on every request it sends", async () => {
+    const run = session();
+    const { result } = renderHook(() =>
+      usePersistentConversation({ profileId: SONNET_ID }),
+    );
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("route me"));
+    act(() => result.current.submit());
+
+    // The core decides which model runs; this only proves the message carries
+    // the profile it was composed under, so a stale one can be refused.
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(sentRequest(0).profileId).toBe(SONNET_ID);
+
+    await act(async () => run.settle());
+  });
+
+  it("defaults to the default profile when no selection is passed", async () => {
+    const run = session();
+    const { result } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+
+    // No profile is named: the core falls back to its own stored selection,
+    // which is Nexora Mini. The UI never invents an id.
+    expect(sentRequest(0).profileId).toBeNull();
+    await act(async () => run.settle());
+  });
+
+  it("sends the profile that is selected when the message is sent, not at mount", async () => {
+    const run = session();
+    const { result, rerender } = renderHook(
+      ({ profileId }: { profileId: string | null }) =>
+        usePersistentConversation({ profileId }),
+      { initialProps: { profileId: MINI_ID } },
+    );
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    rerender({ profileId: SONNET_ID });
+
+    act(() => result.current.setDraft("after the switch"));
+    act(() => result.current.submit());
+
+    expect(sentRequest(0).profileId).toBe(SONNET_ID);
+    await act(async () => run.settle());
+  });
+
+  it("keeps the conversation and its order when the profile changes", async () => {
+    const run = session();
+    const { result, rerender } = renderHook(
+      ({ profileId }: { profileId: string | null }) =>
+        usePersistentConversation({ profileId }),
+      { initialProps: { profileId: MINI_ID } },
+    );
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("first question"));
+    act(() => result.current.submit());
+    await act(async () => {
+      run.send("first answer");
+      run.settle();
+    });
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+
+    rerender({ profileId: SONNET_ID });
+
+    expect(result.current.messages.map((m) => m.content)).toEqual([
+      "first question",
+      "first answer",
+    ]);
+    expect(result.current.messages.map((m) => m.state)).toEqual([
+      "complete",
+      "complete",
+    ]);
+    // A switch never re-sends anything on its own.
+    expect(generateMock).toHaveBeenCalledTimes(1);
+
+    // Past the double-submit guard: this is a real second message, not a
+    // repeated Enter.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    act(() => result.current.setDraft("second question"));
+    act(() => result.current.submit());
+
+    // The second request goes out under the new profile and carries the whole
+    // history in order.
+    const request = sentRequest(1);
+    expect(request.profileId).toBe(SONNET_ID);
+    expect(request.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    await act(async () => run.settle());
   });
 
   it("does not resurrect a deleted conversation on later flush", async () => {

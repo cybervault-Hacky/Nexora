@@ -1,11 +1,29 @@
-use std::sync::Mutex;
 use super::AuthError;
+use std::sync::Mutex;
 
+#[cfg(target_os = "windows")]
 const KEYRING_SERVICE: &str = "com.nexora.desktop";
+#[cfg(target_os = "windows")]
 const KEYRING_USER: &str = "session_token";
 
 // In-memory fallback for non-Windows platforms or when the OS keyring is unavailable.
 static MEMORY_STORE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Writes (or clears) the in-memory copy of the token.
+///
+/// A poisoned lock used to be swallowed with `if let Ok`, which reported
+/// success while storing nothing — the next read would then claim the user had
+/// never signed in. Turning it into an error keeps logout idempotent but stops
+/// a save from lying about having happened.
+fn remember(token: Option<&str>) -> Result<(), AuthError> {
+    let mut store = MEMORY_STORE
+        .lock()
+        .map_err(|_| AuthError::storage("The in-memory session store is unavailable."))?;
+
+    *store = token.map(str::to_string);
+
+    Ok(())
+}
 
 /// Saves the opaque session token in secure OS credential storage.
 ///
@@ -22,23 +40,23 @@ pub fn save_session_token(token: &str) -> Result<(), AuthError> {
                     if let Ok(mut mem) = MEMORY_STORE.lock() {
                         *mem = Some(token.to_string());
                     }
-                    return Err(AuthError::storage(format!("Failed to save credential to Windows Credential Manager: {e}")));
+                    return Err(AuthError::storage(format!(
+                        "Failed to save credential to Windows Credential Manager: {e}"
+                    )));
                 }
             }
             Err(e) => {
                 if let Ok(mut mem) = MEMORY_STORE.lock() {
                     *mem = Some(token.to_string());
                 }
-                return Err(AuthError::storage(format!("Failed to access Windows Credential Manager entry: {e}")));
+                return Err(AuthError::storage(format!(
+                    "Failed to access Windows Credential Manager entry: {e}"
+                )));
             }
         }
     }
 
-    if let Ok(mut mem) = MEMORY_STORE.lock() {
-        *mem = Some(token.to_string());
-    }
-
-    Ok(())
+    remember(Some(token))
 }
 
 /// Retrieves the session token from secure storage.
@@ -59,11 +77,11 @@ pub fn get_session_token() -> Result<Option<String>, AuthError> {
         }
     }
 
-    if let Ok(mem) = MEMORY_STORE.lock() {
-        return Ok(mem.clone());
-    }
+    let store = MEMORY_STORE
+        .lock()
+        .map_err(|_| AuthError::storage("The in-memory session store is unavailable."))?;
 
-    Ok(None)
+    Ok(store.clone())
 }
 
 /// Deletes the session token upon logout or session revocation.
@@ -71,15 +89,13 @@ pub fn delete_session_token() -> Result<(), AuthError> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-            let _ = entry.delete_password();
+            // keyring 3.x renamed `delete_password` to `delete_credential`. A
+            // missing entry is not an error: logout must stay idempotent.
+            let _ = entry.delete_credential();
         }
     }
 
-    if let Ok(mut mem) = MEMORY_STORE.lock() {
-        *mem = None;
-    }
-
-    Ok(())
+    remember(None)
 }
 
 #[cfg(test)]

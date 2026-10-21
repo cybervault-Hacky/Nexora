@@ -136,7 +136,8 @@ pub async fn auth_resend_verification(
 
     Ok(AuthStatusResponse {
         status: "sent".to_string(),
-        message: "If an account exists for that email, a verification link has been sent.".to_string(),
+        message: "If an account exists for that email, a verification link has been sent."
+            .to_string(),
     })
 }
 
@@ -150,7 +151,8 @@ pub async fn auth_recover_password(
 
     Ok(AuthStatusResponse {
         status: "sent".to_string(),
-        message: "If an account exists for that email, password reset instructions have been sent.".to_string(),
+        message: "If an account exists for that email, password reset instructions have been sent."
+            .to_string(),
     })
 }
 
@@ -173,7 +175,8 @@ pub async fn auth_reset_password(
 
     Ok(AuthStatusResponse {
         status: "reset".to_string(),
-        message: "Password updated successfully. You can now sign in with your new password.".to_string(),
+        message: "Password updated successfully. You can now sign in with your new password."
+            .to_string(),
     })
 }
 
@@ -183,8 +186,12 @@ pub async fn auth_change_password(
     state: State<'_, AuthState>,
     request: ChangePasswordPayload,
 ) -> AuthResult<AuthStatusResponse> {
-    let token = get_session_token()?
-        .ok_or_else(|| AuthError::new("unauthenticated", "You must be signed in to change your password."))?;
+    let token = get_session_token()?.ok_or_else(|| {
+        AuthError::new(
+            "unauthenticated",
+            "You must be signed in to change your password.",
+        )
+    })?;
 
     state
         .client
@@ -213,7 +220,7 @@ pub async fn get_developer_diagnostics(
         arch: std::env::consts::ARCH.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         credential_vault: vault_status,
-        auth_service_url: state.client.base_url.clone(),
+        auth_service_url: state.client.base_url().to_string(),
         csp_enforced: true,
         offline_capable: true,
     })
@@ -239,7 +246,7 @@ pub async fn auth_logout(state: State<'_, AuthState>) -> AuthResult<bool> {
 pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUser> {
     state.google_cancel.store(false, Ordering::SeqCst);
 
-    let pkce = generate_pkce();
+    let pkce = generate_pkce()?;
     let (listener, port) = bind_loopback()?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 
@@ -258,15 +265,25 @@ pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUs
     // Open system browser safely
     open_browser(&auth_url);
 
-    // Wait for loopback redirect (120-second timeout)
+    // Wait for loopback redirect (120-second timeout).
+    //
+    // The expected `state` is cloned into the blocking task: `pkce` is still
+    // needed for the server-side exchange below, so nothing may be moved out
+    // of it here.
     let cancel_flag = state.google_cancel.clone();
-    let code = tokio::task::spawn_blocking(move || {
-        await_callback(listener, &pkce.state, Duration::from_secs(120), cancel_flag)
+    let expected_state = pkce.state.clone();
+    let callback = tokio::task::spawn_blocking(move || {
+        await_callback(
+            listener,
+            &expected_state,
+            Duration::from_secs(120),
+            cancel_flag,
+        )
     })
     .await
-    .map_err(|e| AuthError::new("task_error", format!("OAuth listener task error: {e}")))?;;
+    .map_err(|e| AuthError::new("task_error", format!("OAuth listener task error: {e}")))?;
 
-    let code = code?;
+    let code = callback?;
 
     // Perform server-side code exchange
     let (user, token) = state
@@ -321,15 +338,11 @@ fn open_browser(url: &str) {
 
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .arg(url)
-            .spawn();
+        let _ = std::process::Command::new("open").arg(url).spawn();
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn();
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
 }

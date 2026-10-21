@@ -51,7 +51,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 
@@ -76,6 +76,9 @@ describe("Phase 24 — Desktop Authentication Integration & Flows", () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "clear_symbol_index" || cmd === "clear_analysis_graph") {
         return Promise.resolve(true);
+      }
+      if (cmd === "get_usage_status") {
+        return Promise.resolve(makeUsage());
       }
       return Promise.resolve(undefined);
     });

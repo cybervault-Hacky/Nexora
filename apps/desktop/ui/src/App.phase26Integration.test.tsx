@@ -50,7 +50,7 @@ vi.mock("./lib/history", () => ({
 
 import App from "./App";
 import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
@@ -76,6 +76,8 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
+      case "get_usage_status":
+        return Promise.resolve(makeUsage());
       case "licence_get_status":
         return Promise.resolve({
           tier: "community",
@@ -84,7 +86,7 @@ beforeEach(() => {
           licenceKey: null,
           licensee: null,
           expiresAt: null,
-          features: ["unlimited_local_inference"],
+          features: ["daily_local_inference"],
         });
       case "auth_get_session":
         return Promise.resolve({

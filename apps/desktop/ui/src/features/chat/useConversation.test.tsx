@@ -101,6 +101,23 @@ describe("useConversation", () => {
     expect(result.current.messages[1]?.content).toBe("Hi there");
   });
 
+  it("names the selected profile on the request", async () => {
+    const run = session();
+    const { result } = renderHook(() =>
+      useConversation({ profileId: "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m" }),
+    );
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+
+    const call = generateMock.mock.calls[0];
+    expect(call?.[0].profileId).toBe(
+      "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m",
+    );
+
+    await act(async () => run.settle());
+  });
+
   it("sends the visible conversation as engine turns", () => {
     session();
     const { result } = renderHook(() => useConversation());

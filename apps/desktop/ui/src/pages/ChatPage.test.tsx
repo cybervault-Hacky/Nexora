@@ -5,7 +5,102 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "./ChatPage";
 import type { ChatMessage } from "../features/chat/chat";
-import { makeStatus } from "../test/fixtures";
+import { makeReadiness, makeStatus } from "../test/fixtures";
+import type { UsageView } from "../features/usage/useUsage";
+import type { ModelCatalog } from "../features/models/useModelCatalog";
+
+function makeUsageMock(overrides: Partial<UsageView> = {}): UsageView {
+  return {
+    status: null,
+    error: null,
+    loading: false,
+    reload: vi.fn(),
+    now: Date.UTC(2026, 9, 20, 12),
+    ...overrides,
+  };
+}
+
+/** A catalogue with both profiles, Mini selected and ready. */
+function makeModelsMock(overrides: Partial<ModelCatalog> = {}): ModelCatalog {
+  const mini = {
+    profile: {
+      id: "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m",
+      displayName: "Nexora Mini",
+      publisher: "Qwen team, Alibaba Group",
+      upstreamModel: "Qwen/Qwen2.5-Coder-7B-Instruct",
+      upstreamRevision: "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      format: "GGUF",
+      quantization: "Q4_K_M",
+      licence: { id: "Apache-2.0", reference: "https://example.invalid/LICENSE" },
+      artifact: {
+        state: "approved" as const,
+        repository: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+        revision: "13fb94bfda8c8cf22497dc57b78f391a9acb426a",
+        fileName: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        sizeBytes: 4_683_073_536,
+        sha256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
+      },
+      context: { recommended: 32_768, documentedMax: 32_768 },
+      compatibilityNotes: ["note"],
+      locallyVerified: false,
+    },
+    selected: true,
+    active: true,
+    installedPath: "C:\\Models\\qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+    downloadable: true,
+    status: "loaded" as const,
+    detail: "This model is loaded and answering from this machine.",
+    readiness: makeReadiness({
+      state: "loaded",
+      headline: "Loaded",
+      detail: "This model is loaded and answering from this machine.",
+      canDownload: false,
+    }),
+  };
+
+  const sonnet = {
+    ...mini,
+    profile: {
+      ...mini.profile,
+      id: "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m",
+      displayName: "Nexora Sonnet",
+      upstreamModel: "Qwen/Qwen2.5-Coder-14B-Instruct",
+      upstreamRevision: "aedcc2d42b622764e023cf882b6652e646b95671",
+      artifact: {
+        state: "approved" as const,
+        repository: "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
+        revision: "d0a692ef765eefbf2fabb130b3cb2e8917e3d225",
+        fileName: "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+        sizeBytes: 8_988_110_272,
+        sha256: "c1e659736d89ac1065fb495330fb824d94001974a4bfa78e7270e43476a8d940",
+      },
+      context: { recommended: 8_192, documentedMax: 32_768 },
+    },
+    selected: false,
+    active: false,
+    installedPath: null,
+    downloadable: true,
+    status: "ready_to_download" as const,
+    detail: "Nothing is installed yet.",
+    readiness: makeReadiness(),
+  };
+
+  return {
+    entries: [mini, sonnet],
+    selected: mini,
+    running: true,
+    loadedProfileId: mini.profile.id,
+    selectionError: null,
+    loading: false,
+    error: null,
+    selecting: false,
+    switchError: null,
+    dismissSwitchError: vi.fn(),
+    select: vi.fn(),
+    reload: vi.fn(),
+    ...overrides,
+  };
+}
 
 function makeConversationMock(overrides?: Partial<Record<string, unknown>>) {
   return {
@@ -68,6 +163,32 @@ function makeWorkspaceMock(overrides?: Partial<Record<string, unknown>>) {
 }
 
 describe("Phase 25 — ChatPage component", () => {
+  it("renders no usage meter in the browser preview", () => {
+    const textareaRef = createRef<HTMLTextAreaElement>();
+
+    render(
+      <ChatPage
+        conversation={makeConversationMock()}
+        workspace={makeWorkspaceMock()}
+        engineStatus={makeStatus()}
+        statusError={null}
+        engineReady={true}
+        desktop={false}
+        contextPlan={null}
+        retrievalResult={null}
+        evidenceReport={null}
+        textareaRef={textareaRef}
+        focusNonce={0}
+        onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Daily free usage")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+  });
+
   it("renders conversation header, engine status chip, and local-only chip", () => {
     const conversation = makeConversationMock();
     const workspace = makeWorkspaceMock();
@@ -87,6 +208,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -115,6 +238,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -146,6 +271,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -193,6 +320,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -226,6 +355,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -261,6 +392,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 
@@ -299,6 +432,8 @@ describe("Phase 25 — ChatPage component", () => {
         textareaRef={textareaRef}
         focusNonce={0}
         onSubmit={vi.fn()}
+        usage={makeUsageMock()}
+        models={makeModelsMock()}
       />,
     );
 

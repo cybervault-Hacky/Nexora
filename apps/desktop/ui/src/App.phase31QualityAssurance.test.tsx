@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { markDesktop } from "./test/fixtures";
+import { markDesktop, makeUsage } from "./test/fixtures";
 
 // Mock Tauri invoke IPC
 vi.mock("@tauri-apps/api/core", () => ({
@@ -87,6 +87,8 @@ function installQAMocks() {
 
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
     switch (command) {
+      case "get_usage_status":
+        return makeUsage();
       case "get_app_status":
         if (mockStatusError) {
           throw new Error(mockStatusError);
@@ -137,6 +139,18 @@ function installQAMocks() {
           contextSize: 32768,
         };
 
+      case "plan_workspace_export":
+        return Promise.resolve({
+          rootName: "demo-app",
+          files: [{ path: "src/main.ts", size: 58 }],
+          excludedSensitive: 0,
+          excludedSymlink: 0,
+          excludedUnsafe: 0,
+          totalBytes: 58,
+          truncated: false,
+        });
+      case "suggest_export_path":
+        return Promise.resolve("/tmp/demo-app.zip");
       case "list_conversations":
         return [
           {
@@ -218,6 +232,9 @@ function installQAMocks() {
           sizeGib: 13.97,
           ggufVersion: 3,
           tensorCount: 380,
+          architecture: "qwen2",
+          name: null,
+          contextLength: 32768,
           estimatedMinRamGib: 16.5,
           fitsAvailableRam: true,
           warnings: [],

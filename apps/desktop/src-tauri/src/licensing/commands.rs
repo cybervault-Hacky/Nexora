@@ -16,7 +16,10 @@ impl LicenceState {
             std::fs::read_to_string(p).ok().and_then(|content| {
                 serde_json::from_str::<serde_json::Value>(&content)
                     .ok()
-                    .and_then(|v| v.get("licenceKey").and_then(|k| k.as_str().map(|s| s.to_string())))
+                    .and_then(|v| {
+                        v.get("licenceKey")
+                            .and_then(|k| k.as_str().map(|s| s.to_string()))
+                    })
             })
         });
 
