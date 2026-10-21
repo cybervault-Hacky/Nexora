@@ -624,7 +624,10 @@ mod tests {
     #[test]
     fn destination_must_be_absolute_and_safe() {
         assert!(destination_path("relative.zip").is_err());
-        assert!(destination_path("/tmp/../tmp/x.zip").is_ok());
+        // A POSIX literal like "/tmp/..." is not absolute on Windows, so the
+        // traversal case is built from the platform's own temporary folder.
+        let traversal = std::env::temp_dir().join("..").join("x.zip");
+        assert!(destination_path(&traversal.to_string_lossy()).is_ok());
         let dir = scratch("dest");
         assert!(destination_path(&format!("{}/CON.zip", dir.display())).is_err());
         assert!(destination_path(&format!("{}/ok.zip", dir.display())).is_ok());

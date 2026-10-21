@@ -282,6 +282,21 @@ fn extract_imports_for_file(content: &str, path: &str) -> Vec<(String, u32, Stri
 // Resolve import spec to workspace-relative path
 // ---------------------------------------------------------------------------
 
+/// Refuses a parent segment before `normalize_posix` can erase it.
+///
+/// `normalize_posix` pops the previous component for every `..`, so
+/// `../outside.ts` becomes `outside.ts`. A traversal check made on the
+/// normalised string therefore never sees what the caller actually asked for.
+fn reject_parent_segments(raw: &str) -> Result<(), WorkspaceError> {
+    if raw.split(['/', '\\']).any(|component| component == "..") {
+        return Err(WorkspaceError::invalid_request(
+            "Path traversal not allowed.",
+        ));
+    }
+
+    Ok(())
+}
+
 fn normalize_posix(p: &str) -> String {
     // Collapse //, remove ./, handle ../ naively but validation already ensures files are within root
     // For resolution we just join and normalize via Path components
@@ -778,8 +793,11 @@ fn detect_cycles(nodes: &[FileNode], edges: &[DependencyEdge]) -> Vec<Vec<String
 // ---------------------------------------------------------------------------
 
 pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships, WorkspaceError> {
-    // Validate target path
-    let target_norm = normalize_posix(target.trim());
+    // Validate target path. The raw form is checked first: normalising away a
+    // leading `../` would otherwise make the traversal look like a local file.
+    let raw = target.trim();
+    reject_parent_segments(raw)?;
+    let target_norm = normalize_posix(raw);
     if target_norm.is_empty() {
         return Err(WorkspaceError::invalid_request("Target path is empty."));
     }
@@ -918,7 +936,9 @@ pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships
 // ---------------------------------------------------------------------------
 
 pub fn change_impact(root: &Path, target: &str) -> Result<ImpactReport, WorkspaceError> {
-    let target_norm = normalize_posix(target.trim());
+    let raw = target.trim();
+    reject_parent_segments(raw)?;
+    let target_norm = normalize_posix(raw);
     if target_norm.is_empty() {
         return Err(WorkspaceError::invalid_request("Target path is empty."));
     }
