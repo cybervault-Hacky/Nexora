@@ -820,8 +820,8 @@ pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships
     let defined_symbols: Vec<Symbol> = symbol_index
         .symbols
         .iter()
-        .filter(|s| s.path == target_norm)
         .cloned()
+        .filter(|symbol| symbol.path == target_norm)
         .take(200)
         .collect();
 

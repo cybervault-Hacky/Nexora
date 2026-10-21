@@ -81,10 +81,10 @@ impl PatchGenerationResponseStrict {
                 "Missing 'proposedContent' — patch must contain replacement content.".to_string(),
             );
         }
-        if proposed.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposed.len() as u64 > MAX_PREVIEW_BYTES {
             return Err(format!(
                 "Proposed content too large ({} bytes, max {}).",
-                proposed.as_bytes().len(),
+                proposed.len(),
                 MAX_PREVIEW_BYTES
             ));
         }
@@ -544,10 +544,10 @@ fn validate_file_fields(
             "Missing 'proposedContent' — patch must contain replacement content.".to_string(),
         );
     }
-    if proposed.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+    if proposed.len() as u64 > MAX_PREVIEW_BYTES {
         return Err(format!(
             "Proposed content too large ({} bytes, max {}).",
-            proposed.as_bytes().len(),
+            proposed.len(),
             MAX_PREVIEW_BYTES
         ));
     }

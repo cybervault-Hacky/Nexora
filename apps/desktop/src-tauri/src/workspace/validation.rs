@@ -406,7 +406,7 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
                 "Proposed content contains NUL (binary)",
             ));
         }
-        if proposal.proposed_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.proposed_content.len() as u64 > MAX_PREVIEW_BYTES {
             status = CheckStatus::Failed;
             diags.push(diag(
                 &proposal.path,
@@ -556,11 +556,11 @@ pub fn validate_detailed(root: &Path, proposal: &PatchProposal) -> ValidationRep
         }
         // Binary via non-utf8 already handled as String, but we also check for high control? Not needed.
 
-        if proposal.original_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.original_content.len() as u64 > MAX_PREVIEW_BYTES {
             status = CheckStatus::Failed;
             diags.push(diag(&proposal.path, 1, None, "Original content too large"));
         }
-        if proposal.proposed_content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if proposal.proposed_content.len() as u64 > MAX_PREVIEW_BYTES {
             if status != CheckStatus::Failed {
                 status = CheckStatus::Failed;
             }

@@ -333,7 +333,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
         }
 
         // Size check before reading
-        if entry.size > MAX_PREVIEW_BYTES as u64 {
+        if entry.size > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -372,7 +372,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
             }
         };
 
-        if content.as_bytes().len() as u64 > MAX_PREVIEW_BYTES {
+        if content.len() as u64 > MAX_PREVIEW_BYTES {
             unsupported += 1;
             continue;
         }
@@ -381,7 +381,7 @@ pub fn build_symbol_index(root: &Path) -> Result<SymbolIndex, WorkspaceError> {
             continue;
         }
 
-        total_bytes += content.as_bytes().len();
+        total_bytes += content.len();
         if total_bytes > MAX_INDEXED_BYTES {
             truncated = true;
             break;
