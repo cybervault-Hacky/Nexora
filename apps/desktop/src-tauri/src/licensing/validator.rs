@@ -22,33 +22,6 @@ pub fn compute_licence_checksum(prefix: &str) -> String {
     )
 }
 
-/// Generates a valid test/developer licence key for a given tier, licensee, and optional expiry.
-pub fn generate_licence_key(tier: LicenceTier, licensee: &str, expires_at: Option<i64>) -> String {
-    let tier_str = match tier {
-        LicenceTier::Community => "COMMUNITY",
-        LicenceTier::Pro => "PRO",
-        LicenceTier::Team => "TEAM",
-        LicenceTier::Enterprise => "ENT",
-    };
-
-    let exp_str = match expires_at {
-        Some(ts) => format!("EXP{}", ts),
-        None => "PERPETUAL".to_string(),
-    };
-
-    let sanitized_licensee: String = licensee
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(12)
-        .collect::<String>()
-        .to_uppercase();
-
-    let body = format!("{}_{}", exp_str, sanitized_licensee);
-    let prefix = format!("NEXORA-{}-{}", tier_str, body);
-    let checksum = compute_licence_checksum(&prefix);
-    format!("{}-{}", prefix, checksum)
-}
-
 /// Validates an offline licence key without requiring network connectivity.
 pub fn validate_licence_key(raw_key: &str) -> Result<ValidatedLicence, LicenceError> {
     let key = raw_key.trim().to_uppercase();

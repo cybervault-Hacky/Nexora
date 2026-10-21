@@ -417,10 +417,6 @@ pub struct Charge<'a> {
 }
 
 impl Charge<'_> {
-    pub fn day(&self) -> i64 {
-        self.day
-    }
-
     pub fn commit(mut self) -> Result<(), UsageError> {
         self.settled = true;
         self.state.record_commit(self.day)
@@ -726,7 +722,7 @@ mod tests {
         let state = UsageState::load_at(&dir, before_midnight);
 
         let charge = state.reserve(before_midnight).expect("reserve");
-        let day = charge.day();
+        let day = charge.day;
         charge.commit().expect("commit");
 
         assert_eq!(day, TODAY);
