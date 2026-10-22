@@ -812,17 +812,17 @@ pub fn file_relationships(root: &Path, target: &str) -> Result<FileRelationships
     let imported_by = node.map(|n| n.imported_by.clone()).unwrap_or_default();
     let unresolved: Vec<DependencyEdge> = imports
         .iter()
-        .cloned()
         .filter(|edge| !edge.verified)
+        .cloned()
         .collect();
 
     // Defined symbols
     let defined_symbols: Vec<Symbol> = symbol_index
         .symbols
         .iter()
-        .cloned()
         .filter(|symbol| symbol.path == target_norm)
         .take(200)
+        .cloned()
         .collect();
 
     // Referenced_by: search other files for symbol names defined in target

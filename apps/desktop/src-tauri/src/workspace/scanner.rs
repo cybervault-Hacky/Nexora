@@ -666,7 +666,7 @@ pub fn scan_workspace(root_input: &Path) -> WorkspaceResult<WorkspaceInventory> 
             max_depth: MAX_DEPTH,
             max_files: MAX_FILES,
             max_preview_bytes: MAX_PREVIEW_BYTES,
-            max_inventory_bytes: MAX_INVENTORY_BYTES as usize,
+            max_inventory_bytes: MAX_INVENTORY_BYTES,
         },
     })
 }
@@ -960,13 +960,13 @@ mod tests {
     fn binary_rejected() {
         let dir = temp_root();
         let p = dir.path().join("bin.dat");
-        fs::write(&p, &[0u8, 1, 2, 3, 255]).unwrap();
+        fs::write(&p, [0u8, 1, 2, 3, 255]).unwrap();
         let err = read_workspace_file(dir.path(), "bin.dat").unwrap_err();
         assert_eq!(err.code, "binary");
 
         // Invalid utf8 without nul but non-utf8 sequence
         let p2 = dir.path().join("bad.txt");
-        fs::write(&p2, &[0xFF, 0xFE, 0xFD]).unwrap();
+        fs::write(&p2, [0xFF, 0xFE, 0xFD]).unwrap();
         let err2 = read_workspace_file(dir.path(), "bad.txt").unwrap_err();
         assert_eq!(err2.code, "binary");
     }

@@ -820,8 +820,8 @@ pub fn apply_patch_batch(root: &Path, batch: &PatchBatch) -> WorkspaceResult<Bat
     let stale: Vec<String> = validation
         .warnings
         .iter()
-        .cloned()
         .filter(|warning| warning.to_lowercase().contains("stale"))
+        .cloned()
         .collect();
     if !stale.is_empty() {
         return Err(WorkspaceError::invalid_request(format!(

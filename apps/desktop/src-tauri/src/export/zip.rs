@@ -548,7 +548,7 @@ mod tests {
 
         write_archive(&mut buffer, &entries, &cancel, &mut |_, _, _, _| {}).expect("write");
 
-        let parsed = read_local_entries(&buffer.get_ref());
+        let parsed = read_local_entries(buffer.get_ref());
         assert_eq!(parsed[0].0, "dossier/café.txt");
 
         let _ = fs::remove_dir_all(dir);
