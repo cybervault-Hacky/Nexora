@@ -753,6 +753,13 @@ they do not prove the crate itself resolves.
 
 ### 17.3 The model integration boundary
 
+> **Superseded in part by §19 (2026-10-20, later).** This section describes the tree when Mini was
+> the only profile. The registry now holds two profiles, `get_model_profile` returns the *selected*
+> profile, `start_model_download`, `verify_model` and `verify_file` take a profile id, and the
+> load/generation guards in `docs/nexora-sonnet/PHASE_5_7_CHAT_ROUTING.md` §8 apply. The
+> statements below are kept as the historical record.
+
+
 This is the answer to "can Sonnet or Opus be added later without rebuilding the application?"
 **Yes — the inference path is already model-agnostic.** What is Mini-specific is metadata and
 acquisition, not inference.
@@ -871,6 +878,13 @@ at the start of the next one. The earlier note that this call "lacks a `.catch`"
 coding habit but not a live defect; no edit was made.
 
 ### 18.3 Model integration handoff
+
+> **Superseded in part by §19 (2026-10-20, later).** This section describes the tree when Mini was
+> the only profile. The registry now holds two profiles, `get_model_profile` returns the *selected*
+> profile, `start_model_download`, `verify_model` and `verify_file` take a profile id, and the
+> load/generation guards in `docs/nexora-sonnet/PHASE_5_7_CHAT_ROUTING.md` §8 apply. The
+> statements below are kept as the historical record.
+
 
 **Reusable as-is, with no changes for a second model:**
 

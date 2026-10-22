@@ -40,7 +40,7 @@ per token = 48 layers × 8 heads × 128 dims × 2 (K and V) × 2 bytes
 ```
 
 Weights (~9 GB) plus 8,192-token cache (~1.5 GiB) plus runtime overhead lands near 11–12 GiB,
-which is viable on 16 GB and *not* viable on this verification machine (3.8 GiB).
+which is viable on 16 GB and *not* viable on this verification machine (3.85 GiB total).
 
 **Caveat, stated plainly:** these architecture numbers came from the publisher's published
 configuration, not from a file in this repository. They have since been re-read from the

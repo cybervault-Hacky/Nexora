@@ -6,14 +6,16 @@
 //! Nexora refuses that request instead, before the engine is asked to work and
 //! before any usage is reserved.
 //!
-//! The estimate is deliberately conservative, and it is only used to refuse a
-//! prompt that cannot fit even under generous assumptions:
+//! The estimate is a heuristic, not a tokenizer count, and it is only used to
+//! refuse a prompt that clearly cannot fit:
 //!
-//! * ASCII text is counted at one token per four characters, the usual rate for
-//!   English and source code.
+//! * ASCII text is counted at one token per four characters, a typical rate
+//!   for English prose. It is not a bound for source code: dense code can take
+//!   more tokens per character, so a code-heavy prompt can pass this guard and
+//!   still be truncated by the runtime. The runtime remains the authority.
 //! * Every non-ASCII character counts as two tokens. Latin accents, CJK and
-//!   emoji all tokenize at or above one token per character; two is an upper
-//!   bound for the common cases, so the guard errs towards allowing a request.
+//!   emoji all tokenize at or above one token per character, so two is a
+//!   generous rate for the common cases.
 //! * Each message costs a few tokens of chat framing.
 //!
 //! This is a safety bound, not a measurement. Nothing here is reported to the

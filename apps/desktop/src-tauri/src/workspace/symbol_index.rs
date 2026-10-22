@@ -600,41 +600,43 @@ mod tests {
 
     #[test]
     fn search_ranking() {
-        let mut idx = SymbolIndex::default();
-        idx.symbols = vec![
-            Symbol {
-                name: "hello".into(),
-                kind: SymbolKind::Function,
-                path: "a.rs".into(),
-                start_line: 1,
-                end_line: 1,
-                detail: None,
-            },
-            Symbol {
-                name: "hello_world".into(),
-                kind: SymbolKind::Function,
-                path: "b.rs".into(),
-                start_line: 1,
-                end_line: 1,
-                detail: None,
-            },
-            Symbol {
-                name: "world_hello".into(),
-                kind: SymbolKind::Function,
-                path: "c.rs".into(),
-                start_line: 1,
-                end_line: 1,
-                detail: None,
-            },
-            Symbol {
-                name: "other".into(),
-                kind: SymbolKind::Function,
-                path: "hello.rs".into(),
-                start_line: 1,
-                end_line: 1,
-                detail: None,
-            },
-        ];
+        let idx = SymbolIndex {
+            symbols: vec![
+                Symbol {
+                    name: "hello".into(),
+                    kind: SymbolKind::Function,
+                    path: "a.rs".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    detail: None,
+                },
+                Symbol {
+                    name: "hello_world".into(),
+                    kind: SymbolKind::Function,
+                    path: "b.rs".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    detail: None,
+                },
+                Symbol {
+                    name: "world_hello".into(),
+                    kind: SymbolKind::Function,
+                    path: "c.rs".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    detail: None,
+                },
+                Symbol {
+                    name: "other".into(),
+                    kind: SymbolKind::Function,
+                    path: "hello.rs".into(),
+                    start_line: 1,
+                    end_line: 1,
+                    detail: None,
+                },
+            ],
+            ..Default::default()
+        };
         let res = search_symbols(&idx, "hello", 10);
         assert_eq!(res[0].name, "hello"); // exact
         assert_eq!(res[1].name, "hello_world"); // prefix
