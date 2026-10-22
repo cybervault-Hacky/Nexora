@@ -173,3 +173,51 @@ New and extended tests:
   could mark an incomplete reply as complete; that is a property of the current design, not a
   new guarantee.
 - Windows/MSVC/WebView2 remain unverified.
+
+---
+
+## 8. Phase 7 — integration cleanup (2026-10-22)
+
+Phase 7 traced the send and load paths for races between a reply and an engine replacement.
+One concrete gap was found and closed; the rest of the routing rules are unchanged.
+
+### 8.1 The gap
+
+Found by reading the source; it has not been reproduced against a running engine.
+
+`load_model` starts a new engine process, and `Supervisor::start` stops the running child before
+spawning. Nothing checked whether a reply was streaming. The Start-engine control in the model
+setup page is enabled by local busy state only, and the chat stream keeps running when the user
+navigates away. A load started during a reply therefore cut that reply off. The reply failed
+with a network error, and its usage unit was already committed because the engine had accepted
+it. Nothing was answered by the wrong model, but the reply was lost without an explanation.
+
+### 8.2 The rule now
+
+| Action | Refused with `busy` when | Decision function |
+| --- | --- | --- |
+| `load_model` | a reply holds the active slot | `registry::check_load_allowed` |
+| `start_generation` | a load is in flight | `registry::check_generation_allowed` |
+
+Ordering, so the two sides cannot interleave:
+
+1. `load_model` claims the loading marker (`begin_loading`) first, then reads the active slot.
+   An unreadable slot is treated as busy.
+2. `start_generation` reads the loading marker while holding the active-slot lock, before it
+   reserves the slot and any usage unit.
+
+So either the reply reserved the slot before the load checked it (the load is refused), or the load
+marked itself before the reply checked (the reply is refused). Nothing is cancelled on the user's
+behalf, and no usage is charged for a refused request.
+
+### 8.3 Verification of §8
+
+| Check | Result |
+| --- | --- |
+| Standalone harness, `registry.rs` + `error.rs` (real source, serde derives stripped) | **41 / 41** (new: `a_model_cannot_be_loaded_while_a_reply_streams`, `a_message_cannot_be_sent_while_a_model_loads`) |
+| `rustfmt --check` on `src-tauri/src` | clean |
+| `commands.rs` `load_model` / `start_generation` | source review only; **not compiled** |
+
+Not proven: that a live reply is actually refused by a running engine, and that the UI shows the
+`busy` message readably. Both need the engine run described in
+[PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md) §11.

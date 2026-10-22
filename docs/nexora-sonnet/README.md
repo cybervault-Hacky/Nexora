@@ -8,9 +8,9 @@ and must never be described as having that model's capabilities.
 The artefact metadata (repository, immutable revision, file name, 8 988 110 272 bytes,
 SHA-256, Apache-2.0) is now verified from the publisher's own API and is recorded in the
 registry, so the profile is approved and downloadable. **No local inference has been
-demonstrated**: this machine has 3 GB of RAM against ~10 GiB needed, and 8.99 GB of
+demonstrated**: this machine has 3.85 GiB of RAM in total (about 3.5 GiB available) against ~10 GiB needed, and 8.99 GB of
 weights cannot be fetched here. Details: [ARTIFACT_EVIDENCE.md](./ARTIFACT_EVIDENCE.md)
-and [PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md).
+and [PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md) (§12 is the current A–K matrix; §§1–11 are historical).
 
 ## Documents
 
@@ -22,7 +22,7 @@ and [PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md).
 | [PHASE_5_7_CHAT_ROUTING.md](./PHASE_5_7_CHAT_ROUTING.md) | Selector, routing guards, coding/export/usage integration, and the Phase 6 request/switch rules |
 | [READINESS.md](./READINESS.md) | Hardware detection, resource estimates, the 14 readiness states, and their limits |
 | [PHASE_5_RUNTIME.md](./PHASE_5_RUNTIME.md) | Pinned runtime compatibility, the load decision, streaming, and what is still unproven |
-| [PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md) | Every check run, its result, and what remains blocked |
+| [PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md) | Every check run, its result, and what remains blocked; §11 is the Phase 7 verification-readiness checklist |
 
 **Runtime.** The engine Nexora drives is pinned to llama.cpp `b11714`
 (commit `c0fd786…`, an upstream **pre-release**). Every launch flag, the
@@ -38,7 +38,8 @@ left open across a switch cannot be answered by the other model. Switching is
 refused while the engine is answering or loading, and the refusal is shown in
 the selector rather than silently discarded. The request budget is measured
 against the context the running engine was actually started with. No fallback
-of any kind exists on this path. Details:
+of any kind exists on this path. A load also waits for a reply to finish, and a reply
+waits for a load (Phase 7). Details:
 [PHASE_5_7_CHAT_ROUTING.md](./PHASE_5_7_CHAT_ROUTING.md) §7.
 
 **Readiness.** Every row of the model selector now carries the core's own verdict —

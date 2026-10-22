@@ -181,6 +181,16 @@ name-level mismatch cannot creep back in through a second code path.
   records a failure attributed to the profile, and releases the slot.
 * `unload_model` refuses while a load is in flight, so a deliberate unload
   cannot be mistaken for a load failure.
+* **Phase 7:** `load_model` refuses with `busy` while a reply is streaming,
+  instead of starting a new engine that would stop the running one mid-answer.
+  `start_generation` refuses with `busy` while a load is in flight. The loading
+  marker is set before the reply check, and the reply check runs under the same
+  lock that claims the reply slot, so the two cannot interleave. Nothing is
+  cancelled on the user's behalf.
+* **Phase 7:** a failure to *start* the process (for example a runtime path that
+  is not executable) is now recorded against the profile being loaded. Before
+  this, the setup form showed the error but the engine panel could show an older
+  failure, or none.
 * `status()` and every readiness read call `reconcile_engine()`, which reaps a
   child that died since the last snapshot, drops the stale "loaded" mark, and
   records the supervisor's reason against the profile that was running. A dead
@@ -197,16 +207,30 @@ requires the `[DONE]` sentinel **or** a non-empty `finish_reason`
 error and the partial text stays marked as failed. Cancellation still returns
 `finish_reason: "stopped"` and is unaffected.
 
-Both halves were checked against the pinned commit, because the OpenAI-compatible
-endpoint does not send `[DONE]`:
+Both signals were checked against the pinned commit by source reading:
 
-* `server-task.cpp` `to_json_oaicompat_chat_stream` always appends a final chunk
-  whose `finish_reason` is `"stop"`, `"length"`, or `"tool_calls"`.
-* `server-context.cpp` emits `data: [DONE]` only for the non-OpenAI response
-  types; for `TASK_RESPONSE_TYPE_OAI_RESP` the terminator is an empty string.
+* `server-task.cpp` `to_json_oaicompat_chat_stream` appends a final chunk whose
+  `finish_reason` is `"stop"`, `"length"`, or `"tool_calls"`.
+* `server-context.cpp`: the source reading suggested the OpenAI-compatible
+  endpoint sends no `[DONE]`.
 
-So a healthy reply completes on `finish_reason`, and a stream that stops before
-it is genuinely truncated.
+**Correction (2026-10-22, Phase 9 run).** That source reading was wrong for this
+build. Running the pinned `llama-server` b11714 (built from the codeload source,
+synthetic test model only) on `/v1/chat/completions` with `stream: true` produced
+`finish_reason` followed by `data: [DONE]`. `stream_completed` accepts either
+signal, so the code and its behaviour are unchanged. Only this paragraph was wrong.
+
+A healthy reply completes on `finish_reason` or `[DONE]`. A stream that stops
+before either is genuinely truncated. The Phase 9 run observed this with the engine
+killed mid-reply: 39 deltas, no `finish_reason`, no `[DONE]`.
+
+**Phase 7 — the wait for response headers.** The request `send()` used to be
+unbounded and was not raced against Stop, so a Stop pressed before the engine
+answered was ignored until then. It is now raced against the cancel signal and
+bounded by the same 600 s first-token limit. A Stop in that window returns the
+"stopped" outcome with nothing charged; a silent engine fails with `timeout`,
+also without a charge, because the engine never accepted the request. This is
+source-level only: it has not been exercised against a running `llama-server`.
 
 The comment above the error-envelope parser claimed the fixtures came from a
 locally built server. They did not — no server has ever run here. It now says
@@ -217,9 +241,13 @@ they are transcribed from the runtime's contract in `server-http.cpp`.
 The runtime truncates a prompt longer than the context window, which silently
 drops the oldest turns. `start_generation` now refuses such a request *before*
 the engine is contacted and before usage is reserved. The estimate is
-deliberately conservative (ASCII at 4 characters/token, every non-ASCII
-character at 2 tokens, plus the system prompt and per-turn framing) and is used
-only to refuse a prompt that cannot fit; it is never reported as a token count.
+heuristic (ASCII at 4 characters/token, every non-ASCII character at 2 tokens, plus
+the system prompt and per-turn framing) and is used only to refuse a prompt that clearly
+cannot fit; it is never reported as a token count. The 4 characters per token rate is
+typical of English prose. It is **not** a bound for dense source code, which can take
+more tokens per character, so a code-heavy prompt can pass this guard and still be
+truncated by the runtime. (Phase 7 corrected an earlier description that called this
+rate conservative; the behaviour is unchanged.)
 Refusal moves no daily unit, and the single active slot still guarantees one
 charge per accepted generation.
 
@@ -265,6 +293,13 @@ New tests in this phase:
   other; a failure attributed to another profile does not taint this row.
 * `client`: `[DONE]`, `finish_reason`, and a stream that simply stops.
 
+**Phase 7 re-run (2026-10-22).** Frontend typecheck, tests (849 / 849, 84 files) and the
+build passed on the unchanged frontend. The standalone registry/error harness now runs
+41 / 41 (the two new guard tests added). `rustfmt --check` passes on all 44 files under
+`src-tauri/src`. The `commands.rs` and `client.rs` edits made in Phase 7 are **not compiled**
+by any check in this environment; they are source-reviewed only. See
+[PHASE_9_VERIFICATION.md](./PHASE_9_VERIFICATION.md) §11.
+
 ### Not run, and why
 
 * **`cargo check` / `cargo clippy` / `cargo test`** — there is no `cargo` binary
@@ -286,9 +321,9 @@ New tests in this phase:
 3. **Chat-template behaviour is unproven here.** The file carries
    `tokenizer.chat_template` and `--jinja` enables it; whether the template
    produces the intended turns can only be seen in a real run.
-4. **The prompt budget is a heuristic.** It prevents requests that cannot fit
-   under conservative assumptions; it is not a tokenizer count, and a request it
-   allows can still be truncated by the runtime for a long reply.
+4. **The prompt budget is a heuristic.** It refuses requests that clearly cannot fit,
+   but it is not a tokenizer count and does not bound dense code. A request it allows
+   can still be truncated by the runtime, for a long prompt or a long reply.
 5. **A custom GGUF loaded under Nexora Mini has no profile attribution.** The
    selector cannot claim "Nexora Mini is loaded" for a file that is not Mini's
    published artefact, so that row shows its own state and the engine panel

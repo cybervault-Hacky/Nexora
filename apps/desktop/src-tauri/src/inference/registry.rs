@@ -387,6 +387,38 @@ pub fn check_switch(
     Ok(())
 }
 
+/// Whether a model may be loaded right now.
+///
+/// Loading starts a new engine process, and that replaces the running one. A
+/// reply that is still streaming would be cut off mid-answer, so the load waits
+/// until the reply finishes or the user stops it. Nothing is cancelled for them.
+pub fn check_load_allowed(generation_active: bool) -> InferenceResult<()> {
+    if generation_active {
+        return Err(InferenceError::new(
+            "busy",
+            "A reply is still streaming. Stop it before loading a model.",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Whether a new message may be sent right now.
+///
+/// While a load is in flight the engine that will answer is not yet known, and
+/// the one that was running is being replaced. A message sent in that window
+/// could be answered by whichever process happens to be healthy, so it waits.
+pub fn check_generation_allowed(load_in_flight: bool) -> InferenceResult<()> {
+    if load_in_flight {
+        return Err(InferenceError::new(
+            "busy",
+            "A model is still loading. Wait for it to finish, then send your message.",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Confirms that the model the engine is running is the one the user selected.
 ///
 /// This is the guard against silently answering a Sonnet request with Mini.
@@ -978,6 +1010,24 @@ mod tests {
 
         assert_eq!(error.code, "busy");
         assert!(error.message.contains("loading"));
+    }
+
+    #[test]
+    fn a_model_cannot_be_loaded_while_a_reply_streams() {
+        let error = check_load_allowed(true).unwrap_err();
+
+        assert_eq!(error.code, "busy");
+        assert!(error.message.contains("Stop it"));
+        assert!(check_load_allowed(false).is_ok());
+    }
+
+    #[test]
+    fn a_message_cannot_be_sent_while_a_model_loads() {
+        let error = check_generation_allowed(true).unwrap_err();
+
+        assert_eq!(error.code, "busy");
+        assert!(error.message.contains("still loading"));
+        assert!(check_generation_allowed(false).is_ok());
     }
 
     #[test]

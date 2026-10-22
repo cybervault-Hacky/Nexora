@@ -110,12 +110,28 @@ pub async fn stream_chat(
         "temperature": temperature,
     });
 
-    let response = client
+    let request = client
         .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
         .bearer_auth(key)
         .json(&body)
-        .send()
-        .await?;
+        .send();
+
+    // Waiting for the engine to accept the request must be as stoppable as the
+    // stream itself, and must not be unbounded. Stop pressed before the headers
+    // arrive now ends the request at once, and a silent engine times out. Nothing
+    // was accepted in either case, so no usage unit is charged.
+    let response = tokio::select! {
+        biased;
+        _ = cancel.notified() => return Ok(cancelled_outcome(request_id)),
+        result = tokio::time::timeout(FIRST_TOKEN_TIMEOUT, request) => match result {
+            Ok(response) => response?,
+            Err(_elapsed) => {
+                return Err(InferenceError::timeout(
+                    "The local engine did not accept the request in time. Nothing was sent; send the message again.",
+                ))
+            }
+        },
+    };
 
     let status = response.status();
 

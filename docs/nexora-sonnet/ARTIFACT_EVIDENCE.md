@@ -86,9 +86,9 @@ KV cache per token = 2 (K and V) × 48 layers × 8 KV heads × 128 head_dim × 2
 | Weights on disk | 8.99 GB | **measured** (host metadata) |
 | KV cache at 8,192 | 1.50 GiB | **computed** from `config.json` |
 | Nexora's own RAM estimate at 8,192 | ≈ 10.2 GiB | **estimate** (`models.rs`: size + context allowance + 1 GiB) |
-| This verification machine | 3 GB RAM, 19 GB free disk | **measured** (`free`, `df`) |
+| This verification machine | 3.85 GiB RAM total (about 3.5 GiB available at check time), 19 GB free disk | **measured** (`free`, `df`) |
 
-Conclusion: the disk is sufficient, the memory is not — 3 GB against ~10 GiB.
+Conclusion: the disk is sufficient, the memory is not — 3.5 GiB available (3.85 GiB total) against ~10 GiB.
 
 ## 5. Compatibility with the existing pipeline
 

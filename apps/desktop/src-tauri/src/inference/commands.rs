@@ -570,6 +570,21 @@ pub async fn load_model(
         return Err(InferenceError::busy());
     }
 
+    // Starting the new engine stops the running one. Refuse while a reply is
+    // streaming rather than cutting it off. The loading marker is already set,
+    // so `start_generation` cannot begin a reply between this check and the
+    // spawn. An unreadable slot is treated as busy: fail closed.
+    let generating = state
+        .active
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(true);
+
+    if let Err(error) = registry::check_load_allowed(generating) {
+        state.finish_loading();
+        return Err(error);
+    }
+
     // The previous attribution stops being true the moment this load starts.
     // The recorded failure is replaced only if this attempt actually fails.
     state.clear_loaded();
@@ -590,6 +605,10 @@ pub async fn load_model(
     let port = match started {
         Ok(port) => port,
         Err(error) => {
+            // A spawn that never produced a process still needs a recorded
+            // reason, attributed to this profile. Otherwise the engine panel
+            // reports whatever older failure happened to be stored.
+            state.record_failure(plan.profile_id, error.message.clone());
             state.finish_loading();
             return Err(error);
         }
@@ -793,6 +812,11 @@ pub async fn start_generation(
         if slot.is_some() {
             return Err(InferenceError::busy());
         }
+
+        // Checked under the same lock as the slot: `load_model` claims the
+        // loading marker before it checks for an active reply, so one of the two
+        // sides always sees the other.
+        registry::check_generation_allowed(state.load_in_flight())?;
 
         let charge = usage.reserve(SystemTime::now())?;
 

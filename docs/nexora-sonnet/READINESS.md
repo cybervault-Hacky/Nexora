@@ -252,7 +252,10 @@ This is a **readiness** result computed from real hardware. It is not an inferen
 
 ## 8. Tests
 
-### 8.1 Rust (39 readiness + 5 hardware tests)
+### 8.1 Rust (41 readiness + 5 hardware tests)
+
+Counts are the `#[test]` functions in `readiness.rs` and `hardware.rs` as found in the source on
+2026-10-22. Earlier phase records quoted 39 for readiness; that figure is superseded.
 
 - Conversions: bytes→GiB, GiB→bytes, saturation, negative/NaN input, display rounding,
   MiB formatting below 1 GiB.
