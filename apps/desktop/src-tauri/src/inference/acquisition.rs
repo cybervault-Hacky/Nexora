@@ -678,12 +678,12 @@ mod tests {
         let right_name = dir.join(expected.file_name);
 
         // Absent file.
-        assert!(installed_path(profile, &[right_name.clone()]).is_none());
+        assert!(installed_path(profile, std::slice::from_ref(&right_name)).is_none());
 
         // Present but the wrong length: a truncated download must not look
         // installed.
         write_file(&right_name, b"short");
-        assert!(installed_path(profile, &[right_name.clone()]).is_none());
+        assert!(installed_path(profile, std::slice::from_ref(&right_name)).is_none());
 
         // A different file name is never accepted, however large.
         let renamed = dir.join("some-other-model.gguf");
@@ -726,11 +726,11 @@ mod tests {
         let path = dir.join(source.file_name);
 
         // Absent.
-        assert!(installed_path(profile, &[path.clone()]).is_none());
+        assert!(installed_path(profile, std::slice::from_ref(&path)).is_none());
 
         // Present with the wrong length: a truncated 8.99 GB file must not
         // read as installed.
         write_file(&path, b"not the real model");
-        assert!(installed_path(profile, &[path.clone()]).is_none());
+        assert!(installed_path(profile, std::slice::from_ref(&path)).is_none());
     }
 }
