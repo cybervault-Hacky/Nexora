@@ -34,7 +34,7 @@ function gib(bytes: number): string {
   return (bytes / GIB).toFixed(2);
 }
 
-function progressLabel(state: {
+export function progressLabel(state: {
   received: number;
   total: number;
   verifying: boolean;
@@ -44,24 +44,36 @@ function progressLabel(state: {
   }
 
   if (state.total <= 0) {
+    if (state.received > 0) {
+      return `Downloading ${gib(state.received)} GiB received…`;
+    }
     return "Starting the download…";
   }
 
-  const percent = Math.min(100, Math.round((state.received / state.total) * 100));
+  // Never claim 100% while bytes are still unverified / unpromoted.
+  const percent = Math.min(99, Math.max(0, Math.floor((state.received / state.total) * 100)));
 
   return `Downloading ${gib(state.received)} of ${gib(state.total)} GiB (${percent}%).`;
 }
 
-function integrityLabel(report: IntegrityReport): string {
-  if (report.digestMatches) {
-    return "This file matches the approved Nexora Mini SHA-256.";
+function integrityLabel(report: IntegrityReport, profile: ModelProfile | null): string {
+  const name = profile?.displayName ?? "Nexora Mini";
+
+  if (report.digestMatches && report.sizeMatches) {
+    return `This file matches the approved ${name} SHA-256.`;
   }
 
   if (report.sizeMatches) {
-    return "The size matches, but the SHA-256 differs. This is not the approved Nexora Mini file.";
+    return `The size matches, but the SHA-256 differs. This is not the approved ${name} file.`;
   }
 
-  return `This file is ${gib(report.sizeBytes)} GiB; the approved Nexora Mini file is ${gib(
+  if (profile && profile.id !== "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m") {
+    return `This file is ${gib(report.sizeBytes)} GiB; the approved ${name} file is ${gib(
+      report.expectedSizeBytes,
+    )} GiB. ${name} requires its approved verified GGUF artifact.`;
+  }
+
+  return `This file is ${gib(report.sizeBytes)} GiB; the approved ${name} file is ${gib(
     report.expectedSizeBytes,
   )} GiB. It may still be a valid GGUF, and Nexora will treat it as a custom model.`;
 }
@@ -479,13 +491,22 @@ export function ModelSetup({
         </p>
 
         {downloadError ? (
-          <p className="setup__error" role="alert">
+          <div className="setup__error" role="alert">
             <Icon name="alert" size={14} />
-            {downloadError}
-          </p>
+            <span>{downloadError}</span>
+            {desktop && !download && approved !== null && (readiness === null || readiness.canDownload) ? (
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => void downloadModel()}
+              >
+                Retry download
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
-        {integrity ? <p className="setup__note">{integrityLabel(integrity)}</p> : null}
+        {integrity ? <p className="setup__note">{integrityLabel(integrity, profile)}</p> : null}
       </section>
 
       <ModelReadinessCard
@@ -622,7 +643,11 @@ export function ModelSetup({
           type="button"
           className="button button--primary"
           onClick={() => void startEngine()}
-          disabled={busy !== null || modelPath.trim() === "" || runtimePath.trim() === ""}
+          disabled={
+            busy !== null ||
+            modelPath.trim() === "" ||
+            (runtimePath.trim() === "" && !status?.engine.runtime)
+          }
         >
           {busy === "load" ? "Loading model…" : configured ? "Save and reload" : "Save and load model"}
         </button>

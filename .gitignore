@@ -3,12 +3,26 @@ node_modules/
 dist/
 coverage/
 
-# Rust / Tauri
+# Rust / Tauri build artifacts
 target/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+services/nexora-auth/target/
 
-# Local environment
+# Local AI model weights, temporary downloads, and verification scratch dirs
+*.gguf
+*.part
+.nexora-verify/
+
+# Code signing certificates, session keys, and installers
+*.pfx
+*.p12
+*.cer
+*.key
+*.exe
+*.msi
+
+# Local environment secrets (never commit real secrets; keep .env.example tracked)
 .env
 .env.*
 !.env.example

@@ -53,15 +53,21 @@ async fn recovery_request_validates_email_without_echoing_it() {
     let (status, _) = post_json("/v1/auth/recovery-request", r#"{"email":123}"#).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, _) =
-        post_json("/v1/auth/recovery-request", r#"{"email":"a@b.test","extra":true}"#).await;
+    let (status, _) = post_json(
+        "/v1/auth/recovery-request",
+        r#"{"email":"a@b.test","extra":true}"#,
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn recovery_request_without_database_is_honest_503() {
-    let (status, body) =
-        post_json("/v1/auth/recovery-request", r#"{"email":"ada@example.test"}"#).await;
+    let (status, body) = post_json(
+        "/v1/auth/recovery-request",
+        r#"{"email":"ada@example.test"}"#,
+    )
+    .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(body.contains("dependency_unavailable"), "body: {body}");
     // No delivery claim of any kind in the failure.
@@ -83,10 +89,7 @@ async fn reset_password_validates_before_touching_any_token_store() {
     // Short password → 400 with the existing policy text.
     let (status, body) = post_json(
         "/v1/auth/reset-password",
-        &format!(
-            r#"{{"token":"{}","password":"short"}}"#,
-            "a".repeat(64)
-        ),
+        &format!(r#"{{"token":"{}","password":"short"}}"#, "a".repeat(64)),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -165,7 +168,10 @@ async fn password_change_without_database_is_honest_503() {
 #[tokio::test]
 async fn recovery_error_envelopes_never_leak_secrets() {
     for (uri, json) in [
-        ("/v1/auth/recovery-request", r#"{"email":"ada@example.test"}"#),
+        (
+            "/v1/auth/recovery-request",
+            r#"{"email":"ada@example.test"}"#,
+        ),
         (
             "/v1/auth/reset-password",
             r#"{"token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","password":"hunter2hunter2"}"#,

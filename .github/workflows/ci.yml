@@ -1,14 +1,10 @@
 # Continuous integration for Nexora.
 #
-# Scope: verification only. Nothing here publishes, signs, packages, or uploads
-# an installer — the bundling step is deliberately absent.
+# Scope: verification across Frontend, Desktop Rust Core, Auth/Billing/Quota
+# PostgreSQL Backend, and Native Windows NSIS Packaging. Nothing here publishes,
+# tags, signs with production keys, or creates a release automatically.
 #
-# Every action is pinned to a commit SHA. Tags move; a private repository that
-# builds a desktop binary should not execute a mutable ref.
-#
-# NOTE: `tauri::generate_context!` embeds `frontendDist` at compile time, so the
-# UI must be built before any cargo command. That is why the Rust jobs run the
-# frontend build first instead of assuming `ui/dist` exists.
+# Every action is pinned to a commit SHA.
 
 name: CI
 
@@ -22,7 +18,6 @@ on:
       - main
   workflow_dispatch:
 
-# Read-only by default; no job needs more.
 permissions:
   contents: read
 
@@ -42,8 +37,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # The version comes from `packageManager` in package.json, which
-      # `ui/src/lib/buildConfig.test.ts` requires to be an exact pin.
       - name: Install pnpm
         uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
 
@@ -65,8 +58,50 @@ jobs:
       - name: Production build
         run: pnpm build
 
+  auth-backend:
+    name: Auth, Plans, Billing & Quota Service (PostgreSQL 16)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_test_only
+          POSTGRES_DB: nexora_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+
+      - name: Check formatting
+        working-directory: services/nexora-auth
+        run: cargo fmt --all -- --check
+
+      - name: Lint with warnings denied
+        working-directory: services/nexora-auth
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run unit, HTTP, property & PostgreSQL integration suites
+        working-directory: services/nexora-auth
+        env:
+          NEXORA_AUTH_TEST_DATABASE_URL: postgres://postgres:postgres_ci_test_only@127.0.0.1:5432/nexora_test
+        run: cargo test -- --include-ignored --test-threads=1
+
   rust:
-    name: Rust — fmt, check, clippy, tests (Linux)
+    name: Rust Desktop Core — fmt, check, clippy, tests (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -95,13 +130,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Required before cargo: the context macro embeds ui/dist.
       - name: Build the frontend the crate embeds
         run: |
           pnpm install --frozen-lockfile
           pnpm build
 
-      # Reads rust-toolchain.toml, so the pinned channel is the single source.
       - name: Install the pinned Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
@@ -113,8 +146,6 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo check --all-targets
 
-      # Tests run before the lint gate: a lint-only failure must never hide a
-      # failing test, and the two checks answer different questions.
       - name: Run Rust tests
         working-directory: apps/desktop/src-tauri
         shell: bash
@@ -143,7 +174,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   windows:
-    name: Windows — compile and Rust tests
+    name: Windows — compile, Rust tests & NSIS installer verification
     runs-on: windows-2022
     timeout-minutes: 45
 
@@ -170,19 +201,9 @@ jobs:
       - name: Install the pinned Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
-      # This is the check that only a Windows runner can perform: `cfg(windows)`
-      # code (memory detection, CREATE_NO_WINDOW, executable sniffing) compiles.
       - name: Type-check every target on Windows
         working-directory: apps/desktop/src-tauri
         run: cargo check --all-targets
-
-      # `cargo check` type-checks but does not link. Building the binary on
-      # Windows compiles the linker step, the `windows_subsystem` attribute and
-      # the embedded icon, which is the part a check cannot reach. No bundling:
-      # `tauri build` is deliberately absent, so no installer is produced.
-      - name: Link the native executable
-        working-directory: apps/desktop/src-tauri
-        run: cargo build
 
       - name: Run Rust tests on Windows
         working-directory: apps/desktop/src-tauri
@@ -192,9 +213,6 @@ jobs:
           cargo test 2>&1 | tee windows-test.log
           exit "${PIPESTATUS[0]}"
 
-      # A failing test name as an annotation survives environments that cannot
-      # read the raw job log, so the failure stays diagnosable from the checks
-      # API alone. This step never changes the job's own result.
       - name: Report failing Windows tests
         if: failure()
         working-directory: apps/desktop/src-tauri
@@ -210,4 +228,10 @@ jobs:
             echo "::error title=Rust test failed on Windows::${name}"
           done < failing-tests.txt
 
-      # Deliberately no `tauri build`: producing an installer is out of scope.
+      - name: Build Windows x64 per-user NSIS installer & SHA-256 manifest
+        shell: pwsh
+        run: ./scripts/windows/build-installer.ps1
+
+      - name: Verify silent NSIS install, WebView2, launch, restart, upgrade & uninstall
+        shell: pwsh
+        run: ./scripts/windows/smoke-verify.ps1

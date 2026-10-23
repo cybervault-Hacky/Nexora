@@ -20,7 +20,7 @@ vi.mock("../lib/inference", async (importOriginal) => {
   };
 });
 
-import { ModelSetup } from "./ModelSetup";
+import { ModelSetup, progressLabel } from "./ModelSetup";
 import {
   cancelModelDownload,
   fetchModelProfile,
@@ -634,5 +634,63 @@ describe("ModelSetup", () => {
 
     expect(screen.queryByText(/ready/i)).toBeNull();
     expect(screen.queryByText(/connected/i)).toBeNull();
+  });
+
+  it("never claims 100% before verification completes and never fabricates percentages on unknown length", () => {
+    expect(
+      progressLabel({
+        received: 4_683_073_536,
+        total: 4_683_073_536,
+        verifying: false,
+      }),
+    ).toContain("(99%)");
+    expect(
+      progressLabel({
+        received: 4_683_073_536,
+        total: 4_683_073_536,
+        verifying: false,
+      }),
+    ).not.toContain("100%");
+
+    const unknownLength = progressLabel({
+      received: 512 * 1024 * 1024,
+      total: 0,
+      verifying: false,
+    });
+    expect(unknownLength).toBe("Downloading 0.50 GiB received…");
+    expect(unknownLength).not.toContain("%");
+
+    expect(
+      progressLabel({
+        received: 4_683_073_536,
+        total: 4_683_073_536,
+        verifying: true,
+      }),
+    ).toBe("Verifying the SHA-256 before publishing the file…");
+  });
+
+  it("surfaces network/storage download errors clearly and allows immediate retry", async () => {
+    downloadMock
+      .mockRejectedValueOnce({
+        code: "network",
+        message: "The model host answered 503 Service Unavailable. No file was written.",
+      })
+      .mockResolvedValueOnce({
+        path: "C:\\Models\\qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        fileName: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        sizeBytes: 4_683_073_536,
+        sha256: APPROVED_SHA,
+        cancelled: false,
+      });
+
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: "Download Nexora Mini" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("503 Service Unavailable");
+
+    await user.click(screen.getByRole("button", { name: "Retry download" }));
+    expect(await screen.findByText(/Downloaded and verified/)).toBeTruthy();
+    expect(downloadMock).toHaveBeenCalledTimes(2);
   });
 });

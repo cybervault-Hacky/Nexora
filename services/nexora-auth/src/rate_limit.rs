@@ -72,17 +72,29 @@ const RATE_SYNTAX_HINT: &str =
 
 /// Plan §7 defaults (conservative; documented in docs/phase-23d/README.md).
 pub fn default_login_rule() -> RateLimitRule {
-    RateLimitRule { max_failures: 10, window_secs: 900 }
+    RateLimitRule {
+        max_failures: 10,
+        window_secs: 900,
+    }
 }
 pub fn default_register_rule() -> RateLimitRule {
-    RateLimitRule { max_failures: 5, window_secs: 3_600 }
+    RateLimitRule {
+        max_failures: 5,
+        window_secs: 3_600,
+    }
 }
 pub fn default_resend_rule() -> RateLimitRule {
-    RateLimitRule { max_failures: 5, window_secs: 900 }
+    RateLimitRule {
+        max_failures: 5,
+        window_secs: 900,
+    }
 }
 /// Plan §7 `AUTH_RATE_LIMIT_RECOVERY` default (5/15m).
 pub fn default_recovery_rule() -> RateLimitRule {
-    RateLimitRule { max_failures: 5, window_secs: 900 }
+    RateLimitRule {
+        max_failures: 5,
+        window_secs: 900,
+    }
 }
 
 /// Hashed key derived from a raw reset token (`t:` + sha256) — for
@@ -171,14 +183,16 @@ pub async fn check(
     if attempts >= i64::from(rule.max_failures) {
         // Escalation horizon: 10× the window (bounded by the cap) — how many
         // full windows' worth of failures this key has piled up recently.
-        let horizon_secs = (rule.window_secs.saturating_mul(10)).min(MAX_BACKOFF_SECS).max(rule.window_secs);
+        let horizon_secs = (rule.window_secs.saturating_mul(10))
+            .min(MAX_BACKOFF_SECS)
+            .max(rule.window_secs);
         let recent: i64 = sqlx::query_scalar(count_sql)
             .bind(scope)
             .bind(key)
             .bind(horizon_secs as f64)
             .fetch_one(pool)
             .await
-            .map_err(|_| 0)?;
+            .map_err(|_| 0_u64)?;
         let windows_failed = (recent / i64::from(rule.max_failures).max(1)).max(1) as u64;
         return Err(escalated_retry_after(rule.window_secs, windows_failed));
     }
@@ -202,18 +216,33 @@ mod tests {
     #[test]
     fn parses_plan_window_syntax() {
         let rule = parse_rate_limit("5/15m").unwrap();
-        assert_eq!(rule, RateLimitRule { max_failures: 5, window_secs: 900 });
+        assert_eq!(
+            rule,
+            RateLimitRule {
+                max_failures: 5,
+                window_secs: 900
+            }
+        );
         assert_eq!(
             parse_rate_limit("3/60m").unwrap(),
-            RateLimitRule { max_failures: 3, window_secs: 3_600 }
+            RateLimitRule {
+                max_failures: 3,
+                window_secs: 3_600
+            }
         );
         assert_eq!(
             parse_rate_limit(" 7 / 2h ").unwrap(),
-            RateLimitRule { max_failures: 7, window_secs: 7_200 }
+            RateLimitRule {
+                max_failures: 7,
+                window_secs: 7_200
+            }
         );
         assert_eq!(
             parse_rate_limit("2/30s").unwrap(),
-            RateLimitRule { max_failures: 2, window_secs: 30 }
+            RateLimitRule {
+                max_failures: 2,
+                window_secs: 30
+            }
         );
     }
 

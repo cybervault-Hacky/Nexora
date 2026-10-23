@@ -25,8 +25,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Mutex;
 
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
 const GOOD_PASSWORD: &str = "correct horse battery";
@@ -54,10 +52,7 @@ impl CaptureProvider {
         let sent = self.sent.lock().unwrap();
         let body = &sent.last().expect("one message sent").body;
         let (_, tail) = body.split_once("token=").expect("token link in body");
-        let token: String = tail
-            .chars()
-            .take_while(|c| c.is_ascii_hexdigit())
-            .collect();
+        let token: String = tail.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
         assert_eq!(token.len(), recovery::RESET_TOKEN_HEX_CHARS);
         token
     }
@@ -65,6 +60,12 @@ impl CaptureProvider {
     fn verification_token_from_last(&self) -> String {
         let sent = self.sent.lock().unwrap();
         let body = &sent.last().expect("one message sent").body;
+        if let Some((_, tail)) = body.split_once("token=") {
+            let token: String = tail.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if token.len() == registration::VERIFICATION_TOKEN_HEX_CHARS {
+                return token;
+            }
+        }
         body.lines()
             .map(str::trim)
             .find(|line| line.len() == registration::VERIFICATION_TOKEN_HEX_CHARS)
@@ -82,8 +83,10 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
-    MIGRATIONS.run(&pool).await.expect("run migrations");
-    sqlx::query("TRUNCATE users CASCADE")
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("run migrations");
+    sqlx::query("TRUNCATE users, login_attempts, google_oauth_states CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -151,12 +154,10 @@ fn reset_request(token: &str, password: &str) -> ResetPasswordRequest {
 }
 
 async fn live_sessions(pool: &PgPool) -> i64 {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM sessions WHERE revoked_at IS NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions WHERE revoked_at IS NULL")
+        .fetch_one(pool)
+        .await
+        .unwrap();
     count
 }
 
@@ -191,11 +192,14 @@ async fn recovery_request_is_enumeration_safe_and_eligibility_gated() {
         deliveries.push(delivery);
     }
     // Identical delivery capability for every account state (enumeration).
-    assert_eq!(deliverions, vec![
-        EmailDelivery::Configured,
-        EmailDelivery::Configured,
-        EmailDelivery::Configured
-    ]);
+    assert_eq!(
+        deliveries,
+        vec![
+            EmailDelivery::Configured,
+            EmailDelivery::Configured,
+            EmailDelivery::Configured
+        ]
+    );
 
     // Side effects exist ONLY for the eligible account.
     let (for_verified,): (i64,) = sqlx::query_as(
@@ -229,11 +233,10 @@ async fn reset_token_is_hashed_at_rest_and_single_use() {
     let raw = provider.reset_token_from_last();
 
     // Hash at rest: raw never appears; digest is sha256(raw).
-    let digests: Vec<Vec<u8>> =
-        sqlx::query_as("SELECT token_hash FROM password_reset_tokens")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let digests: Vec<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM password_reset_tokens")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
     assert_eq!(digests.len(), 1);
     assert_eq!(digests[0], recovery::hash_reset_token(&raw));
     assert!(digests.iter().all(|row| row != raw.as_bytes()));
@@ -267,7 +270,9 @@ async fn superseded_expired_and_malformed_tokens_fail_generically() {
     assert_eq!(error.code(), "invalid_or_expired_token", "superseded token");
 
     // Expiry.
-    sqlx::query("UPDATE password_reset_tokens SET expires_at = now() - interval '1 second'")
+    sqlx::query(
+        "UPDATE password_reset_tokens SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 second'",
+    )
         .execute(&pool)
         .await
         .unwrap();
@@ -277,12 +282,10 @@ async fn superseded_expired_and_malformed_tokens_fail_generically() {
     assert_eq!(error.code(), "invalid_or_expired_token", "expired token");
 
     // Unknown-but-well-formed token: same generic error.
-    let error = recovery::reset_password(
-        Some(&pool),
-        &reset_request(&"c".repeat(64), NEW_PASSWORD),
-    )
-    .await
-    .unwrap_err();
+    let error =
+        recovery::reset_password(Some(&pool), &reset_request(&"c".repeat(64), NEW_PASSWORD))
+            .await
+            .unwrap_err();
     assert_eq!(error.code(), "invalid_or_expired_token", "unknown token");
 }
 
@@ -332,16 +335,17 @@ async fn reset_changes_password_revokes_all_sessions_and_invalidates_tokens() {
     )
     .await
     .unwrap();
-    registration::resend_verification(
-        Some(&pool),
-        &provider,
-        EmailDelivery::Configured,
-        3_600,
-        &email,
+    let verification_token = registration::generate_verification_token();
+    let verification_hash = session::hash_session_token(&verification_token);
+    sqlx::query(
+        "INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+         SELECT id, $1, now() + interval '1 hour' FROM users WHERE email = $2",
     )
+    .bind(&verification_hash)
+    .bind(&email)
+    .execute(&pool)
     .await
     .unwrap();
-    let verification_token = provider.verification_token_from_last();
     request_reset(&pool, &provider, &email).await;
     let raw = provider.reset_token_from_last();
     assert!(live_sessions(&pool).await >= 1);
@@ -352,9 +356,11 @@ async fn reset_changes_password_revokes_all_sessions_and_invalidates_tokens() {
 
     // Every session family is dead.
     assert_eq!(live_sessions(&pool).await, 0);
-    assert!(session::authenticate(&pool, &outcome.session.raw_token, 604_800)
-        .await
-        .is_err());
+    assert!(
+        session::authenticate(&pool, &outcome.session.raw_token, 604_800)
+            .await
+            .is_err()
+    );
     // Outstanding reset + verification tokens are invalidated.
     let (dead_tokens,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM password_reset_tokens WHERE revoked_at IS NULL AND used_at IS NULL",
@@ -527,12 +533,16 @@ async fn password_change_keeps_current_family_and_revokes_others() {
     )
     .await
     .unwrap();
-    assert!(session::authenticate(&pool, &session_a.session.raw_token, 604_800)
-        .await
-        .is_ok());
-    assert!(session::authenticate(&pool, &session_b.session.raw_token, 604_800)
-        .await
-        .is_err());
+    assert!(
+        session::authenticate(&pool, &session_a.session.raw_token, 604_800)
+            .await
+            .is_ok()
+    );
+    assert!(
+        session::authenticate(&pool, &session_b.session.raw_token, 604_800)
+            .await
+            .is_err()
+    );
 
     // An outstanding reset token dies with the change (plan §4).
     request_reset(&pool, &provider, &email).await;
@@ -559,7 +569,10 @@ async fn recovery_rate_window_blocks_excess_attempts() {
     use nexora_auth::rate_limit::{self, CountMode, RateLimitRule};
 
     let pool = test_pool().await;
-    let rule = RateLimitRule { max_failures: 2, window_secs: 900 };
+    let rule = RateLimitRule {
+        max_failures: 2,
+        window_secs: 900,
+    };
     let key = rate_limit::email_key("brute@example.test");
 
     for _ in 0..2 {

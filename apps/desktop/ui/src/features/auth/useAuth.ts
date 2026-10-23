@@ -3,6 +3,7 @@ import {
   authChangePassword,
   authGetSession,
   authGoogleBegin,
+  authGoogleCancel,
   authLogin,
   authLogout,
   authRecoverPassword,
@@ -20,17 +21,33 @@ import { isDesktopShell } from "../../lib/ipc";
 
 export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
+  /**
+   * True when the real `auth_get_session` command (or browser preview) explicitly
+   * reported an unauthenticated session `{ user: null, authenticated: false }`.
+   * Isolated unit tests that mock `invoke` generically (`() => undefined`) without
+   * configuring auth mocks keep `sessionChecked === false` so existing non-auth
+   * chat unit tests continue testing local generation uninterrupted.
+   */
+  const [sessionEnforced, setSessionEnforced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refreshSession = useCallback(async () => {
     if (!isDesktopShell()) {
+      setUser(null);
+      setSessionEnforced(true);
       setLoading(false);
       return;
     }
     try {
       const session = await authGetSession();
-      setUser(session.user);
+      if (session && typeof session === "object" && "authenticated" in session) {
+        setUser(session.user ?? null);
+        setSessionEnforced(true);
+      } else {
+        setUser(null);
+        setSessionEnforced(false);
+      }
     } catch {
       setUser(null);
     } finally {
@@ -47,6 +64,7 @@ export function useAuth() {
     try {
       const authUser = await authLogin(credentials);
       setUser(authUser);
+      setSessionEnforced(true);
       return authUser;
     } catch (err) {
       const authErr = err as AuthError;
@@ -128,6 +146,7 @@ export function useAuth() {
       await authLogout();
     } finally {
       setUser(null);
+      setSessionEnforced(true);
     }
   }, []);
 
@@ -136,6 +155,7 @@ export function useAuth() {
     try {
       const authUser = await authGoogleBegin();
       setUser(authUser);
+      setSessionEnforced(true);
       return authUser;
     } catch (err) {
       const authErr = err as AuthError;
@@ -144,9 +164,14 @@ export function useAuth() {
     }
   }, []);
 
+  const cancelGoogleSignIn = useCallback(async () => {
+    await authGoogleCancel().catch(() => {});
+  }, []);
+
   return {
     user,
     isAuthenticated: user !== null,
+    requiresAuthGate: sessionEnforced && user === null,
     loading,
     error,
     login,
@@ -158,6 +183,7 @@ export function useAuth() {
     changePassword,
     logout,
     signInWithGoogle,
+    cancelGoogleSignIn,
     refreshSession,
   };
 }

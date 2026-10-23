@@ -73,7 +73,11 @@ pub trait GoogleProvider: Send + Sync {
         code_verifier: &'a str,
         redirect_uri: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>>
+                + Send
+                + 'a,
+        >,
     >;
 }
 
@@ -88,7 +92,11 @@ impl GoogleProvider for UnconfiguredGoogleProvider {
         _code_verifier: &'a str,
         _redirect_uri: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>>
+                + Send
+                + 'a,
+        >,
     > {
         Box::pin(async { Err(GoogleExchangeError::NotConfigured) })
     }
@@ -147,7 +155,10 @@ impl HttpGoogleProvider {
         if !response.status().is_success() {
             return Err(GoogleExchangeError::Refused);
         }
-        let material: JwksMaterial = response.json().await.map_err(|_| GoogleExchangeError::Refused)?;
+        let material: JwksMaterial = response
+            .json()
+            .await
+            .map_err(|_| GoogleExchangeError::Refused)?;
         *self.jwks_cache.lock().unwrap() = Some((std::time::Instant::now(), material.clone()));
         Ok(material)
     }
@@ -175,7 +186,10 @@ impl std::fmt::Debug for IdTokenClaims {
             .field("sub", &self.sub)
             .field("email", &self.email)
             .field("email_verified", &self.email_verified)
-            .field("nonce", &self.nonce.as_ref().map(|_| crate::scrub::REDACTED))
+            .field(
+                "nonce",
+                &self.nonce.as_ref().map(|_| crate::scrub::REDACTED),
+            )
             .field("name", &self.name)
             .finish()
     }
@@ -219,8 +233,8 @@ pub fn verify_id_token_with(
         .iter()
         .find(|key| key.kid == kid)
         .ok_or(GoogleExchangeError::Refused)?;
-    let decoding =
-        DecodingKey::from_rsa_components(&key.n, &key.e).map_err(|_| GoogleExchangeError::Refused)?;
+    let decoding = DecodingKey::from_rsa_components(&key.n, &key.e)
+        .map_err(|_| GoogleExchangeError::Refused)?;
 
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
@@ -246,7 +260,11 @@ impl GoogleProvider for HttpGoogleProvider {
         code_verifier: &'a str,
         redirect_uri: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>>
+                + Send
+                + 'a,
+        >,
     > {
         Box::pin(async move {
             #[derive(Serialize)]
@@ -282,7 +300,10 @@ impl GoogleProvider for HttpGoogleProvider {
             if !response.status().is_success() {
                 return Err(GoogleExchangeError::Refused);
             }
-            let body: TokenResponse = response.json().await.map_err(|_| GoogleExchangeError::Refused)?;
+            let body: TokenResponse = response
+                .json()
+                .await
+                .map_err(|_| GoogleExchangeError::Refused)?;
 
             // Proper signature + claim verification (step 6). On an unknown
             // kid (key rotation) refetch the JWKS once and retry.
@@ -291,9 +312,7 @@ impl GoogleProvider for HttpGoogleProvider {
             };
             match verify(&self.jwks_material(false).await?) {
                 Ok(identity) => Ok(identity),
-                Err(GoogleExchangeError::Refused) => {
-                    verify(&self.jwks_material(true).await?)
-                }
+                Err(GoogleExchangeError::Refused) => verify(&self.jwks_material(true).await?),
                 Err(other) => Err(other),
             }
         })
@@ -387,7 +406,10 @@ impl std::fmt::Debug for GoogleExchangeRequest {
             .field("code_verifier", &crate::scrub::REDACTED)
             .field("state", &crate::scrub::REDACTED)
             .field("redirect_uri", &self.redirect_uri)
-            .field("nonce", &self.nonce.as_ref().map(|_| crate::scrub::REDACTED))
+            .field(
+                "nonce",
+                &self.nonce.as_ref().map(|_| crate::scrub::REDACTED),
+            )
             .finish()
     }
 }
@@ -417,9 +439,61 @@ pub fn is_loopback_redirect_uri(raw: &str) -> bool {
     let Some((port, path)) = rest.split_once('/') else {
         return false;
     };
-    !port.is_empty()
-        && port.chars().all(|c| c.is_ascii_digit())
-        && path == "callback"
+    !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) && path == "callback"
+}
+
+/// Validate request field shapes independently of server configuration so
+/// malformed input always answers 400/401 before dependency checks (503).
+pub fn validate_exchange_shapes_only(request: &GoogleExchangeRequest) -> Result<(), OAuthError> {
+    if request.code.trim().is_empty() || request.code.len() > 4_096 {
+        return Err(OAuthError::Validation(
+            "Authorization code is missing or malformed.".to_string(),
+        ));
+    }
+    if !is_valid_code_verifier(request.code_verifier.trim()) {
+        return Err(OAuthError::Validation(
+            "PKCE code verifier is malformed.".to_string(),
+        ));
+    }
+    if !is_valid_state_shape(request.state.trim()) {
+        return Err(OAuthError::Validation(
+            "OAuth state is malformed.".to_string(),
+        ));
+    }
+    if !is_loopback_redirect_uri(&request.redirect_uri) {
+        return Err(OAuthError::InvalidOrExpiredToken);
+    }
+    if let Some(nonce) = &request.nonce {
+        if nonce.is_empty() || nonce.len() > 256 {
+            return Err(OAuthError::Validation(
+                "OAuth nonce is malformed.".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn matches_expected_redirect_uri(actual: &str, expected: &str) -> bool {
+    if !is_loopback_redirect_uri(actual) {
+        return false;
+    }
+    if actual == expected {
+        return true;
+    }
+    // RFC 8252 §7.3: native desktop apps listen on an ephemeral loopback port
+    // (`http://127.0.0.1:{port}/callback`) when the registered URI omits a fixed port
+    // (`http://127.0.0.1/callback`). If `expected` specifies a port explicitly, require
+    // exact equality above.
+    if let Some(expected_path) = expected.strip_prefix("http://127.0.0.1/") {
+        if let Some(rest) = actual.strip_prefix("http://127.0.0.1:") {
+            if let Some((port_str, actual_path)) = rest.split_once('/') {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    return port > 0 && actual_path == expected_path;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Validate request shapes WITHOUT touching the state store or provider
@@ -443,10 +517,8 @@ pub fn validate_exchange_request(
             "OAuth state is malformed.".to_string(),
         ));
     }
-    // Plan §2.5: the exchange refuses any redirect URI that is not an exact
-    // match for the registered loopback URI (hard generic failure).
-    if request.redirect_uri != expected_redirect_uri || !is_loopback_redirect_uri(&request.redirect_uri)
-    {
+    // Plan §2.5 + RFC 8252 §7.3 loopback matching.
+    if !matches_expected_redirect_uri(&request.redirect_uri, expected_redirect_uri) {
         return Err(OAuthError::InvalidOrExpiredToken);
     }
     if let Some(nonce) = &request.nonce {
@@ -459,17 +531,57 @@ pub fn validate_exchange_request(
     Ok(())
 }
 
+/// Shared single-use state + Google OIDC code exchange & claim verification
+/// used by both sign-in (`google_exchange`) and safe account linking.
+pub async fn verify_code_with_provider(
+    pool: &PgPool,
+    google: &dyn GoogleProvider,
+    request: &GoogleExchangeRequest,
+) -> Result<GoogleIdentity, OAuthError> {
+    consume_state(pool, &request.state).await?;
+
+    let identity = match google
+        .exchange_code(
+            request.code.trim(),
+            request.code_verifier.trim(),
+            &request.redirect_uri,
+        )
+        .await
+    {
+        Ok(identity) => identity,
+        Err(GoogleExchangeError::NotConfigured) => return Err(OAuthError::DependencyUnavailable),
+        Err(GoogleExchangeError::Refused) => return Err(OAuthError::InvalidOrExpiredToken),
+    };
+
+    if let Some(expected_nonce) = request.nonce.as_deref() {
+        match identity.nonce.as_deref() {
+            Some(actual) if actual == expected_nonce => {}
+            _ => return Err(OAuthError::InvalidOrExpiredToken),
+        }
+    }
+    if identity.subject.trim().is_empty() || identity.subject.len() > 255 {
+        return Err(OAuthError::InvalidOrExpiredToken);
+    }
+    if !identity.email_verified {
+        return Err(OAuthError::EmailUnverified);
+    }
+    let _ = validate_email(&identity.email).map_err(OAuthError::Validation)?;
+    Ok(identity)
+}
+
 /// Mirror the state hash server-side as single-use (plan §2.5). First use
 /// records the sha256 digest; any replay within the window is refused. Old
 /// rows are pruned after [`STATE_WINDOW_SECS`].
 async fn consume_state(pool: &PgPool, raw_state: &str) -> Result<(), OAuthError> {
     let digest = session::hash_session_token(raw_state.trim());
     let mut tx = pool.begin().await.map_err(|_| OAuthError::Internal)?;
-    sqlx::query("DELETE FROM google_oauth_states WHERE seen_at < now() - make_interval(secs => $1)")
-        .bind(STATE_WINDOW_SECS as f64)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| OAuthError::Internal)?;
+    sqlx::query(
+        "DELETE FROM google_oauth_states WHERE seen_at < now() - make_interval(secs => $1)",
+    )
+    .bind(STATE_WINDOW_SECS as f64)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| OAuthError::Internal)?;
     let inserted = sqlx::query("INSERT INTO google_oauth_states (state_hash) VALUES ($1)")
         .bind(&digest)
         .execute(&mut *tx)
@@ -485,8 +597,7 @@ async fn consume_state(pool: &PgPool, raw_state: &str) -> Result<(), OAuthError>
             let replay = error
                 .as_database_error()
                 .and_then(|db| db.code())
-                .map(|code| code.as_deref() == Some("23505"))
-                .unwrap_or(false);
+                .is_some_and(|code| code == "23505");
             if replay {
                 Err(OAuthError::InvalidOrExpiredToken)
             } else {
@@ -537,9 +648,7 @@ pub async fn google_exchange(
         .await
     {
         Ok(identity) => identity,
-        Err(GoogleExchangeError::NotConfigured) => {
-            return Err(OAuthError::DependencyUnavailable)
-        }
+        Err(GoogleExchangeError::NotConfigured) => return Err(OAuthError::DependencyUnavailable),
         Err(GoogleExchangeError::Refused) => return Err(OAuthError::InvalidOrExpiredToken),
     };
 
@@ -659,19 +768,24 @@ pub async fn google_exchange(
     .await
     .map_err(|_| OAuthError::Internal)?;
 
-    let session = session::insert_session(&mut *tx, &user_id, session::DEFAULT_SESSION_TTL_SECS, None, None)
-        .await
-        .map_err(|_| OAuthError::Internal)?;
+    let session = session::insert_session(
+        &mut *tx,
+        &user_id,
+        session::DEFAULT_SESSION_TTL_SECS,
+        None,
+        None,
+    )
+    .await
+    .map_err(|_| OAuthError::Internal)?;
     tx.commit().await.map_err(|_| OAuthError::Internal)?;
 
     // Profile DTO only — no tokens, no provider detail.
-    let (name, email_out): (String, String) = sqlx::query_as(
-        "SELECT display_name, email FROM users WHERE id = CAST($1 AS uuid)",
-    )
-    .bind(&user_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|_| OAuthError::Internal)?;
+    let (name, email_out): (String, String) =
+        sqlx::query_as("SELECT display_name, email FROM users WHERE id = CAST($1 AS uuid)")
+            .bind(&user_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| OAuthError::Internal)?;
 
     Ok(LoginOutcome {
         user_id,
@@ -704,7 +818,7 @@ mod tests {
         assert!(is_valid_code_verifier(&"aZ09-._~".repeat(16))); // 128
         assert!(!is_valid_code_verifier(&"a".repeat(42)));
         assert!(!is_valid_code_verifier(&"a".repeat(129)));
-        assert!(!is_valid_code_verifier(&"a".repeat(42) + "!"));
+        assert!(!is_valid_code_verifier(&("a".repeat(42) + "!")));
     }
 
     #[test]
@@ -712,7 +826,7 @@ mod tests {
         assert!(is_valid_state_shape(&"0123456789abcdef".repeat(2))); // 32
         assert!(!is_valid_state_shape("short"));
         assert!(!is_valid_state_shape(&"a".repeat(31)));
-        assert!(!is_valid_state_shape(&"a".repeat(32) + "+"));
+        assert!(!is_valid_state_shape(&("a".repeat(32) + "+")));
     }
 
     #[test]
@@ -731,8 +845,7 @@ mod tests {
         let mut r = request();
         r.redirect_uri = "http://127.0.0.1:49152/callback".to_string();
         assert!(validate_exchange_request(&r, "http://127.0.0.1:49152/callback").is_ok());
-        let error =
-            validate_exchange_request(&r, "http://127.0.0.1:5555/callback").unwrap_err();
+        let error = validate_exchange_request(&r, "http://127.0.0.1:5555/callback").unwrap_err();
         assert_eq!(error.code(), "invalid_or_expired_token");
     }
 
@@ -740,13 +853,28 @@ mod tests {
     fn malformed_requests_validate_before_any_state_or_provider_work() {
         let mut r = request();
         r.code = " ".to_string();
-        assert_eq!(validate_exchange_request(&r, &r.redirect_uri).unwrap_err().code(), "validation_failed");
+        assert_eq!(
+            validate_exchange_request(&r, &r.redirect_uri)
+                .unwrap_err()
+                .code(),
+            "validation_failed"
+        );
         let mut r = request();
         r.code_verifier = "x".repeat(42);
-        assert_eq!(validate_exchange_request(&r, &r.redirect_uri).unwrap_err().code(), "validation_failed");
+        assert_eq!(
+            validate_exchange_request(&r, &r.redirect_uri)
+                .unwrap_err()
+                .code(),
+            "validation_failed"
+        );
         let mut r = request();
         r.state = "zzz".to_string();
-        assert_eq!(validate_exchange_request(&r, &r.redirect_uri).unwrap_err().code(), "validation_failed");
+        assert_eq!(
+            validate_exchange_request(&r, &r.redirect_uri)
+                .unwrap_err()
+                .code(),
+            "validation_failed"
+        );
     }
 
     #[test]
@@ -789,7 +917,11 @@ mod tests {
         }
     }
 
-    fn sign_test_token(kid: Option<&str>, client_id: &str, mutate: impl FnOnce(&mut serde_json::Value)) -> String {
+    fn sign_test_token(
+        kid: Option<&str>,
+        client_id: &str,
+        mutate: impl FnOnce(&mut serde_json::Value),
+    ) -> String {
         use jsonwebtoken::{encode, EncodingKey, Header};
         let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
         header.kid = kid.map(str::to_string);
@@ -820,8 +952,7 @@ mod tests {
     #[test]
     fn valid_signed_id_token_verifies_and_yields_identity() {
         let token = sign_test_token(Some("test-kid"), "client-123", |_| {});
-        let identity =
-            verify_id_token_with(&token, "client-123", &test_jwks("test-kid")).unwrap();
+        let identity = verify_id_token_with(&token, "client-123", &test_jwks("test-kid")).unwrap();
         assert_eq!(identity.subject, "google-sub-1");
         assert_eq!(identity.email, "ada@example.test");
         assert!(identity.email_verified);
@@ -883,7 +1014,10 @@ mod tests {
             name: Some("  ".to_string()),
         };
         assert_eq!(display_name_for(&identity), "ada");
-        let named = GoogleIdentity { name: Some("Ada Lovelace".to_string()), ..identity };
+        let named = GoogleIdentity {
+            name: Some("Ada Lovelace".to_string()),
+            ..identity
+        };
         assert_eq!(display_name_for(&named), "Ada Lovelace");
     }
 }

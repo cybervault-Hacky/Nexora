@@ -47,12 +47,17 @@ const sources = {
   exportCommands: readFileSync(join(rustSrcDir, "export/commands.rs"), "utf8"),
   usageMod: readFileSync(join(rustSrcDir, "usage/mod.rs"), "utf8"),
   usageCommands: readFileSync(join(rustSrcDir, "usage/commands.rs"), "utf8"),
+  historyStorage: readFileSync(join(rustSrcDir, "history/storage.rs"), "utf8"),
+  historyCommands: readFileSync(join(rustSrcDir, "history/commands.rs"), "utf8"),
+  authMod: readFileSync(join(rustSrcDir, "auth/mod.rs"), "utf8"),
 };
 
 const ipcSource = readFileSync(join(uiLibDir, "ipc.ts"), "utf8");
 const inferenceSource = readFileSync(join(uiLibDir, "inference.ts"), "utf8");
 const exportSource = readFileSync(join(uiLibDir, "export.ts"), "utf8");
 const usageSource = readFileSync(join(uiLibDir, "usage.ts"), "utf8");
+const historySource = readFileSync(join(uiLibDir, "history.ts"), "utf8");
+const authSource = readFileSync(join(uiLibDir, "auth.ts"), "utf8");
 
 function group(match: ArrayLike<string | undefined>, index: number): string {
   const value = match[index];
@@ -908,5 +913,124 @@ describe("IPC command surface", () => {
     const orphaned = [...handlerCommands()].filter((name) => !invoked.has(name));
 
     expect(orphaned).toEqual([]);
+  });
+});
+
+function authInterfaceWireFields(name: string): string[] {
+  const marker = `export interface ${name} {`;
+  const start = authSource.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`TypeScript auth interface ${name} not found`);
+  }
+  const end = authSource.indexOf("\n}", start);
+  return authSource
+    .slice(start + marker.length, end)
+    .split("\n")
+    .map((line) => /^\s{2}(\w+)\??:\s*.+?;\s*$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => group(match, 1));
+}
+
+function authRustWireFields(name: string): string[] {
+  const marker = `pub struct ${name} {`;
+  const start = sources.authMod.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`Rust auth struct ${name} not found`);
+  }
+  const end = sources.authMod.indexOf("\n}", start);
+  return sources.authMod
+    .slice(start + marker.length, end)
+    .split("\n")
+    .map((line) => /^\s*pub (\w+):/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => camelCase(group(match, 1)));
+}
+
+describe("Auth, session, and diagnostics wire contract", () => {
+  const AUTH_DTO_SHAPES: Array<[string, string[]]> = [
+    ["AuthUser", ["id", "name", "email", "emailVerified"]],
+    [
+      "AccountProfile",
+      [
+        "id",
+        "name",
+        "email",
+        "emailVerified",
+        "hasPassword",
+        "providers",
+        "planId",
+        "planName",
+        "createdAt",
+      ],
+    ],
+    ["AuthSessionInfo", ["user", "authenticated"]],
+    ["AuthStatusResponse", ["status", "message", "emailDelivery"]],
+    ["AuthError", ["code", "message", "retryAfterSeconds"]],
+    [
+      "DeveloperDiagnostics",
+      [
+        "platform",
+        "arch",
+        "appVersion",
+        "credentialVault",
+        "authServiceUrl",
+        "cspEnforced",
+        "offlineCapable",
+      ],
+    ],
+    ["LoginPayload", ["email", "password"]],
+    ["RegisterPayload", ["name", "email", "password"]],
+    ["VerifyEmailPayload", ["token"]],
+    ["ResendVerificationPayload", ["email"]],
+    ["RecoveryPayload", ["email"]],
+    ["ResetPasswordPayload", ["token", "password"]],
+    ["ChangePasswordPayload", ["currentPassword", "newPassword"]],
+    ["UpdateProfilePayload", ["name"]],
+    ["DeleteAccountPayload", ["confirmEmail", "currentPassword"]],
+  ];
+
+  for (const [dtoName, expectedFields] of AUTH_DTO_SHAPES) {
+    it(`keeps ${dtoName} aligned between Rust and TypeScript`, () => {
+      expect(sorted(authRustWireFields(dtoName))).toEqual(sorted(expectedFields));
+      expect(sorted(authInterfaceWireFields(dtoName))).toEqual(sorted(expectedFields));
+    });
+  }
+});
+
+describe("Conversation history wire contract", () => {
+  function historyTsFields(name: string): string[] {
+    const marker = `export interface ${name} {`;
+    const start = historySource.indexOf(marker);
+    if (start < 0) throw new Error(`TypeScript history interface ${name} not found`);
+    const end = historySource.indexOf("\n}", start);
+    return historySource
+      .slice(start + marker.length, end)
+      .split("\n")
+      .map((line) => /^\s{2}(\w+)\??:\s*.+?;\s*$/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => group(match, 1));
+  }
+
+  it("keeps StoredMessage / HistoryMessage aligned between Rust and TypeScript", () => {
+    expect(sorted(rustStruct(sources.historyStorage, "StoredMessage").fields.map((f) => f.wire)))
+      .toEqual(sorted(historyTsFields("HistoryMessage")));
+  });
+
+  it("keeps StoredConversation / PersistedConversation aligned between Rust and TypeScript", () => {
+    expect(
+      sorted(rustStruct(sources.historyStorage, "StoredConversation").fields.map((f) => f.wire)),
+    ).toEqual(sorted(historyTsFields("PersistedConversation")));
+  });
+
+  it("keeps ConversationSummary aligned between Rust and TypeScript", () => {
+    expect(
+      sorted(rustStruct(sources.historyStorage, "ConversationSummary").fields.map((f) => f.wire)),
+    ).toEqual(sorted(historyTsFields("ConversationSummary")));
+  });
+
+  it("keeps HistoryError aligned between Rust and TypeScript", () => {
+    expect(
+      sorted(rustStruct(sources.historyStorage, "HistoryError").fields.map((f) => f.wire)),
+    ).toEqual(sorted(historyTsFields("HistoryError")));
   });
 });

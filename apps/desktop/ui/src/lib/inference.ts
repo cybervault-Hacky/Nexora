@@ -143,8 +143,13 @@ export async function startModelDownload(
     throw DESKTOP_ONLY;
   }
 
+  let closed = false;
   const channel = new Channel<ModelDownloadEvent>();
-  channel.onmessage = (event) => onEvent(event);
+  channel.onmessage = (event) => {
+    if (!closed) {
+      onEvent(event);
+    }
+  };
 
   try {
     return await invoke<ModelDownloadOutcome>("start_model_download", {
@@ -154,6 +159,9 @@ export async function startModelDownload(
     });
   } catch (cause) {
     throw toInferenceError(cause);
+  } finally {
+    closed = true;
+    channel.onmessage = () => undefined;
   }
 }
 
@@ -213,8 +221,13 @@ export async function generate(
     throw DESKTOP_ONLY;
   }
 
+  let closed = false;
   const channel = new Channel<GenerationEvent>();
-  channel.onmessage = (event) => onEvent(event);
+  channel.onmessage = (event) => {
+    if (!closed) {
+      onEvent(event);
+    }
+  };
 
   try {
     return await invoke<GenerationOutcome>("start_generation", {
@@ -223,6 +236,9 @@ export async function generate(
     });
   } catch (cause) {
     throw toInferenceError(cause);
+  } finally {
+    closed = true;
+    channel.onmessage = () => undefined;
   }
 }
 

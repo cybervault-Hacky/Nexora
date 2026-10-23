@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normaliseLanguage, parseInline, parseMessage } from "./code";
+import {
+  normaliseLanguage,
+  parseInline,
+  parseMessage,
+  parseRichInline,
+  parseRichMessage,
+  sanitizeMarkdownUrl,
+} from "./code";
 
 describe("parseMessage", () => {
   it("returns one text block for plain prose", () => {
@@ -144,5 +151,76 @@ describe("parseInline", () => {
     expect(parseInline("<b>not bold</b>")).toEqual([
       { code: false, text: "<b>not bold</b>" },
     ]);
+  });
+});
+
+describe("parseRichMessage & parseRichInline (Phase 07 Markdown hierarchy)", () => {
+  it("parses headings, unordered and ordered lists, tables, blockquotes, and code blocks", () => {
+    const md = [
+      "# Overview",
+      "",
+      "## Key Steps",
+      "",
+      "- Validate checksum",
+      "- Start `llama-server` on loopback",
+      "",
+      "1. Parse SSE lines",
+      "2. Commit token allowance",
+      "",
+      "| Model | Size |",
+      "| --- | --- |",
+      "| Nexora Mini | 4.68 GB |",
+      "| Nexora Sonnet | 8.99 GB |",
+      "",
+      "> Local execution never leaves your device.",
+    ].join("\n");
+
+    const blocks = parseRichMessage(md);
+    expect(blocks).toEqual([
+      { kind: "heading", level: 1, text: "Overview" },
+      { kind: "heading", level: 2, text: "Key Steps" },
+      {
+        kind: "list",
+        ordered: false,
+        start: 1,
+        items: ["Validate checksum", "Start `llama-server` on loopback"],
+      },
+      {
+        kind: "list",
+        ordered: true,
+        start: 1,
+        items: ["Parse SSE lines", "Commit token allowance"],
+      },
+      {
+        kind: "table",
+        headers: ["Model", "Size"],
+        rows: [
+          ["Nexora Mini", "4.68 GB"],
+          ["Nexora Sonnet", "8.99 GB"],
+        ],
+      },
+      { kind: "blockquote", text: "Local execution never leaves your device." },
+    ]);
+  });
+
+  it("allows only validated http/https URLs and neutralizes dangerous schemes", () => {
+    expect(sanitizeMarkdownUrl("https://rust-lang.org/learn")).toBe(
+      "https://rust-lang.org/learn",
+    );
+    expect(sanitizeMarkdownUrl("javascript:alert(1)")).toBeNull();
+    expect(sanitizeMarkdownUrl("data:text/html,<script>alert(1)</script>")).toBeNull();
+    expect(sanitizeMarkdownUrl("file:///etc/passwd")).toBeNull();
+
+    const safe = parseRichInline("Read [Rust Docs](https://doc.rust-lang.org) and **test**.");
+    expect(safe).toEqual([
+      { kind: "text", text: "Read " },
+      { kind: "link", label: "Rust Docs", href: "https://doc.rust-lang.org/" },
+      { kind: "text", text: " and " },
+      { kind: "strong", text: "test" },
+      { kind: "text", text: "." },
+    ]);
+
+    const unsafe = parseRichInline("Ignore [evil](javascript:alert(1)) payload.");
+    expect(unsafe.some((n) => n.kind === "link")).toBe(false);
   });
 });

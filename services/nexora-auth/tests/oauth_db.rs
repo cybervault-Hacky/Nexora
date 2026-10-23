@@ -18,15 +18,13 @@
 
 use nexora_auth::email::{EmailDelivery, EmailError, EmailMessage, EmailProvider};
 use nexora_auth::oauth::{
-    self, GoogleExchangeError, GoogleExchangeRequest, GoogleIdentity, GoogleProvider, OAuthError,
+    self, GoogleExchangeError, GoogleExchangeRequest, GoogleIdentity, GoogleProvider,
 };
 use nexora_auth::registration::{self, RegisterRequest};
 use nexora_auth::session;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Mutex;
-
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 const REDIRECT: &str = "http://127.0.0.1:49152/callback";
@@ -72,7 +70,9 @@ struct FakeGoogle {
 
 impl FakeGoogle {
     fn identity(identity: GoogleIdentity) -> Self {
-        Self { mode: Mutex::new(FakeMode::Identity(identity)) }
+        Self {
+            mode: Mutex::new(FakeMode::Identity(identity)),
+        }
     }
 }
 
@@ -83,7 +83,11 @@ impl GoogleProvider for FakeGoogle {
         _code_verifier: &'a str,
         _redirect_uri: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>>
+                + Send
+                + 'a,
+        >,
     > {
         let result = match &*self.mode.lock().unwrap() {
             FakeMode::Identity(identity) => Ok(identity.clone()),
@@ -135,7 +139,9 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
-    MIGRATIONS.run(&pool).await.expect("run migrations");
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("run migrations");
     sqlx::query("TRUNCATE users CASCADE")
         .execute(&pool)
         .await
@@ -160,7 +166,9 @@ async fn create_verified_user(pool: &PgPool, tag: &str) -> String {
     .await
     .expect("register");
     let token = provider.token_from_last();
-    registration::verify_email(Some(pool), &token).await.expect("verify");
+    registration::verify_email(Some(pool), &token)
+        .await
+        .expect("verify");
     email
 }
 
@@ -172,8 +180,9 @@ async fn state_is_single_use_and_replays_fail_generically() {
     let state = unique_state("st");
     let r = request(&state);
 
-    let first =
-        oauth::google_exchange(Some(&pool), &google, REDIRECT, &r).await.unwrap();
+    let first = oauth::google_exchange(Some(&pool), &google, REDIRECT, &r)
+        .await
+        .unwrap();
     assert_eq!(first.email, "ada@example.test");
 
     // Exact replay of the same state is refused with the generic failure.
@@ -185,13 +194,15 @@ async fn state_is_single_use_and_replays_fail_generically() {
     // A fresh state works (the failure was about replay, not the identity).
     let mut r2 = request(&unique_state("st"));
     r2.code = "4/0another-code".to_string();
-    assert!(oauth::google_exchange(Some(&pool), &google, REDIRECT, &r2).await.is_ok());
+    assert!(oauth::google_exchange(Some(&pool), &google, REDIRECT, &r2)
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn redirect_uri_mismatch_is_refused_before_any_exchange() {
-    let pool = test_pool().await();
+    let pool = test_pool().await;
     // Provider that PANICS if reached — the mismatch must be refused first.
     struct Bomb;
     impl GoogleProvider for Bomb {
@@ -201,7 +212,11 @@ async fn redirect_uri_mismatch_is_refused_before_any_exchange() {
             _code_verifier: &'a str,
             _redirect_uri: &'a str,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>> + Send + 'a>,
+            Box<
+                dyn std::future::Future<Output = Result<GoogleIdentity, GoogleExchangeError>>
+                    + Send
+                    + 'a,
+            >,
         > {
             Box::pin(async { panic!("provider must not be reached on redirect mismatch") })
         }
@@ -240,7 +255,11 @@ async fn verified_match_auto_links_and_creates_a_session() {
     .unwrap();
     assert_eq!(outcome.email, email);
     // A real session exists and authenticates.
-    assert!(session::authenticate(&pool, &outcome.session.raw_token, 604_800).await.is_ok());
+    assert!(
+        session::authenticate(&pool, &outcome.session.raw_token, 604_800)
+            .await
+            .is_ok()
+    );
     // Exactly one link row, keyed by the immutable subject.
     let (links,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM oauth_accounts WHERE provider = 'google' AND provider_subject = 'sub-link'",
@@ -316,7 +335,10 @@ async fn unverified_provider_email_is_refused_outright() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(users, 0, "never auto-link or create on unverified provider emails");
+    assert_eq!(
+        users, 0,
+        "never auto-link or create on unverified provider emails"
+    );
 }
 
 #[tokio::test]
@@ -348,12 +370,11 @@ async fn new_subject_creates_an_oauth_only_account_and_signs_in() {
     assert!(verified, "Google-verified email counts as verified");
 
     // Identity is keyed by `sub`, not by email.
-    let (subject,): (String,) = sqlx::query_as(
-        "SELECT provider_subject FROM oauth_accounts WHERE provider = 'google'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (subject,): (String,) =
+        sqlx::query_as("SELECT provider_subject FROM oauth_accounts WHERE provider = 'google'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(subject, "sub-fresh");
 }
 
@@ -420,7 +441,11 @@ async fn locked_linked_accounts_are_refused_generically() {
     assert_eq!(error.code(), "invalid_credentials");
     // The pre-lock session still exists as a row but the account is locked;
     // nothing here created a new session.
-    assert!(session::authenticate(&pool, &outcome.session.raw_token, 604_800).await.is_err());
+    assert!(
+        session::authenticate(&pool, &outcome.session.raw_token, 604_800)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -450,14 +475,18 @@ async fn nonce_mismatches_fail_generically_and_matches_pass() {
     // Matching nonce passes.
     let mut r3 = request(&unique_state("nc"));
     r3.nonce = Some("n-good".to_string());
-    assert!(oauth::google_exchange(Some(&pool), &google, REDIRECT, &r3).await.is_ok());
+    assert!(oauth::google_exchange(Some(&pool), &google, REDIRECT, &r3)
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn provider_refusals_and_unconfigured_are_distinct_and_honest() {
     let pool = test_pool().await;
-    let refuse = FakeGoogle { mode: Mutex::new(FakeMode::Refuse) };
+    let refuse = FakeGoogle {
+        mode: Mutex::new(FakeMode::Refuse),
+    };
     let error = oauth::google_exchange(
         Some(&pool),
         &refuse,
@@ -468,7 +497,9 @@ async fn provider_refusals_and_unconfigured_are_distinct_and_honest() {
     .unwrap_err();
     assert_eq!(error.code(), "invalid_or_expired_token");
 
-    let unconfigured = FakeGoogle { mode: Mutex::new(FakeMode::Unconfigured) };
+    let unconfigured = FakeGoogle {
+        mode: Mutex::new(FakeMode::Unconfigured),
+    };
     let error = oauth::google_exchange(
         Some(&pool),
         &unconfigured,
@@ -493,7 +524,10 @@ async fn google_rate_window_blocks_excess_attempts() {
     use nexora_auth::rate_limit::{self, CountMode, RateLimitRule};
 
     let pool = test_pool().await;
-    let rule = RateLimitRule { max_failures: 2, window_secs: 900 };
+    let rule = RateLimitRule {
+        max_failures: 2,
+        window_secs: 900,
+    };
     let key = rate_limit::ip_key("203.0.113.9");
 
     for _ in 0..2 {
@@ -529,10 +563,9 @@ async fn registration_login_session_regressions_still_work() {
     nexora_auth::session::revoke_family(&pool, &outcome.session.raw_token, 604_800)
         .await
         .unwrap();
-    let (live,): (i64,) =
-        sqlx::query_as("SELECT count(*) FROM sessions WHERE revoked_at IS NULL")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (live,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions WHERE revoked_at IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(live, 0);
 }

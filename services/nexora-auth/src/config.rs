@@ -87,6 +87,14 @@ pub struct AuthConfig {
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub google_redirect_uri: Option<String>,
+    /// Deployment environment mode (`development`, `test`, `production`).
+    pub environment: String,
+    /// Optional Stripe billing configuration (all secrets redacted).
+    pub stripe_secret_key: Option<String>,
+    pub stripe_webhook_secret: Option<String>,
+    pub stripe_success_url: Option<String>,
+    pub stripe_cancel_url: Option<String>,
+    pub stripe_portal_return_url: Option<String>,
 }
 
 /// Redacting `Debug`: connection strings embed credentials, so they are never
@@ -101,7 +109,10 @@ impl fmt::Debug for AuthConfig {
                 &self.database_url.as_ref().map(|_| "<redacted>"),
             )
             .field("verification_ttl_secs", &self.verification_ttl_secs)
-            .field("email_from", &self.email_from.as_ref().map(|_| "<redacted>"))
+            .field(
+                "email_from",
+                &self.email_from.as_ref().map(|_| "<redacted>"),
+            )
             .field("email_provider_configured", &self.email_provider_configured)
             .field(
                 "google_client_id",
@@ -112,6 +123,15 @@ impl fmt::Debug for AuthConfig {
                 &self.google_client_secret.as_ref().map(|_| "<redacted>"),
             )
             .field("google_redirect_uri", &self.google_redirect_uri)
+            .field("environment", &self.environment)
+            .field(
+                "stripe_secret_key",
+                &self.stripe_secret_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "stripe_webhook_secret",
+                &self.stripe_webhook_secret.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -168,8 +188,7 @@ impl AuthConfig {
         // Parse first so invalid addresses/ports are rejected before any bind.
         let bind: SocketAddr = bind_raw.parse().map_err(|_| {
             ConfigError::new(format!(
-                "{BIND_VAR} must be an IP:PORT pair such as {DEFAULT_BIND} \
-                 (IPv6 example: [::1]:8787). The provided value could not be parsed."
+                "{BIND_VAR} must be a valid socket address in IP:PORT form (value withheld)."
             ))
         })?;
 
@@ -208,7 +227,116 @@ impl AuthConfig {
             google_client_id: None,
             google_client_secret: None,
             google_redirect_uri: None,
+            environment: "development".to_string(),
+            stripe_secret_key: None,
+            stripe_webhook_secret: None,
+            stripe_success_url: None,
+            stripe_cancel_url: None,
+            stripe_portal_return_url: None,
         })
+    }
+
+    /// Detect obvious placeholder values from `.env.example` so a production
+    /// service never starts with copy-pasted dummy secrets.
+    pub fn contains_placeholder(value: &str) -> bool {
+        let lower = value.to_ascii_lowercase();
+        [
+            "change_me",
+            "changeme",
+            "placeholder",
+            "replace_with",
+            "<replace",
+            "your-",
+            "your_",
+            "example_only",
+            "nexora.local",
+            "000000000000",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    }
+
+    pub fn apply_deployment_and_billing_settings(
+        &mut self,
+        env_mode: Option<&str>,
+        stripe_secret_key: Option<&str>,
+        stripe_webhook_secret: Option<&str>,
+        stripe_success_url: Option<&str>,
+        stripe_cancel_url: Option<&str>,
+        stripe_portal_return_url: Option<&str>,
+    ) -> Result<(), ConfigError> {
+        let mode = env_mode
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("development")
+            .to_ascii_lowercase();
+        if !matches!(mode.as_str(), "development" | "test" | "production") {
+            return Err(ConfigError::new(
+                "NEXORA_ENV must be one of 'development', 'test', or 'production'. (Value withheld.)",
+            ));
+        }
+
+        let clean = |v: Option<&str>| {
+            v.map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        let sk = clean(stripe_secret_key);
+        let wh = clean(stripe_webhook_secret);
+        let su = clean(stripe_success_url);
+        let cu = clean(stripe_cancel_url);
+        let pu = clean(stripe_portal_return_url);
+
+        if sk.is_some() != wh.is_some() {
+            return Err(ConfigError::new(
+                "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together to enable billing. \
+                 Partial Stripe configuration is refused. (Values withheld.)",
+            ));
+        }
+
+        if mode == "production" {
+            if self.database_url.is_none() {
+                return Err(ConfigError::new(format!(
+                    "Production startup refused: {DATABASE_URL_VAR} is required when NEXORA_ENV=production."
+                )));
+            }
+            for (label, candidate) in [
+                (DATABASE_URL_VAR, self.database_url.as_deref()),
+                (GOOGLE_CLIENT_ID_VAR, self.google_client_id.as_deref()),
+                (
+                    GOOGLE_CLIENT_SECRET_VAR,
+                    self.google_client_secret.as_deref(),
+                ),
+                ("STRIPE_SECRET_KEY", sk.as_deref()),
+                ("STRIPE_WEBHOOK_SECRET", wh.as_deref()),
+                ("STRIPE_SUCCESS_URL", su.as_deref()),
+                ("STRIPE_CANCEL_URL", cu.as_deref()),
+                ("STRIPE_PORTAL_RETURN_URL", pu.as_deref()),
+            ] {
+                if let Some(val) = candidate {
+                    if Self::contains_placeholder(val) {
+                        return Err(ConfigError::new(format!(
+                            "Production startup refused: {label} still contains a placeholder value from .env.example. (Value withheld.)"
+                        )));
+                    }
+                }
+            }
+            if let Some(val) = &sk {
+                if val.starts_with("sk_test_") {
+                    return Err(ConfigError::new(
+                        "Production startup refused: STRIPE_SECRET_KEY uses a test key prefix while NEXORA_ENV=production. (Value withheld.)",
+                    ));
+                }
+            }
+        }
+
+        self.environment = mode;
+        self.stripe_secret_key = sk;
+        self.stripe_webhook_secret = wh;
+        self.stripe_success_url = su;
+        self.stripe_cancel_url = cu;
+        self.stripe_portal_return_url = pu;
+        Ok(())
     }
 
     /// Phase 23C email/verification settings (validated; values never echoed).
@@ -244,11 +372,28 @@ impl AuthConfig {
         let bind = std::env::var(BIND_VAR).ok();
         let allow = std::env::var(ALLOW_NON_LOOPBACK_VAR).ok();
         let database_url = std::env::var(DATABASE_URL_VAR).ok();
-        let mut config =
-            Self::resolve_with_database(bind.as_deref(), allow.as_deref(), database_url.as_deref())?;
+        let mut config = Self::resolve_with_database(
+            bind.as_deref(),
+            allow.as_deref(),
+            database_url.as_deref(),
+        )?;
         config.apply_email_settings(EmailSettings::from_env()?)?;
         config.apply_session_settings(SessionSettings::from_env()?)?;
         config.apply_google_settings(GoogleSettings::from_env()?)?;
+        let env_mode = std::env::var("NEXORA_ENV").ok();
+        let stripe_sk = std::env::var("STRIPE_SECRET_KEY").ok();
+        let stripe_wh = std::env::var("STRIPE_WEBHOOK_SECRET").ok();
+        let stripe_su = std::env::var("STRIPE_SUCCESS_URL").ok();
+        let stripe_cu = std::env::var("STRIPE_CANCEL_URL").ok();
+        let stripe_pu = std::env::var("STRIPE_PORTAL_RETURN_URL").ok();
+        config.apply_deployment_and_billing_settings(
+            env_mode.as_deref(),
+            stripe_sk.as_deref(),
+            stripe_wh.as_deref(),
+            stripe_su.as_deref(),
+            stripe_cu.as_deref(),
+            stripe_pu.as_deref(),
+        )?;
         Ok(config)
     }
 }
@@ -488,7 +633,10 @@ mod tests {
     fn rejects_non_loopback_without_explicit_opt_in() {
         for bad in ["0.0.0.0:8787", "192.168.1.10:8787", "[::]:8787"] {
             let error = AuthConfig::resolve(Some(bad), None).unwrap_err();
-            assert!(error.message().contains(ALLOW_NON_LOOPBACK_VAR), "case: {bad}");
+            assert!(
+                error.message().contains(ALLOW_NON_LOOPBACK_VAR),
+                "case: {bad}"
+            );
             assert!(!error.message().contains("0.0.0.0:8787=something"));
         }
     }
@@ -504,7 +652,10 @@ mod tests {
     fn rejects_invalid_opt_in_values() {
         for bad in ["yes", "1", "TRUE", "on"] {
             let error = AuthConfig::resolve(None, Some(bad)).unwrap_err();
-            assert!(error.message().contains(ALLOW_NON_LOOPBACK_VAR), "case: {bad}");
+            assert!(
+                error.message().contains(ALLOW_NON_LOOPBACK_VAR),
+                "case: {bad}"
+            );
             assert!(!error.message().contains(bad), "must not echo input");
         }
         assert!(AuthConfig::resolve(None, Some("false")).is_ok());
@@ -514,7 +665,9 @@ mod tests {
     fn error_messages_are_secret_free() {
         let error = AuthConfig::resolve(Some("hunter2-should-not-appear"), None).unwrap_err();
         assert!(!error.message().contains("hunter2"));
-        assert!(!error.message().contains("NEXORA_AUTH_ALLOW_NON_LOOPBACK=true hunter2"));
+        assert!(!error
+            .message()
+            .contains("NEXORA_AUTH_ALLOW_NON_LOOPBACK=true hunter2"));
     }
 
     #[test]
@@ -600,12 +753,12 @@ mod email_settings_tests {
                 .verification_ttl_secs,
             3600
         );
-        let bad = EmailSettings::resolve(Some("not-a-number"), None, None, None, false).unwrap_err();
+        let bad =
+            EmailSettings::resolve(Some("not-a-number"), None, None, None, false).unwrap_err();
         assert!(bad.message().contains(VERIFICATION_TTL_VAR));
         assert!(bad.message().contains("withheld"));
         assert!(!bad.message().contains("not-a-number"));
-        let too_small =
-            EmailSettings::resolve(Some("5"), None, None, None, false).unwrap_err();
+        let too_small = EmailSettings::resolve(Some("5"), None, None, None, false).unwrap_err();
         assert!(too_small.message().contains(VERIFICATION_TTL_VAR));
         assert!(!too_small.message().contains("5 seconds"));
     }
@@ -756,12 +909,18 @@ mod session_settings_tests {
     #[test]
     fn session_settings_default_to_plan_values() {
         let settings = SessionSettings::resolve(None, None, None, None, None, None).unwrap();
-        assert_eq!(settings.session_ttl_secs, crate::session::DEFAULT_SESSION_TTL_SECS);
+        assert_eq!(
+            settings.session_ttl_secs,
+            crate::session::DEFAULT_SESSION_TTL_SECS
+        );
         assert_eq!(
             settings.session_idle_ttl_secs,
             crate::session::DEFAULT_SESSION_IDLE_TTL_SECS
         );
-        assert_eq!(settings.rate_limit_login, crate::rate_limit::default_login_rule());
+        assert_eq!(
+            settings.rate_limit_login,
+            crate::rate_limit::default_login_rule()
+        );
     }
 
     #[test]
@@ -776,7 +935,8 @@ mod session_settings_tests {
         assert!(bad.message().contains(SESSION_TTL_VAR));
         assert!(bad.message().contains("withheld"));
         assert!(!bad.message().contains("abc"));
-        let out_of_range = SessionSettings::resolve(Some("5"), None, None, None, None, None).unwrap_err();
+        let out_of_range =
+            SessionSettings::resolve(Some("5"), None, None, None, None, None).unwrap_err();
         assert!(out_of_range.message().contains(SESSION_TTL_VAR));
     }
 
@@ -786,11 +946,17 @@ mod session_settings_tests {
             SessionSettings::resolve(None, None, Some("5/15m"), Some("3/60m"), None, None).unwrap();
         assert_eq!(
             settings.rate_limit_login,
-            crate::rate_limit::RateLimitRule { max_failures: 5, window_secs: 900 }
+            crate::rate_limit::RateLimitRule {
+                max_failures: 5,
+                window_secs: 900
+            }
         );
         assert_eq!(
             settings.rate_limit_register,
-            crate::rate_limit::RateLimitRule { max_failures: 3, window_secs: 3_600 }
+            crate::rate_limit::RateLimitRule {
+                max_failures: 3,
+                window_secs: 3_600
+            }
         );
         let bad = SessionSettings::resolve(None, None, Some("nope"), None, None, None).unwrap_err();
         assert!(bad.message().contains("withheld"));
@@ -805,10 +971,12 @@ mod recovery_settings_tests {
     #[test]
     fn reset_ttl_defaults_to_the_plan_hour_and_is_validated() {
         let settings = EmailSettings::resolve(None, None, None, None, false).unwrap();
-        assert_eq!(settings.reset_ttl_secs, crate::recovery::DEFAULT_RESET_TTL_SECS);
+        assert_eq!(
+            settings.reset_ttl_secs,
+            crate::recovery::DEFAULT_RESET_TTL_SECS
+        );
 
-        let custom =
-            EmailSettings::resolve(None, Some("7200"), None, None, false).unwrap();
+        let custom = EmailSettings::resolve(None, Some("7200"), None, None, false).unwrap();
         assert_eq!(custom.reset_ttl_secs, 7_200);
 
         let bad = EmailSettings::resolve(None, Some("abc"), None, None, false).unwrap_err();
@@ -816,8 +984,7 @@ mod recovery_settings_tests {
         assert!(bad.message().contains("withheld"));
         assert!(!bad.message().contains("abc"));
 
-        let out_of_range =
-            EmailSettings::resolve(None, Some("5"), None, None, false).unwrap_err();
+        let out_of_range = EmailSettings::resolve(None, Some("5"), None, None, false).unwrap_err();
         assert!(out_of_range.message().contains(RESET_TTL_VAR));
     }
 
@@ -827,12 +994,17 @@ mod recovery_settings_tests {
             SessionSettings::resolve(None, None, None, None, None, Some("5/15m")).unwrap();
         assert_eq!(
             settings.rate_limit_recovery,
-            crate::rate_limit::RateLimitRule { max_failures: 5, window_secs: 900 }
+            crate::rate_limit::RateLimitRule {
+                max_failures: 5,
+                window_secs: 900
+            }
         );
         let defaults = SessionSettings::resolve(None, None, None, None, None, None).unwrap();
-        assert_eq!(defaults.rate_limit_recovery, crate::rate_limit::default_recovery_rule());
-        let bad =
-            SessionSettings::resolve(None, None, None, None, None, Some("nope")).unwrap_err();
+        assert_eq!(
+            defaults.rate_limit_recovery,
+            crate::rate_limit::default_recovery_rule()
+        );
+        let bad = SessionSettings::resolve(None, None, None, None, None, Some("nope")).unwrap_err();
         assert!(bad.message().contains("withheld"));
     }
 }
@@ -853,7 +1025,10 @@ impl fmt::Debug for GoogleSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GoogleSettings")
             .field("client_id", &self.client_id.as_ref().map(|_| "<redacted>"))
-            .field("client_secret", &self.client_secret.as_ref().map(|_| "<redacted>"))
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
             .field("redirect_uri", &self.redirect_uri)
             .finish()
     }
@@ -866,7 +1041,11 @@ impl GoogleSettings {
         let client_id = std::env::var(GOOGLE_CLIENT_ID_VAR).ok();
         let client_secret = std::env::var(GOOGLE_CLIENT_SECRET_VAR).ok();
         let redirect_uri = std::env::var(GOOGLE_REDIRECT_URI_VAR).ok();
-        Self::resolve(client_id.as_deref(), client_secret.as_deref(), redirect_uri.as_deref())
+        Self::resolve(
+            client_id.as_deref(),
+            client_secret.as_deref(),
+            redirect_uri.as_deref(),
+        )
     }
 
     /// All-or-nothing: nothing set = unconfigured (honest 503 on the route);
@@ -877,9 +1056,18 @@ impl GoogleSettings {
         client_secret: Option<&str>,
         redirect_uri: Option<&str>,
     ) -> Result<Self, ConfigError> {
-        let client_id = client_id.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
-        let client_secret = client_secret.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
-        let redirect_uri = redirect_uri.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        let client_id = client_id
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+        let client_secret = client_secret
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+        let redirect_uri = redirect_uri
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
 
         match (&client_id, &client_secret, &redirect_uri) {
             (None, None, None) => Ok(Self {
@@ -888,10 +1076,12 @@ impl GoogleSettings {
                 redirect_uri: None,
             }),
             (Some(_), _, Some(uri)) => {
-                if !crate::oauth::is_loopback_redirect_uri(uri) {
+                if !(uri == "http://127.0.0.1/callback"
+                    || crate::oauth::is_loopback_redirect_uri(uri))
+                {
                     return Err(ConfigError::new(format!(
                         "{GOOGLE_REDIRECT_URI_VAR} must be an exact loopback callback \
-                         (http://127.0.0.1:<port>/callback). (Value withheld.)"
+                         (http://127.0.0.1:<port>/callback or http://127.0.0.1/callback). (Value withheld.)"
                     )));
                 }
                 Ok(Self {

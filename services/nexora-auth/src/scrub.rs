@@ -34,6 +34,7 @@ const SCRUB_KEYS: &[&str] = &[
     "key",
     "hash",
     "session",
+    "url",
 ];
 
 /// One `key=value` / `key: value` / `key="value"` pair to redact, if the line
@@ -67,11 +68,15 @@ fn find_scrub_pair(line: &str) -> Option<(usize, usize)> {
                         let value_start = line.len() - trimmed.len();
                         let after_value = line[value_start..]
                             .find(|c: char| {
-                                matches!(c, '"' | '\'' | ',' | ' ' | '\n' | '\t' | ';' | '}' | ')' | '&')
+                                matches!(
+                                    c,
+                                    '"' | '\'' | ',' | ' ' | '\n' | '\t' | ';' | '}' | ')' | '&'
+                                )
                             })
                             .map(|offset| value_start + offset)
                             .unwrap_or(line.len());
-                        if after_value > value_start {
+                        if after_value > value_start && &line[value_start..after_value] != REDACTED
+                        {
                             return Some((value_start, after_value));
                         }
                     }
@@ -99,6 +104,25 @@ pub fn scrub(line: &str) -> String {
             .map(|offset| start + offset)
             .unwrap_or(out.len());
         out.replace_range(start..end, REDACTED);
+    }
+
+    // Connection URIs carrying userinfo (`scheme://user:pass@host` or `scheme://user@host`).
+    let mut uri_scan = 0;
+    while let Some(pos) = out[uri_scan..].find("://") {
+        let after_scheme = uri_scan + pos + 3;
+        let authority_end = out[after_scheme..]
+            .find(['/', '?', '#', '"', '\'', ' ', '\t', '\n', ',', ';'])
+            .map(|o| after_scheme + o)
+            .unwrap_or(out.len());
+        if let Some(at_rel) = out[after_scheme..authority_end].rfind('@') {
+            let at_pos = after_scheme + at_rel;
+            if &out[after_scheme..at_pos] != REDACTED {
+                out.replace_range(after_scheme..at_pos, REDACTED);
+                uri_scan = after_scheme + REDACTED.len() + 1;
+                continue;
+            }
+        }
+        uri_scan = authority_end;
     }
 
     // One pair per pass (offsets stay valid because each pass re-scans).
@@ -130,7 +154,10 @@ mod tests {
     fn scrub_list_matches_the_plan_and_covers_pairs() {
         assert_eq!(scrub("password=hunter2"), "password=<redacted>");
         assert_eq!(scrub("token: abc123"), "token: <redacted>");
-        assert_eq!(scrub("code_verifier=\"xyz\""), "code_verifier=\"<redacted>\"");
+        assert_eq!(
+            scrub("code_verifier=\"xyz\""),
+            "code_verifier=\"<redacted>\""
+        );
         assert_eq!(scrub("cookie: a=b"), "cookie: <redacted>");
     }
 

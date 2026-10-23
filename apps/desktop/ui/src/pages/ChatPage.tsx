@@ -7,24 +7,25 @@ import { Icon } from "../components/Icon";
 import { MessageList } from "../components/MessageList";
 import { ModelSelector } from "../components/ModelSelector";
 import { RetrievalBar } from "../components/RetrievalBar";
-import { UsageMeter } from "../components/UsageMeter";
 import { RouterLink } from "../components/RouterLink";
-import { planContextBudget } from "../features/workspace/contextBudget";
-import type { RetrievalResult } from "../features/workspace/retrieval";
-import type { buildEvidenceReport } from "../lib/evidence";
-import type { AppStatus } from "../lib/ipc";
-import { isNearBottom } from "../lib/scroll";
+import { UsageMeter } from "../components/UsageMeter";
 import type { usePersistentConversation } from "../features/chat/usePersistentConversation";
 import type { ModelCatalog } from "../features/models/useModelCatalog";
 import type { UsageView } from "../features/usage/useUsage";
+import { planContextBudget } from "../features/workspace/contextBudget";
+import type { RetrievalResult } from "../features/workspace/retrieval";
 import type { useWorkspace } from "../features/workspace/useWorkspace";
+import type { ServerUsageSummary } from "../lib/auth";
+import type { buildEvidenceReport } from "../lib/evidence";
+import type { AppStatus } from "../lib/ipc";
+import { isNearBottom } from "../lib/scroll";
 
 type ConversationState = ReturnType<typeof usePersistentConversation>;
 type WorkspaceState = ReturnType<typeof useWorkspace>;
 type ContextPlan = ReturnType<typeof planContextBudget>;
 type EvidenceReport = ReturnType<typeof buildEvidenceReport>;
 
-interface ChatPageProps {
+export interface ChatPageProps {
   conversation: ConversationState;
   workspace: WorkspaceState;
   engineStatus: AppStatus | null;
@@ -41,8 +42,12 @@ interface ChatPageProps {
   onSubmit: () => void;
   /** Authoritative daily allowance; `null` status means the browser preview. */
   usage: UsageView;
+  /** Optional server-synchronized per-model plan usage when signed in. */
+  serverUsage?: ServerUsageSummary | null;
   /** Registered models and their real availability, from the desktop core. */
   models: ModelCatalog;
+  /** Refreshes top-level engine status after loading/downloading from selector. */
+  onModelLoaded?: () => void;
 }
 
 /** One place that turns engine state into a label and a tone. */
@@ -74,8 +79,8 @@ function describeEngineChip(
 }
 
 /**
- * The AI Chat page: conversation transcript, composer, and prompt-grounding
- * tools only. Project browsing and patch work live on the Projects page.
+ * Main ChatGPT-inspired AI Chat view: top conversation bar, centered message
+ * canvas, local grounding controls, shared ModelSelector, and bottom Composer.
  */
 export function ChatPage({
   conversation,
@@ -91,7 +96,9 @@ export function ChatPage({
   focusNonce,
   onSubmit,
   usage,
+  serverUsage = null,
   models,
+  onModelLoaded,
 }: ChatPageProps) {
   const {
     conversationLoading,
@@ -123,15 +130,14 @@ export function ChatPage({
 
   const hasMessages = messages.length > 0;
   const engineChip = describeEngineChip(engineStatus, statusError, engineReady);
-  // The browser preview has no record, so it neither blocks nor renders a meter.
   const allowanceExhausted = usage.status?.exhausted ?? false;
+  const missingApprovedSelection = models.entries.length > 0 && !models.selected;
   const showUsage = usage.status !== null || usage.error !== null;
   const conversationTitle = activeId
     ? activeTitle
     : hasMessages
       ? "Local conversation"
       : "New conversation";
-  // An unreadable status is "unknown", not "no model": never show setup then.
   const showSetup = !engineReady && !hasMessages && statusError === null;
 
   // Focus the composer on mount and whenever the shell asks (Ctrl+L).
@@ -169,68 +175,78 @@ export function ChatPage({
       await renameActive(renameValue.trim());
       setRenameEditing(false);
     } catch {
-      // error surfaced via saveError
+      // Error surfaced via saveError.
     }
   }, [renameValue, activeId, renameActive]);
 
   const handleDeleteWithConfirm = useCallback(async () => {
     if (!activeId) return;
-    // Simple confirm dialog — explicit UI confirmation required
     const confirmed = window.confirm(`Delete conversation "${activeTitle}"? This cannot be undone.`);
     if (!confirmed) return;
     try {
       await deleteActive();
     } catch {
-      // surfaced
+      // Error surfaced via saveError.
     }
   }, [activeId, activeTitle, deleteActive]);
 
   return (
     <>
       <header className="conversation-header">
-        <div className="conversation-header__titles">
-          {renameEditing && activeId ? (
-            <div className="conversation-header__rename">
-              <input
-                className="conversation-header__rename-input"
-                value={renameValue}
-                maxLength={200}
-                aria-label="Conversation title"
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleRenameSubmit();
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
+        <div className="conversation-header__left">
+          {desktop ? (
+            <ModelSelector
+              catalog={models}
+              disabled={streaming}
+              activeConversationId={activeId}
+              onModelLoaded={onModelLoaded}
+            />
+          ) : null}
+
+          <div className="conversation-header__titles">
+            {renameEditing && activeId ? (
+              <div className="conversation-header__rename">
+                <input
+                  className="conversation-header__rename-input"
+                  value={renameValue}
+                  maxLength={200}
+                  aria-label="Conversation title"
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleRenameSubmit();
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenameEditing(false);
+                      setRenameValue(activeTitle);
+                    }
+                  }}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  onClick={() => void handleRenameSubmit()}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  onClick={() => {
                     setRenameEditing(false);
                     setRenameValue(activeTitle);
-                  }
-                }}
-                autoFocus
-              />
-              <button
-                type="button"
-                className="button button--ghost button--sm"
-                onClick={() => void handleRenameSubmit()}
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                className="button button--ghost button--sm"
-                onClick={() => {
-                  setRenameEditing(false);
-                  setRenameValue(activeTitle);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <h1 className="conversation-header__title">{conversationTitle}</h1>
-          )}
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <h1 className="conversation-header__title">{conversationTitle}</h1>
+            )}
+          </div>
         </div>
 
         <div className="conversation-header__chips">
@@ -248,10 +264,12 @@ export function ChatPage({
               Save failed
             </span>
           ) : null}
+
           <span className="chip" title="Inference runs on this machine">
             <Icon name="cloud-off" size={13} />
             Local-only
           </span>
+
           <span
             className={`chip ${engineChip.tone}`}
             title={statusError ?? engineStatus?.engine.detail}
@@ -259,6 +277,13 @@ export function ChatPage({
             <span className="status-dot status-dot--sm" aria-hidden="true" />
             {engineChip.label}
           </span>
+
+          {serverUsage ? (
+            <span className="chip" aria-label="Daily plan allowance">
+              {serverUsage.planName}
+            </span>
+          ) : null}
+
           {activeId ? (
             <>
               <button
@@ -284,6 +309,7 @@ export function ChatPage({
               </button>
             </>
           ) : null}
+
           {hasMessages || activeId ? (
             <button
               type="button"
@@ -418,7 +444,8 @@ export function ChatPage({
           <div className="context-bar__label">
             <Icon name="file" size={12} />
             <span>
-              Context: {workspace.contextFiles.length} file{workspace.contextFiles.length !== 1 ? "s" : ""} — read-only, not modifying files
+              Context: {workspace.contextFiles.length} file
+              {workspace.contextFiles.length !== 1 ? "s" : ""} — read-only, not modifying files
             </span>
           </div>
           <ul className="context-bar__list">
@@ -442,16 +469,29 @@ export function ChatPage({
         </div>
       ) : null}
 
-      {/* Phase 17: concise evidence transparency near composer — reuses tokens, not noisy, shows for current draft */}
       {evidenceReport && (draft.trim().length > 0 || workspace.contextFiles.length > 0 || streaming) ? (
         <div className="composer__evidence">
           <EvidencePanel report={evidenceReport} isStreaming={streaming} />
         </div>
       ) : null}
 
-      {showUsage ? <UsageMeter usage={usage} /> : null}
+      {serverUsage ? (
+        <div className="server-quota-bar" role="region" aria-label="Daily model quota">
+          <span>
+            {serverUsage.models
+              .map(
+                (m) =>
+                  `${m.modelId === "nexora-sonnet" ? "Sonnet" : "Mini"}: ${m.remaining}/${m.dailyLimit}`,
+              )
+              .join(" · ")}
+          </span>
+          <RouterLink to="plans" className="server-quota-bar__upgrade">
+            Plans &amp; Quotas
+          </RouterLink>
+        </div>
+      ) : null}
 
-      {desktop ? <ModelSelector catalog={models} disabled={streaming} /> : null}
+      {showUsage ? <UsageMeter usage={usage} /> : null}
 
       <Composer
         value={draft}
@@ -459,12 +499,20 @@ export function ChatPage({
         textareaRef={textareaRef}
         busy={streaming}
         canGenerate={
-          engineReady && !conversationLoading && !allowanceExhausted && !models.selectionError
+          engineReady &&
+          !conversationLoading &&
+          !allowanceExhausted &&
+          !models.selectionError &&
+          !missingApprovedSelection
         }
         blockedReason={
           allowanceExhausted
             ? "Daily free allowance reached — it resets at 00:00 UTC"
-            : (models.selectionError ?? null)
+            : models.selectionError
+              ? models.selectionError
+              : missingApprovedSelection
+                ? "Select an approved local model before sending"
+                : null
         }
         onChange={setDraft}
         onSubmit={() => {

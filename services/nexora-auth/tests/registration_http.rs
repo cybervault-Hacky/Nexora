@@ -59,7 +59,10 @@ async fn register_rejects_invalid_inputs_without_echoing_them() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("validation_failed"));
-    assert!(!body.contains("not-an-email"), "must not echo input: {body}");
+    assert!(
+        !body.contains("not-an-email"),
+        "must not echo input: {body}"
+    );
 
     // Password policy (too short) — message must not contain the password.
     let (status, body) = post_json(
@@ -159,7 +162,12 @@ async fn auth_routes_reject_wrong_methods_with_json_envelope() {
 #[tokio::test]
 async fn health_still_works_alongside_auth_routes() {
     let response = build_router()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

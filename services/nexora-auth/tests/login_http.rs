@@ -53,7 +53,10 @@ async fn login_validates_body_without_echoing_inputs() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("validation_failed"), "body: {body}");
-    assert!(!body.contains("not-an-email"), "must not echo input: {body}");
+    assert!(
+        !body.contains("not-an-email"),
+        "must not echo input: {body}"
+    );
 
     // Empty password is validation, not a credential answer.
     let (status, body) = post_json(
@@ -116,9 +119,12 @@ async fn protected_routes_without_database_are_honest_503() {
         ("POST", "/v1/auth/refresh"),
         ("GET", "/v1/auth/me"),
     ] {
-        let (status, body) =
-            request_with_auth(method, uri, Some("Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-                .await;
+        let (status, body) = request_with_auth(
+            method,
+            uri,
+            Some("Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
         assert!(body.contains("dependency_unavailable"), "{uri}: {body}");
     }

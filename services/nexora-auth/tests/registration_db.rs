@@ -22,8 +22,6 @@ use nexora_auth::registration::{self, RegisterRequest};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
 /// Provider that records delivered messages so tests can read the token
@@ -78,9 +76,11 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
-    MIGRATIONS.run(&pool).await.expect("run migrations");
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("run migrations");
     // Start from a clean slate without dropping the schema (parallel-friendly).
-    sqlx::query("TRUNCATE users CASCADE")
+    sqlx::query("TRUNCATE users, login_attempts, google_oauth_states CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -133,10 +133,11 @@ async fn register_stores_argon2_and_never_the_raw_password_or_token() {
     assert!(password_hash.starts_with("$argon2id$"), "PHC string stored");
     assert!(!password_hash.contains("correct horse"));
 
-    let digests: Vec<Vec<u8>> = sqlx::query_as("SELECT token_hash FROM email_verification_tokens")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    let digests: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT token_hash FROM email_verification_tokens")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(digests.len(), 1);
     assert_eq!(digests[0], digest);
     // The raw token must not exist anywhere in the digest column.
@@ -236,7 +237,9 @@ async fn verify_happy_path_then_reuse_is_rejected() {
     .unwrap();
     let token = provider.token_from_last();
 
-    registration::verify_email(Some(&pool), &token).await.unwrap();
+    registration::verify_email(Some(&pool), &token)
+        .await
+        .unwrap();
 
     let (verified_at,): (Option<String>,) =
         sqlx::query_as("SELECT email_verified_at::text FROM users WHERE email = $1")
@@ -268,7 +271,9 @@ async fn expired_tokens_are_rejected_generically() {
     .unwrap();
     let token = provider.token_from_last();
 
-    sqlx::query("UPDATE email_verification_tokens SET expires_at = now() - interval '1 hour'")
+    sqlx::query(
+        "UPDATE email_verification_tokens SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'",
+    )
         .execute(&pool)
         .await
         .unwrap();
@@ -312,7 +317,9 @@ async fn resend_revokes_prior_token_and_issues_a_working_one() {
         Err(registration::VerifyError::InvalidOrExpired)
     );
     // Fresh token works.
-    registration::verify_email(Some(&pool), &second_token).await.unwrap();
+    registration::verify_email(Some(&pool), &second_token)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

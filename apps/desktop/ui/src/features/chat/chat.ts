@@ -17,6 +17,8 @@ export interface ChatMessage {
   requestId?: string;
   /** Explains a failed reply without a second source of truth. */
   failure?: string;
+  /** Model profile active when this assistant reply was generated. */
+  profileId?: string;
 }
 
 export type ComposerErrorCode = "empty" | "too_long" | "busy";
@@ -71,6 +73,7 @@ export function createAssistantMessage(
   id: string,
   requestId: string,
   createdAt: number,
+  profileId?: string | null,
 ): ChatMessage {
   return {
     id,
@@ -79,6 +82,7 @@ export function createAssistantMessage(
     createdAt,
     state: "streaming",
     requestId,
+    ...(profileId ? { profileId } : {}),
   };
 }
 

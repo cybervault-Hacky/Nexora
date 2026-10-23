@@ -410,7 +410,10 @@ pub async fn verify_email(pool: Option<&PgPool>, raw_token: &str) -> Result<(), 
         return Err(VerifyError::InvalidOrExpired);
     }
 
-    transaction.commit().await.map_err(|_| VerifyError::Internal)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| VerifyError::Internal)?;
     Ok(())
 }
 
@@ -474,7 +477,7 @@ pub async fn resend_verification(
 fn is_unique_violation(error: &sqlx::Error) -> bool {
     match error {
         sqlx::Error::Database(database_error) => {
-            if let Some(pg) = database_error.downcast_ref::<PgDatabaseError>() {
+            if let Some(pg) = database_error.try_downcast_ref::<PgDatabaseError>() {
                 pg.code() == "23505"
             } else {
                 database_error.code().as_deref() == Some("23505")
@@ -502,7 +505,17 @@ mod tests {
 
     #[test]
     fn validate_email_rejects_bad_shapes_without_echoing_long_input() {
-        for bad in ["", "   ", "nope", "a@b", "a@@b.com", "a b@c.com", "@b.com", "a@.com", "a@b."] {
+        for bad in [
+            "",
+            "   ",
+            "nope",
+            "a@b",
+            "a@@b.com",
+            "a b@c.com",
+            "@b.com",
+            "a@.com",
+            "a@b.",
+        ] {
             assert!(validate_email(bad).is_err(), "{bad:?} should fail");
         }
         let long = format!("{}@example.test", "a".repeat(300));
@@ -542,7 +555,11 @@ mod tests {
         let digest = hash_verification_token(&token);
         assert_eq!(digest.len(), 32);
         assert_ne!(digest, token.as_bytes());
-        assert_eq!(digest, hash_verification_token(&token), "hash is deterministic");
+        assert_eq!(
+            digest,
+            hash_verification_token(&token),
+            "hash is deterministic"
+        );
     }
 
     #[test]

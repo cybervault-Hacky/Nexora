@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { ApertureMark } from "./ApertureMark";
 import { Icon } from "./Icon";
 import { isDesktopShell } from "../lib/ipc";
+import { applyThemePreference, readPersistedTheme, type ThemeMode } from "../lib/theme";
 import {
   closeWindow,
   minimizeWindow,
@@ -12,17 +14,11 @@ interface TitleBarProps {
   pageLabel: string;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  /** Hidden on the welcome flow, which renders without the workspace sidebar. */
   showSidebarToggle?: boolean;
 }
 
 /**
- * Custom window chrome.
- *
- * Drag regions are isolated: only the dedicated `data-tauri-drag-region`
- * elements start a window drag, so buttons inside the bar stay clickable.
- * Windows itself handles double-click-to-maximize on a drag region, so no
- * manual handler is attached (doing both toggled the window twice).
+ * Custom desktop window chrome styled in neutral ChatGPT charcoal/light tones.
  */
 export function TitleBar({
   pageLabel,
@@ -31,6 +27,15 @@ export function TitleBar({
   showSidebarToggle = true,
 }: TitleBarProps) {
   const desktop = isDesktopShell();
+  const [theme, setTheme] = useState<ThemeMode>(() => readPersistedTheme());
+
+  useEffect(() => {
+    applyThemePreference(theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
 
   return (
     <header className="titlebar">
@@ -51,16 +56,26 @@ export function TitleBar({
         <span className="titlebar__toggle titlebar__toggle--hidden" aria-hidden="true" />
       )}
 
-      <div className="titlebar__drag" data-tauri-drag-region>
+      <div className="titlebar__drag" data-tauri-drag-region="true">
         <ApertureMark size={16} className="titlebar__mark" />
-        <span className="titlebar__wordmark">nexora</span>
+        <span className="titlebar__wordmark">Nexora</span>
         <span className="titlebar__rule" aria-hidden="true" />
         <span className="titlebar__context">{pageLabel}</span>
       </div>
 
-      <div className="titlebar__spacer" data-tauri-drag-region />
+      <div className="titlebar__spacer" data-tauri-drag-region="true" />
 
       <div className="titlebar__right">
+        <button
+          type="button"
+          className="titlebar__toggle"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        >
+          <Icon name={theme === "dark" ? "sun" : "moon"} size={15} />
+        </button>
+
         <span
           className="badge badge--local"
           title="No cloud service is used for inference"

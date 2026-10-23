@@ -21,8 +21,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 static UNIQUE: AtomicUsize = AtomicUsize::new(0);
 
 /// Synthetic, collision-resistant fixture email — never a real address.
@@ -41,8 +39,7 @@ async fn test_pool() -> sqlx::PgPool {
         .connect(&url)
         .await
         .expect("could not connect to the test database (is PostgreSQL running?)");
-    MIGRATIONS
-        .run(&pool)
+    nexora_auth::run_migrations(&pool)
         .await
         .expect("migrations must apply cleanly");
     pool
@@ -57,7 +54,10 @@ async fn migrations_apply_in_order_and_are_recorded() {
         .fetch_all(&pool)
         .await
         .unwrap();
-    assert!(rows.len() >= 3, "all migrations through 23C must be recorded");
+    assert!(
+        rows.len() >= 3,
+        "all migrations through 23C must be recorded"
+    );
 
     let users = sqlx::query("SELECT to_regclass('users')::text AS name")
         .fetch_one(&pool)
@@ -85,15 +85,13 @@ async fn users_constraints_hold() {
 
     // Valid row with a synthetic (clearly fake) PHC-shaped hash string.
     let email = unique_email("with-hash");
-    sqlx::query(
-        "INSERT INTO users (display_name, email, password_hash) VALUES ($1, $2, $3)",
-    )
-    .bind("Test Person")
-    .bind(&email)
-    .bind("$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$kY7sRplaceholderfixtureonly")
-    .execute(&pool)
-    .await
-    .expect("valid insert must succeed");
+    sqlx::query("INSERT INTO users (display_name, email, password_hash) VALUES ($1, $2, $3)")
+        .bind("Test Person")
+        .bind(&email)
+        .bind("$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$kY7sRplaceholderfixtureonly")
+        .execute(&pool)
+        .await
+        .expect("valid insert must succeed");
 
     // OAuth-only shape: password_hash NULL is allowed.
     sqlx::query("INSERT INTO users (display_name, email) VALUES ($1, $2)")
@@ -117,7 +115,10 @@ async fn users_constraints_hold() {
         .bind("Ada@Example.Test")
         .execute(&pool)
         .await;
-    assert!(unnormalized.is_err(), "non-normalized email must be rejected");
+    assert!(
+        unnormalized.is_err(),
+        "non-normalized email must be rejected"
+    );
 
     // Empty display name rejected.
     let empty_name = sqlx::query("INSERT INTO users (display_name, email) VALUES ($1, $2)")
@@ -128,14 +129,13 @@ async fn users_constraints_hold() {
     assert!(empty_name.is_err(), "blank display name must be rejected");
 
     // Unknown status rejected.
-    let bad_status = sqlx::query(
-        "INSERT INTO users (display_name, email, status) VALUES ($1, $2, $3)",
-    )
-    .bind("Status Bad")
-    .bind(unique_email("bad-status"))
-    .bind("admin")
-    .execute(&pool)
-    .await;
+    let bad_status =
+        sqlx::query("INSERT INTO users (display_name, email, status) VALUES ($1, $2, $3)")
+            .bind("Status Bad")
+            .bind(unique_email("bad-status"))
+            .bind("admin")
+            .execute(&pool)
+            .await;
     assert!(bad_status.is_err(), "unknown status must be rejected");
 }
 

@@ -56,15 +56,20 @@ pub enum PasswordError {
     VerificationFailed,
 }
 
-impl std::fmt::Display for PasswordError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
+impl PasswordError {
+    pub fn message(&self) -> &'static str {
+        match self {
             Self::TooShort => "Password must be at least 8 characters.",
             Self::TooLong => "Password must be at most 128 characters.",
             Self::HashingFailed => "Password hashing failed.",
             Self::VerificationFailed => "Password verification failed.",
-        };
-        f.write_str(text)
+        }
+    }
+}
+
+impl std::fmt::Display for PasswordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
     }
 }
 
@@ -88,7 +93,7 @@ pub fn validate_new_password(password: &str) -> Result<(), PasswordError> {
     if length < PASSWORD_MIN_LENGTH {
         return Err(PasswordError::TooShort);
     }
-    if length > PASSWORD_MAX_LENGTH {
+    if length > PASSWORD_MAX_LENGTH || password.len() > PASSWORD_MAX_LENGTH {
         return Err(PasswordError::TooLong);
     }
     Ok(())
@@ -114,7 +119,7 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
 /// candidate — returns the same generic `VerificationFailed`. Callers must
 /// surface only that generic failure.
 pub fn verify_password(password: &str, encoded_hash: &str) -> Result<(), PasswordError> {
-    if password.chars().count() > PASSWORD_MAX_LENGTH {
+    if password.chars().count() > PASSWORD_MAX_LENGTH || password.len() > PASSWORD_MAX_LENGTH {
         return Err(PasswordError::VerificationFailed);
     }
     let parsed = PasswordHash::new(encoded_hash).map_err(|_| PasswordError::VerificationFailed)?;
@@ -135,10 +140,22 @@ mod tests {
     #[test]
     fn hash_succeeds_for_valid_input() {
         let encoded = hash_password(FIXTURE).unwrap();
-        assert!(encoded.starts_with("$argon2id$"), "PHC algorithm tag: {encoded}");
-        assert!(encoded.contains("m=19456"), "encoded params record m: {encoded}");
-        assert!(encoded.contains("t=2"), "encoded params record t: {encoded}");
-        assert!(encoded.contains("p=1"), "encoded params record p: {encoded}");
+        assert!(
+            encoded.starts_with("$argon2id$"),
+            "PHC algorithm tag: {encoded}"
+        );
+        assert!(
+            encoded.contains("m=19456"),
+            "encoded params record m: {encoded}"
+        );
+        assert!(
+            encoded.contains("t=2"),
+            "encoded params record t: {encoded}"
+        );
+        assert!(
+            encoded.contains("p=1"),
+            "encoded params record p: {encoded}"
+        );
     }
 
     #[test]
@@ -195,10 +212,7 @@ mod tests {
 
     #[test]
     fn rejects_passwords_outside_policy() {
-        assert_eq!(
-            hash_password("short"),
-            Err(PasswordError::TooShort)
-        );
+        assert_eq!(hash_password("short"), Err(PasswordError::TooShort));
         let long = "x".repeat(PASSWORD_MAX_LENGTH + 1);
         assert_eq!(hash_password(&long), Err(PasswordError::TooLong));
     }

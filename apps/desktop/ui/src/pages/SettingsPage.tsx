@@ -11,6 +11,8 @@ export interface SettingsPageProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   workspacePath: string | null;
+  theme?: "dark" | "light";
+  onToggleTheme?: () => void;
   founderModeEnabled?: boolean;
   onToggleFounderMode?: () => void;
   codeLigatures?: boolean;
@@ -38,6 +40,8 @@ export function SettingsPage({
   sidebarCollapsed,
   onToggleSidebar,
   workspacePath,
+  theme = "dark",
+  onToggleTheme,
   founderModeEnabled = false,
   onToggleFounderMode,
   codeLigatures = false,
@@ -119,19 +123,41 @@ export function SettingsPage({
           </div>
           <div className="settings-row settings-row--static">
             <span>
-              <span className="settings-row__label">Edition & Licensing</span>
+              <span className="settings-row__label">Plans, Subscriptions & Licensing</span>
               <span className="settings-row__hint">
-                View plan details, feature matrices, or activate an offline Pro/Team licence key.
+                Manage your Nexora subscription plan, daily model quotas, or air-gapped licence key.
               </span>
             </span>
-            <RouterLink to="licensing" className="button button--ghost button--sm">
-              <Icon name="shield" size={12} /> View Plans & Licences
-            </RouterLink>
+            <div style={{ display: "flex", gap: 8 }}>
+              <RouterLink to="plans" className="button button--primary button--sm">
+                Plans & Billing
+              </RouterLink>
+              <RouterLink to="licensing" className="button button--ghost button--sm">
+                <Icon name="shield" size={12} /> View Plans & Licences
+              </RouterLink>
+            </div>
           </div>
         </section>
 
         <section className="settings-group" aria-label="Interface">
           <h2 className="settings-group__title">Interface</h2>
+          {onToggleTheme && (
+            <div className="settings-row settings-row--static">
+              <span>
+                <span className="settings-row__label">Color theme</span>
+                <span className="settings-row__hint">
+                  Neutral {theme === "light" ? "Light" : "Dark"} desktop palette active.
+                </span>
+              </span>
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={onToggleTheme}
+              >
+                Switch to {theme === "dark" ? "Light" : "Dark"} theme
+              </button>
+            </div>
+          )}
           <label className="settings-row">
             <span>
               <span className="settings-row__label">Collapse sidebar</span>

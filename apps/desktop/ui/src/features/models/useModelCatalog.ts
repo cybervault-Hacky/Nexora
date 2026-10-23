@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelCatalog as CatalogPayload, ModelCatalogEntry } from "../../lib/ipc";
 import { fetchModelCatalog, selectModel, toInferenceError } from "../../lib/inference";
+import { isApprovedProfileId } from "./readiness";
 
 export interface ModelCatalog {
   entries: ModelCatalogEntry[];
-  /** The selected row, or null while loading or when the core is unavailable. */
+  /** The selected row, or null while loading or when no approved profile matches. */
   selected: ModelCatalogEntry | null;
   loading: boolean;
   error: string | null;
@@ -30,7 +31,9 @@ export interface ModelCatalog {
  *
  * The core owns every availability decision. This hook only caches the answer
  * and forwards an explicit selection; it never infers that a model is ready
- * because a profile exists, and it never falls back to another model.
+ * because a profile exists, never accepts unapproved model IDs, never falls
+ * back to another model when a selection is missing/mismatched, and discards
+ * stale out-of-order asynchronous responses via monotonic sequence counters.
  */
 export function useModelCatalog(refreshKey = 0): ModelCatalog {
   const [entries, setEntries] = useState<ModelCatalogEntry[]>([]);
@@ -43,25 +46,49 @@ export function useModelCatalog(refreshKey = 0): ModelCatalog {
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
+  const mountedRef = useRef(true);
+  const fetchSeqRef = useRef(0);
+  const selectSeqRef = useRef(0);
+
   useEffect(() => {
-    let active = true;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const seq = ++fetchSeqRef.current;
 
     setLoading(true);
 
     fetchModelCatalog()
       .then((next: CatalogPayload) => {
-        if (!active) return;
+        if (!mountedRef.current || seq !== fetchSeqRef.current) return;
 
-        setEntries(Array.isArray(next?.entries) ? next.entries : []);
-        setSelectionError(next?.selectionError ?? null);
+        const rawEntries = Array.isArray(next?.entries) ? next.entries : [];
+        const approvedEntries = rawEntries.filter((entry) =>
+          isApprovedProfileId(entry?.profile?.id),
+        );
+        const hasApprovedSelection = approvedEntries.some((entry) => entry.selected);
+        const derivedSelectionError =
+          next?.selectionError ??
+          (rawEntries.length > 0 && !hasApprovedSelection
+            ? "The configured model profile is unrecognized or unavailable. Select Nexora Mini or Nexora Sonnet before sending."
+            : null);
+
+        setEntries(approvedEntries);
+        setSelectionError(derivedSelectionError);
         setRunning(Boolean(next?.running));
-        setLoadedProfileId(next?.loadedProfileId ?? null);
+        setLoadedProfileId(
+          isApprovedProfileId(next?.loadedProfileId) ? (next?.loadedProfileId ?? null) : null,
+        );
         setError(null);
       })
       .catch((cause: unknown) => {
-        if (!active) return;
+        if (!mountedRef.current || seq !== fetchSeqRef.current) return;
 
-        // A browser preview has no core; that is not an error to shout about.
+        // A browser preview has no core; clear stale state instead of guessing.
         setEntries([]);
         setSelectionError(null);
         setRunning(false);
@@ -69,12 +96,10 @@ export function useModelCatalog(refreshKey = 0): ModelCatalog {
         setError(toInferenceError(cause).message);
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (mountedRef.current && seq === fetchSeqRef.current) {
+          setLoading(false);
+        }
       });
-
-    return () => {
-      active = false;
-    };
   }, [attempt, refreshKey]);
 
   const reload = useCallback(() => {
@@ -84,20 +109,35 @@ export function useModelCatalog(refreshKey = 0): ModelCatalog {
   const dismissSwitchError = useCallback(() => setSwitchError(null), []);
 
   const select = useCallback(async (id: string) => {
+    const trimmed = id.trim();
+    const mySeq = ++selectSeqRef.current;
+
+    if (!isApprovedProfileId(trimmed)) {
+      if (mountedRef.current && mySeq === selectSeqRef.current) {
+        setSwitchError(`No approved model profile is registered as "${trimmed || id}".`);
+        setSelecting(false);
+      }
+      return;
+    }
+
     setSelecting(true);
 
     try {
-      await selectModel(id);
+      await selectModel(trimmed);
+      if (!mountedRef.current || mySeq !== selectSeqRef.current) return;
       setSwitchError(null);
       // Re-read rather than assuming: the core recomputes every status.
       setAttempt((value) => value + 1);
     } catch (cause: unknown) {
+      if (!mountedRef.current || mySeq !== selectSeqRef.current) return;
       // The core owns this rule. Showing its sentence keeps the selector from
       // looking switched when the selection never changed.
       setSwitchError(toInferenceError(cause).message);
       setAttempt((value) => value + 1);
     } finally {
-      setSelecting(false);
+      if (mountedRef.current && mySeq === selectSeqRef.current) {
+        setSelecting(false);
+      }
     }
   }, []);
 

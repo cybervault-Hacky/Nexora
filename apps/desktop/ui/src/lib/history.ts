@@ -8,6 +8,7 @@ export interface HistoryMessage {
   createdAt: number;
   state?: string;
   failure?: string;
+  profileId?: string;
 }
 
 export interface PersistedConversation {
@@ -79,7 +80,8 @@ function validateBrowserFile(file: FallbackFile): void {
         !["user","assistant"].includes(m.role) || typeof m.content !== "string" ||
         Array.from(m.content).length > 400_000 || !timestamp(m.createdAt) ||
         (m.state !== undefined && !["complete","stopped","streaming","error"].includes(m.state)) ||
-        (m.failure !== undefined && (typeof m.failure !== "string" || Array.from(m.failure).length > 2000)))
+        (m.failure !== undefined && (typeof m.failure !== "string" || Array.from(m.failure).length > 2000)) ||
+        (m.profileId !== undefined && (typeof m.profileId !== "string" || !isValidProfileId(m.profileId))))
         throw new Error("Invalid message");
       messageIds.add(m.id);
     }
@@ -119,6 +121,10 @@ function isValidId(id: string): boolean {
   return id.length > 0 && id.length <= 128 && /^[A-Za-z0-9_-]+$/.test(id);
 }
 
+function isValidProfileId(id: string): boolean {
+  return id.length > 0 && id.length <= 128 && id !== "." && !id.includes("..") && /^[A-Za-z0-9._-]+$/.test(id);
+}
+
 function sanitizeTitle(title: string): string {
   const t = title.trim();
   if (t.length === 0) return "New conversation";
@@ -146,6 +152,18 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
+function derivePreview(messages: readonly HistoryMessage[]): string {
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const trimmed = messages[idx]?.content.trim() ?? "";
+    if (trimmed.length > 0) {
+      const firstLine = trimmed.split("\n")[0]?.trim() ?? "";
+      const slice = Array.from(firstLine).slice(0, 120).join("");
+      if (slice.length > 0) return slice;
+    }
+  }
+  return Array.from(messages[0]?.content ?? "").slice(0, 120).join("");
+}
+
 async function listConversationsImpl(): Promise<ConversationSummary[]> {
   if (!isDesktopShell()) {
     const file = fallbackLoad();
@@ -157,12 +175,13 @@ async function listConversationsImpl(): Promise<ConversationSummary[]> {
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
         messageCount: c.messages.length,
-        preview: c.messages.length > 0 ? c.messages[c.messages.length - 1]!.content.slice(0, 120) : "",
+        preview: derivePreview(c.messages),
       }));
     summaries.sort((a, b) => b.updatedAt - a.updatedAt);
     return summaries;
   }
-  return call<ConversationSummary[]>("list_conversations");
+  const res = await call<unknown>("list_conversations");
+  return Array.isArray(res) ? (res as ConversationSummary[]) : [];
 }
 
 async function loadConversationImpl(id: string): Promise<PersistedConversation> {
@@ -261,7 +280,7 @@ async function renameConversationImpl(id: string, title: string): Promise<Conver
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       messageCount: conv.messages.length,
-      preview: conv.messages.length > 0 ? conv.messages[conv.messages.length - 1]!.content.slice(0, 120) : "",
+      preview: derivePreview(conv.messages),
     };
   }
   return call<ConversationSummary>("rename_conversation", { id, title });

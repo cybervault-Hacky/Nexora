@@ -1,10 +1,15 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const invokeMock = vi.fn();
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args),
+}));
+
 vi.mock("./lib/inference", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/inference")>();
-
   return {
     ...actual,
     fetchStatus: vi.fn(),
@@ -26,151 +31,154 @@ vi.mock("./lib/inference", async (importOriginal) => {
 
 vi.mock("./lib/history", () => ({
   listConversations: async () => [],
-  createConversation: async () => ({ id: "new-chat-id", title: "New conversation", createdAt: Date.now(), updatedAt: Date.now(), messages: [] }),
+  createConversation: async () => ({
+    id: "chat-direct-1",
+    title: "New conversation",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [],
+  }),
   saveConversation: async (c: import("./lib/history").PersistedConversation) => c,
-  loadConversation: async () => { throw { code: "not_found", message: "Not found" }; },
-  renameConversation: async () => { throw { code: "not_found", message: "Not found" }; },
+  loadConversation: async () => {
+    throw { code: "not_found", message: "Not found" };
+  },
+  renameConversation: async () => {
+    throw { code: "not_found", message: "Not found" };
+  },
   deleteConversation: async () => true,
 }));
 
 import App from "./App";
-import { fetchStatus, fetchSystemInfo } from "./lib/inference";
-import { makeStatus, markDesktop } from "./test/fixtures";
+import { fetchStatus, generate } from "./lib/inference";
+import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
-const systemMock = vi.mocked(fetchSystemInfo);
+const generateMock = vi.mocked(generate);
 
-/** Sets the route the way a deep link or refresh would, before render. */
-function goto(hash: string) {
-  act(() => {
-    window.location.hash = hash;
-    window.dispatchEvent(new Event("hashchange"));
+describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_get_session") {
+        return { user: null, authenticated: false };
+      }
+      if (cmd === "get_usage_status") {
+        return makeUsage();
+      }
+      if (cmd === "clear_symbol_index" || cmd === "clear_analysis_graph") {
+        return true;
+      }
+      return undefined;
+    });
+    statusMock.mockReset();
+    statusMock.mockResolvedValue(makeStatus({ state: "ready" }));
+    generateMock.mockReset();
+    markDesktop(true);
+    window.location.hash = "";
+    act(() => {
+      window.dispatchEvent(new Event("hashchange"));
+    });
   });
-}
 
-beforeEach(() => {
-  statusMock.mockReset();
-  statusMock.mockResolvedValue(makeStatus({ state: "ready" }));
-  systemMock.mockReset();
-  systemMock.mockResolvedValue({
-    totalRamGib: 32,
-    availableRamGib: 20.5,
-    platform: "windows",
-  });
-  markDesktop(false);
-  window.location.hash = "";
-});
-
-describe("Phase 20 welcome & onboarding flow", () => {
-  it("opens the app on the Welcome screen", async () => {
+  it("opens directly into the main Chat interface with zero welcome screen or forced modal", async () => {
     render(<App />);
 
-    expect(
-      await screen.findByRole("heading", { name: "Code with an AI that runs on your machine." }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
-    expect(screen.getByText(/llama\.cpp runtime and GGUF model/i)).toBeTruthy();
-    // The flow is outside the workspace shell: no sidebar navigation or composer.
-    expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
-    expect(screen.queryByRole("form", { name: "Message composer" })).toBeNull();
-  });
-
-  it("describes local-first capabilities without a cloud claim", async () => {
-    render(<App />);
-
-    await screen.findByRole("heading", { name: "Code with an AI that runs on your machine." });
-    expect(screen.getByText(/does not send them to a cloud service/i)).toBeTruthy();
-    expect(screen.getByRole("list", { name: "What Nexora includes" })).toBeTruthy();
-  });
-
-  it("hides the sidebar toggle on the flow but keeps window chrome", async () => {
-    render(<App />);
-
-    await screen.findByRole("heading", { name: "Code with an AI that runs on your machine." });
-    expect(screen.queryByRole("button", { name: "Collapse sidebar" })).toBeNull();
-    expect(screen.getAllByText(/nexora/i).length).toBeGreaterThan(0);
-  });
-
-  it("Continue advances to the honest onboarding-next screen", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    await screen.findByRole("heading", { name: "Code with an AI that runs on your machine." });
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(window.location.hash).toBe("#/onboarding");
-    expect(await screen.findByRole("heading", { name: "Sign-in is the next step." })).toBeTruthy();
-    expect(screen.getByText(/not part of this build/i)).toBeTruthy();
-    // Honest placeholder, not a fake authentication form.
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByLabelText(/password/i)).toBeNull();
-    expect(screen.getByRole("note", { name: "Upcoming sign-in" })).toBeTruthy();
-  });
-
-  it("Back returns to Welcome and the workspace action opens Home", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    goto("#/onboarding");
-
-    await screen.findByRole("heading", { name: "Sign-in is the next step." });
-
-    await user.click(screen.getByRole("button", { name: "Back to Welcome" }));
-    expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
-    expect(window.location.hash).toBe("#/welcome");
-
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByRole("heading", { name: "Sign-in is the next step." });
-    await user.click(screen.getByRole("button", { name: "Open the workspace" }));
-
-    expect(await screen.findByRole("heading", { name: "Welcome to Nexora" })).toBeTruthy();
-    expect(window.location.hash).toBe("#/home");
-    expect(screen.getByRole("navigation", { name: "Primary" })).toBeTruthy();
-  });
-
-  it("renders onboarding on direct load or refresh without breaking", async () => {
-    render(<App />);
-    goto("#/onboarding");
-
-    expect(await screen.findByRole("heading", { name: "Sign-in is the next step." })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Back to Welcome" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open the workspace" })).toBeTruthy();
-  });
-
-  it("keeps unknown routes graceful from the flow entry", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    goto("#/definitely-not-a-page");
-
-    expect(await screen.findByRole("heading", { name: "Page not found." })).toBeTruthy();
-    await user.click(screen.getByRole("link", { name: /Return to Home/i }));
-    expect(await screen.findByRole("heading", { name: "Welcome to Nexora" })).toBeTruthy();
-    expect(window.location.hash).toBe("#/home");
-  });
-
-  it("supports keyboard use of the primary Continue action", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    await screen.findByRole("heading", { name: "Code with an AI that runs on your machine." });
-
-    await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Continue" }));
-    await user.keyboard("{Enter}");
-
-    expect(await screen.findByRole("heading", { name: "Sign-in is the next step." })).toBeTruthy();
-    expect(window.location.hash).toBe("#/onboarding");
-  });
-
-  it("leaves the workspace pages and their navigation intact", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    goto("#/home");
-
-    await screen.findByRole("heading", { name: "Welcome to Nexora" });
-    await user.click(screen.getByRole("link", { name: "AI Chat" }));
     expect(await screen.findByRole("region", { name: "Conversation messages" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Message Nexora" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Primary" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 
-    await user.click(screen.getByRole("link", { name: "Projects" }));
-    expect(await screen.findByRole("complementary", { name: "Project explorer" })).toBeTruthy();
+  it("allows signed-out users to send local chat prompts directly without forced sign-in", async () => {
+    generateMock.mockImplementation(async (request, onEvent) => {
+      onEvent({ type: "delta", requestId: request.requestId, text: "Local Rust stream answer." });
+      return {
+        requestId: request.requestId,
+        finishReason: "stop",
+        cancelled: false,
+      };
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByRole("textbox", { name: "Message Nexora" });
+    await user.type(composer, "Explain zero-copy parsing in Rust");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(screen.queryByTestId("auth-modal")).toBeNull();
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(
+      await within(screen.getByRole("main")).findByText("Local Rust stream answer."),
+    ).toBeTruthy();
+  });
+
+  it("opens centred floating AuthModal when explicitly requested and preserves the unsent prompt across dismiss and login", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_get_session") {
+        return { user: null, authenticated: false };
+      }
+      if (cmd === "auth_login") {
+        return {
+          id: "u-ada",
+          name: "Ada Lovelace",
+          email: "ada@example.com",
+          emailVerified: true,
+        };
+      }
+      if (cmd === "usage_get_server_summary") {
+        return {
+          planId: "free",
+          planName: "Free",
+          periodDayUtc: "2026-10-22",
+          resetsAtUtc: "2026-10-23T00:00:00Z",
+          models: [
+            { modelId: "nexora-mini", dailyLimit: 25, used: 1, reserved: 0, remaining: 24 },
+            { modelId: "nexora-sonnet", dailyLimit: 5, used: 0, reserved: 0, remaining: 5 },
+          ],
+        };
+      }
+      if (cmd === "get_usage_status") return makeUsage();
+      return true;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = (await screen.findByRole("textbox", {
+      name: "Message Nexora",
+    })) as HTMLTextAreaElement;
+
+    const unsentPrompt = "Refactor this async stream parser in Rust without allocations";
+    await user.type(composer, unsentPrompt);
+
+    // 1. User explicitly opens Sign in from sidebar while keeping unsent draft in Composer
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const modal = await screen.findByTestId("auth-modal");
+    expect(modal).toBeTruthy();
+    expect(screen.getByTestId("auth-preserved-prompt")).toBeTruthy();
+    expect(composer.value).toBe(unsentPrompt);
+
+    // Dismissing with Escape leaves active chat & unsent draft intact
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("auth-modal")).toBeNull();
+    expect(composer.value).toBe(unsentPrompt);
+
+    // 2. Re-open and authenticate inside floating modal
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const reopened = await screen.findByTestId("auth-modal");
+    expect(within(reopened).getByRole("button", { name: /Continue with Google/i })).toBeTruthy();
+    expect(within(reopened).getByRole("tab", { name: "Create account" })).toBeTruthy();
+
+    await user.type(within(reopened).getByLabelText("Email address"), "ada@example.com");
+    await user.type(within(reopened).getByLabelText("Password"), "correct horse battery staple");
+    await user.click(within(reopened).getByRole("button", { name: "Sign in" }));
+
+    // 3. Modal closes back onto the exact same Chat view with unsent prompt intact
+    await vi.waitFor(() => {
+      expect(screen.queryByTestId("auth-modal")).toBeNull();
+    });
+    expect(composer.value).toBe(unsentPrompt);
+    expect(await screen.findByLabelText("Daily plan allowance")).toBeTruthy();
   });
 });

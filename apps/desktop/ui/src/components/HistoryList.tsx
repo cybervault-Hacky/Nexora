@@ -29,12 +29,14 @@ export function HistoryList({
     return null;
   }
 
+  const items = Array.isArray(conversations) ? conversations : [];
+
   return (
     <div className="history" aria-label="Conversation history">
       <div className="history__header">
         <h2 className="sidebar__label">Recent</h2>
-        <span className="history__count" aria-label={`${conversations.length} conversations`}>
-          {conversations.length > 0 ? conversations.length : ""}
+        <span className="history__count" aria-label={`${items.length} conversations`}>
+          {items.length > 0 ? items.length : ""}
         </span>
       </div>
 
@@ -50,11 +52,11 @@ export function HistoryList({
             Retry
           </button>
         </div>
-      ) : conversations.length === 0 ? (
+      ) : items.length === 0 ? (
         <p className="sidebar__empty">No conversations yet. Your chats will appear here and persist after restart.</p>
       ) : (
         <ul className="history__list" role="list">
-          {conversations.map((conv) => (
+          {items.map((conv) => (
             <HistoryItem
               key={conv.id}
               conversation={conv}

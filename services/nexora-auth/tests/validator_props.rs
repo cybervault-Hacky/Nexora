@@ -18,7 +18,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.0
     }
     fn byte(&mut self) -> u8 {
@@ -81,7 +84,11 @@ fn acceptances_imply_the_documented_bounds() {
     for input in corpus() {
         if let Ok(email) = validate_email(&input) {
             assert!(email.len() <= 254, "accepted email too long: {email:?}");
-            assert_eq!(email, email.trim().to_lowercase(), "accepted email normalized");
+            assert_eq!(
+                email,
+                email.trim().to_lowercase(),
+                "accepted email normalized"
+            );
             assert!(email.contains('@'));
         }
         if validate_new_password(&input).is_ok() {

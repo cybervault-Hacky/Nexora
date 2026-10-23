@@ -1,7 +1,9 @@
 //! The approved model catalogue for Nexora.
 //!
-//! Two profiles are registered: Nexora Mini (the default, fully approved) and
-//! Nexora Sonnet (a catalogue entry whose artefact has not been approved yet).
+//! Two profiles are registered: Nexora Mini (the default, 7B Q4_K_M) and
+//! Nexora Sonnet (14B Q4_K_M), each pinned to an immutable repository revision,
+//! byte size, and SHA-256 digest with `locally_verified: false` until verified
+//! on real target hardware.
 //! A profile describes an artefact, not a file that is present on this machine:
 //! nothing in this module reads the filesystem, starts a process, downloads
 //! weights, or changes the user's configured model path. A successful
