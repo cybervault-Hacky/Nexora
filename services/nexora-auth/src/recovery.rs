@@ -151,9 +151,8 @@ pub fn validate_reset_request(request: &ResetPasswordRequest) -> Result<(), Reco
             "Reset token must be 64 hexadecimal characters.".to_string(),
         ));
     }
-    password::validate_new_password(&request.password).map_err(|error| {
-        RecoveryError::Validation(error.message().to_string())
-    })
+    password::validate_new_password(&request.password)
+        .map_err(|error| RecoveryError::Validation(error.message().to_string()))
 }
 
 /// Validate a change-password request (pure; no credential checks).
@@ -163,9 +162,8 @@ pub fn validate_change_request(request: &ChangePasswordRequest) -> Result<(), Re
             "Current password is required.".to_string(),
         ));
     }
-    password::validate_new_password(&request.new_password).map_err(|error| {
-        RecoveryError::Validation(error.message().to_string())
-    })?;
+    password::validate_new_password(&request.new_password)
+        .map_err(|error| RecoveryError::Validation(error.message().to_string()))?;
     if request.current_password == request.new_password {
         return Err(RecoveryError::Validation(
             "New password must be different from the current password.".to_string(),
@@ -178,13 +176,12 @@ pub fn validate_change_request(request: &ChangePasswordRequest) -> Result<(), Re
 /// Locked/deleted accounts get no token (they still receive the identical
 /// 202 — enumeration defence).
 async fn eligible_user_id(pool: &PgPool, email: &str) -> Result<Option<String>, RecoveryError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT id::text FROM users WHERE email = $1 AND status = 'active'",
-    )
-    .bind(email)
-    .fetch_optional(pool)
-    .await
-    .map_err(|_| RecoveryError::Internal)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT id::text FROM users WHERE email = $1 AND status = 'active'")
+            .bind(email)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| RecoveryError::Internal)?;
     Ok(row.map(|(id,)| id))
 }
 
@@ -430,7 +427,10 @@ mod tests {
         assert_eq!(token.len(), RESET_TOKEN_HEX_CHARS);
         assert!(is_valid_reset_token_shape(&token));
         assert_ne!(token, generate_reset_token(), "high entropy");
-        assert_eq!(hash_reset_token(&token), session::hash_session_token(&token));
+        assert_eq!(
+            hash_reset_token(&token),
+            session::hash_session_token(&token)
+        );
     }
 
     #[test]
@@ -475,7 +475,10 @@ mod tests {
             token: "not-a-token".to_string(),
             password: "long enough password".to_string(),
         };
-        assert_eq!(validate_reset_request(&bad_token).unwrap_err().code(), "validation_failed");
+        assert_eq!(
+            validate_reset_request(&bad_token).unwrap_err().code(),
+            "validation_failed"
+        );
 
         let short_password = ResetPasswordRequest {
             token: "a".repeat(64),
@@ -483,7 +486,10 @@ mod tests {
         };
         let error = validate_reset_request(&short_password).unwrap_err();
         assert_eq!(error.code(), "validation_failed");
-        assert!(error.message().contains("at least 8"), "existing policy text");
+        assert!(
+            error.message().contains("at least 8"),
+            "existing policy text"
+        );
 
         let ok = ResetPasswordRequest {
             token: generate_reset_token(),

@@ -78,6 +78,8 @@ pub struct StoredMessage {
     pub state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +130,14 @@ pub fn is_valid_id(id: &str) -> bool {
     // Allow alphanumeric, dash, underscore — covers UUID and fallbackId
     id.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub fn is_valid_profile_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 128 || id == "." || id.contains("..") {
+        return false;
+    }
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub fn sanitize_title(raw: &str) -> String {
@@ -189,6 +199,13 @@ pub fn validate_message(msg: &StoredMessage) -> HistoryResult<()> {
     if let Some(failure) = &msg.failure {
         if failure.chars().count() > 2000 {
             return Err(HistoryError::invalid_request("Failure message too long"));
+        }
+    }
+    if let Some(profile_id) = &msg.profile_id {
+        if !is_valid_profile_id(profile_id) {
+            return Err(HistoryError::invalid_request(
+                "Invalid model profile identifier.",
+            ));
         }
     }
     Ok(())
@@ -296,6 +313,11 @@ fn atomic_write(path: &Path, content: &[u8]) -> HistoryResult<()> {
         .map_err(|_| HistoryError::storage("Could not create history directory."))?;
     let mut tmp = tempfile::NamedTempFile::new_in(parent)
         .map_err(|_| HistoryError::storage("Could not create temporary history file."))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600));
+    }
     tmp.write_all(content)
         .and_then(|_| tmp.as_file().sync_all())
         .map_err(|_| {
@@ -597,6 +619,7 @@ mod tests {
             created_at: now_millis(),
             state: Some("complete".to_string()),
             failure: None,
+            profile_id: None,
         }
     }
 
@@ -771,6 +794,7 @@ mod tests {
                 created_at: now_millis(),
                 state: None,
                 failure: None,
+                profile_id: None,
             }],
         });
 
@@ -969,6 +993,7 @@ mod tests {
             created_at: now_millis(),
             state: Some("streaming".to_string()),
             failure: None,
+            profile_id: None,
         });
         let saved = store.save(conv).expect("save");
         assert_eq!(saved.messages[0].state.as_deref(), Some("stopped"));
@@ -982,6 +1007,7 @@ mod tests {
             created_at: now_millis(),
             state: Some("streaming".to_string()),
             failure: None,
+            profile_id: None,
         });
         let saved2 = store.save(conv2).expect("save2");
         assert_eq!(saved2.messages[0].state.as_deref(), Some("stopped"));
@@ -1081,5 +1107,81 @@ mod tests {
         assert!(store.create(None).is_err());
         assert!(store.delete("anything").is_err());
         assert_eq!(fs::read(&path).expect("preserved"), data);
+    }
+
+    #[test]
+    fn persists_profile_id_and_handles_concurrent_operations_safely() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().expect("dir");
+        let store = Arc::new(HistoryStore::new(dir.path().to_path_buf()));
+
+        let mut threads = Vec::new();
+        for idx in 0..8usize {
+            let store_clone = Arc::clone(&store);
+            threads.push(thread::spawn(move || {
+                let mut conv = store_clone
+                    .create(Some(format!("Thread chat {idx}")))
+                    .expect("create");
+                conv.messages.push(StoredMessage {
+                    id: format!("u-{idx}"),
+                    role: "user".to_string(),
+                    content: format!("Prompt {idx}"),
+                    created_at: 1_000 + idx as u64,
+                    state: Some("complete".to_string()),
+                    failure: None,
+                    profile_id: None,
+                });
+                conv.messages.push(StoredMessage {
+                    id: format!("a-{idx}"),
+                    role: "assistant".to_string(),
+                    content: format!("Reply {idx}"),
+                    created_at: 2_000 + idx as u64,
+                    state: Some("complete".to_string()),
+                    failure: None,
+                    profile_id: Some("nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m".to_string()),
+                });
+                store_clone.save(conv).expect("save").id
+            }));
+        }
+
+        let created_ids: Vec<String> = threads
+            .into_iter()
+            .map(|h| h.join().expect("join"))
+            .collect();
+        assert_eq!(created_ids.len(), 8);
+
+        // Reopen across simulated restart and confirm every conversation, order, and profile_id survived intact.
+        let reopened = HistoryStore::new(dir.path().to_path_buf());
+        assert_eq!(reopened.list().expect("list").len(), 8);
+        for (idx, id) in created_ids.iter().enumerate() {
+            let loaded = reopened.load(id).expect("load");
+            assert_eq!(loaded.messages.len(), 2);
+            assert_eq!(loaded.messages[0].content, format!("Prompt {idx}"));
+            assert_eq!(loaded.messages[1].content, format!("Reply {idx}"));
+            assert_eq!(
+                loaded.messages[1].profile_id.as_deref(),
+                Some("nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m")
+            );
+        }
+
+        // Invalid profile_id values (slashes, ".", "..", traversal dots) are rejected before touching disk.
+        for invalid_pid in ["bad profile/with slash", ".", "..", "qwen..bad"] {
+            let mut bad = reopened.load(&created_ids[0]).expect("load 0");
+            bad.messages[1].profile_id = Some(invalid_pid.to_string());
+            assert_eq!(reopened.save(bad).unwrap_err().code, "invalid_request");
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dir.path().join(CONVERSATIONS_FILE))
+                .expect("meta")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 }

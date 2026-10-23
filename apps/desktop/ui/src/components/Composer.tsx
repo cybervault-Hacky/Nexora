@@ -19,11 +19,11 @@ interface ComposerProps {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   /** True while a model reply is streaming. */
   busy: boolean;
-  /** False when no model is loaded, so sending is disabled with a reason. */
+  /** False when no model is loaded or local daily allowance is exhausted. */
   canGenerate: boolean;
   /**
    * Why sending is blocked when the engine itself is ready — today the daily
-   * allowance. Null/undefined keeps the engine wording.
+   * allowance or a model mismatch. Null/undefined keeps the engine wording.
    */
   blockedReason?: string | null;
   onChange: (value: string) => void;
@@ -101,7 +101,7 @@ export function Composer({
           rows={1}
           placeholder={
             canGenerate
-              ? "Describe what you want to build…"
+              ? "Ask anything…"
               : (blockedReason ?? "Load a local model to start")
           }
           aria-describedby="composer-help composer-status"
@@ -198,7 +198,7 @@ export function Composer({
       ) : null}
 
       <p className="composer__help" id="composer-help">
-        Enter to send · Shift + Enter for a new line · Esc to stop · Ctrl + L to focus
+        Enter to send · Shift + Enter for a new line · Esc to stop · Ctrl + K to search
       </p>
     </form>
   );

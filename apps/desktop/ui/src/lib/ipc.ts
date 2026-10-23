@@ -81,6 +81,8 @@ export const READINESS_STATES = [
   "ready_to_download",
   "downloading",
   "download_incomplete",
+  "download_cancelled",
+  "verifying",
   "verification_failed",
   "unverified",
   "downloaded_verified",

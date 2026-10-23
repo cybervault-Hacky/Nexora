@@ -1,78 +1,130 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AuthModal, type AuthModalMode } from "./components/AuthModal";
+import { ConversationSearchModal } from "./components/ConversationSearchModal";
 import { Icon } from "./components/Icon";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
-import { AccountPage } from "./pages/AccountPage";
-import { ChatPage } from "./pages/ChatPage";
-import { CodeIntelligencePage } from "./pages/CodeIntelligencePage";
-import { CreateAccountPage } from "./pages/CreateAccountPage";
-import { FounderPage } from "./pages/FounderPage";
-import { HomePage } from "./pages/HomePage";
-import { LicensingPage } from "./pages/LicensingPage";
-import { ModelManagerPage } from "./pages/ModelManagerPage";
-import { NotFoundPage } from "./pages/NotFoundPage";
-import { OnboardingPage } from "./pages/OnboardingPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { RecoverPasswordPage } from "./pages/RecoverPasswordPage";
-import { ResetPasswordPage } from "./pages/ResetPasswordPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { SignInPage } from "./pages/SignInPage";
-import { VerifyEmailPage } from "./pages/VerifyEmailPage";
-import { WelcomePage } from "./pages/WelcomePage";
+import { useAuth } from "./features/auth/useAuth";
 import { usePersistentConversation } from "./features/chat/usePersistentConversation";
-import { useWorkspace } from "./features/workspace/useWorkspace";
-import { usePatch } from "./features/workspace/usePatch";
-import { useValidation } from "./features/workspace/useValidation";
-import { usePatchRepair } from "./features/workspace/usePatchRepair";
+import { useModelCatalog } from "./features/models/useModelCatalog";
+import { useUsage } from "./features/usage/useUsage";
 import { planContextBudget } from "./features/workspace/contextBudget";
 import {
   retrieveRelevantFiles,
   retrieveRelevantFilesSmart,
   type RetrievalResult,
 } from "./features/workspace/retrieval";
-import { getSymbolIndex, clearSymbolIndex, type SymbolIndex } from "./lib/symbolIndex";
-import { getDependencyGraph, clearAnalysisGraph, type AnalysisGraph } from "./lib/analysis";
-import { buildEvidenceReport, formatEvidenceForPrompt, getPatchMissingEvidence } from "./lib/evidence";
-import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
+import { usePatch } from "./features/workspace/usePatch";
+import { usePatchRepair } from "./features/workspace/usePatchRepair";
+import { useValidation } from "./features/workspace/useValidation";
+import { useWorkspace } from "./features/workspace/useWorkspace";
+import { clearAnalysisGraph, getDependencyGraph, type AnalysisGraph } from "./lib/analysis";
+import { usageGetServerSummary, type ServerUsageSummary } from "./lib/auth";
 import {
-  unloadModel,
+  buildEvidenceReport,
+  formatEvidenceForPrompt,
+  getPatchMissingEvidence,
+} from "./lib/evidence";
+import {
   toInferenceError as describeFailure,
+  unloadModel,
 } from "./lib/inference";
 import { isDesktopShell, isEngineReady, type AppStatus } from "./lib/ipc";
-import { navigateTo, isFlowRoute, ROUTES, useHashRoute, type AnyRouteId } from "./lib/router";
+import { navigateTo, ROUTES, useHashRoute, type AnyRouteId } from "./lib/router";
+import { clearSymbolIndex, getSymbolIndex, type SymbolIndex } from "./lib/symbolIndex";
 import { useAppStatus } from "./lib/useAppStatus";
-import { useUsage } from "./features/usage/useUsage";
-import { useModelCatalog } from "./features/models/useModelCatalog";
+import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
+import { AccountPage } from "./pages/AccountPage";
+import { ChatPage } from "./pages/ChatPage";
+import { CodeIntelligencePage } from "./pages/CodeIntelligencePage";
+import { FounderPage } from "./pages/FounderPage";
+import { HomePage } from "./pages/HomePage";
+import { LicensingPage } from "./pages/LicensingPage";
+import { ModelManagerPage } from "./pages/ModelManagerPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
+import { PlansPage } from "./pages/PlansPage";
+import { ProjectsPage } from "./pages/ProjectsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 /**
- * Phase 19 shell: shared chrome (title bar, sidebar navigation, global engine
- * notices) plus one page at a time.
+ * Nexora Desktop Shell — Direct-to-Chat architecture (Phase 07).
  *
- * All feature hooks stay mounted at this level so chat and project state
- * survives page switches. Pages receive state and callbacks as props; no page
- * embeds another feature's full interface.
+ * Launches directly into the main Chat view with zero welcome gate, onboarding
+ * gate, or automatic authentication popup. Signed-out users can use local AI
+ * chat, history, search, and workspace features freely on device.
  */
 export default function App() {
   const { status, error: statusError, loading, reload } = useAppStatus();
   const route = useHashRoute();
-  // The welcome/onboarding flow renders outside the workspace sidebar.
-  const flowRoute = isFlowRoute(route.id);
+  const auth = useAuth();
 
-  // The allowance is read here and refreshed whenever a generation settles, so
-  // the chat UI and the record in Rust cannot disagree for long.
   const [usageNonce, setUsageNonce] = useState(0);
   const usage = useUsage(usageNonce);
-  // Registered models and their availability. Refreshed whenever the engine
-  // changes state, so "ready" can never outlive the process it describes.
   const models = useModelCatalog();
+  const [serverUsage, setServerUsage] = useState<ServerUsageSummary | null>(null);
+
+  // Floating overlays — strictly opened on explicit user action or genuinely protected actions.
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthModalMode>("signin");
+  const [authReason, setAuthReason] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const openAuthModal = useCallback(
+    (mode: AuthModalMode = "signin", reason: string | null = null) => {
+      setAuthMode(mode);
+      setAuthReason(reason);
+      setAuthOpen(true);
+    },
+    [],
+  );
+
+  const refreshServerUsage = useCallback(async () => {
+    if (!auth.isAuthenticated) {
+      setServerUsage(null);
+      return;
+    }
+    try {
+      const summary = await usageGetServerSummary();
+      if (summary && typeof summary === "object" && "models" in summary) {
+        setServerUsage(summary);
+      }
+    } catch {
+      // Local usage remains active when server usage summary is unconfigured or offline.
+    }
+  }, [auth.isAuthenticated]);
+
+  useEffect(() => {
+    void refreshServerUsage();
+  }, [refreshServerUsage]);
+
+  // Legacy auth route deep-links open the floating modal cleanly over AI Chat.
+  useEffect(() => {
+    if (route.id === "signin") {
+      openAuthModal("signin", null);
+      navigateTo("chat");
+    } else if (route.id === "signup") {
+      openAuthModal("signup", null);
+      navigateTo("chat");
+    } else if (route.id === "recover") {
+      openAuthModal("recover", null);
+      navigateTo("chat");
+    } else if (route.id === "reset") {
+      openAuthModal("reset", null);
+      navigateTo("chat");
+    } else if (route.id === "verify") {
+      openAuthModal("verify", null);
+      navigateTo("chat");
+    } else if (route.id === "welcome" || route.id === "onboarding") {
+      navigateTo("chat");
+    }
+  }, [route.id, openAuthModal]);
 
   const handleSettled = useCallback(() => {
     reload();
     setUsageNonce((value) => value + 1);
-  }, [reload]);
+    void refreshServerUsage();
+  }, [reload, refreshServerUsage]);
 
-  // The chat is told which profile is selected so every request can name the
-  // model it was composed under; the core still decides what actually runs.
   const selectedProfileId = models.selected?.profile.id ?? null;
 
   const conversation = usePersistentConversation({
@@ -103,8 +155,13 @@ export default function App() {
   const modelRefresh = models.reload;
   const engineState = engineStatus?.engine.state ?? null;
   const configuredModel = engineStatus?.modelPath ?? null;
+  const didInitialEngineSyncRef = useRef(false);
 
   useEffect(() => {
+    if (!didInitialEngineSyncRef.current) {
+      didInitialEngineSyncRef.current = true;
+      return;
+    }
     modelRefresh();
   }, [modelRefresh, engineState, configuredModel]);
 
@@ -117,15 +174,19 @@ export default function App() {
     profileId: selectedProfileId,
   });
 
-  // Context budget: reserve system + output, fit prompt + selected files + recent history
   const contextSize = engineStatus?.contextSize ?? 32768;
-  const maxTokens = 1024; // reserved for model output
+  const maxTokens = 1024;
   const contextPlan = useMemo(() => {
-    // History for budget: all messages as role/content, newest trimming
-    const hist = conversation.messages.map((m) => ({ role: m.role, content: m.content ?? "" }));
-    // Prompt for planning is current draft
+    const hist = conversation.messages.map((m) => ({
+      role: m.role,
+      content: m.content ?? "",
+    }));
     const prompt = conversation.draft ?? "";
-    const files = workspace.contextFiles.map((f) => ({ path: f.path, content: f.content, size: f.size }));
+    const files = workspace.contextFiles.map((f) => ({
+      path: f.path,
+      content: f.content,
+      size: f.size,
+    }));
     try {
       return planContextBudget({
         contextSize,
@@ -141,10 +202,11 @@ export default function App() {
 
   const filteredContextBlock = useMemo(() => {
     if (!contextPlan) return workspace.contextBlock;
-    const included = new Set(contextPlan.filePlans.filter((f) => f.included).map((f) => f.path));
+    const included = new Set(
+      contextPlan.filePlans.filter((f) => f.included).map((f) => f.path),
+    );
     if (included.size === workspace.contextFiles.length) return workspace.contextBlock;
     if (included.size === 0) return null;
-    // Rebuild block with only included files, preserving fences/paths
     const files = workspace.contextFiles.filter((f) => included.has(f.path));
     if (files.length === 0) return null;
     const fenceFor = (content: string) => (content.includes("```") ? "````" : "```");
@@ -168,7 +230,8 @@ export default function App() {
       };
       return map[ext] ?? "";
     };
-    let block = "Consider the following project context (read-only; do not claim to have modified files):\n\n";
+    let block =
+      "Consider the following project context (read-only; do not claim to have modified files):\n\n";
     for (const file of files) {
       const lang = inferLang(file.path);
       const fence = fenceFor(file.content);
@@ -180,18 +243,23 @@ export default function App() {
 
   const generationTargetPath = useMemo(() => {
     if (workspace.selectedPaths.size === 1) return Array.from(workspace.selectedPaths)[0]!;
-    if (workspace.previewPath && !workspace.previewError && workspace.preview?.content) return workspace.previewPath;
+    if (workspace.previewPath && !workspace.previewError && workspace.preview?.content) {
+      return workspace.previewPath;
+    }
     return null;
   }, [workspace.selectedPaths, workspace.previewPath, workspace.preview, workspace.previewError]);
 
   const generationOriginalContent = useMemo(() => {
     if (!generationTargetPath) return null;
-    if (workspace.previewPath === generationTargetPath && workspace.preview?.content) return workspace.preview.content;
+    if (workspace.previewPath === generationTargetPath && workspace.preview?.content) {
+      return workspace.preview.content;
+    }
     const file = workspace.contextFiles.find((f) => f.path === generationTargetPath);
     return file?.content ?? null;
   }, [generationTargetPath, workspace.previewPath, workspace.preview, workspace.contextFiles]);
 
   const startNewChat = useCallback(() => {
+    setSearchOpen(false);
     newChat();
     navigateTo("chat");
     setChatFocusNonce((current) => current + 1);
@@ -199,13 +267,13 @@ export default function App() {
 
   const openConversation = useCallback(
     (id: string) => {
+      setSearchOpen(false);
       selectConversation(id);
       navigateTo("chat");
     },
     [selectConversation],
   );
 
-  // Phase 14: bounded symbol index — reuse scanWorkspace exclusions, re-build on workspace change, clear on switch (security)
   useEffect(() => {
     const root = workspace.workspacePath;
     if (!root) {
@@ -226,7 +294,6 @@ export default function App() {
     };
   }, [workspace.workspacePath, workspace.inventory]);
 
-  // Phase 16: bounded dependency graph — reuse scanner exclusions, bounded 500 files/5MiB, clear on switch
   useEffect(() => {
     const root = workspace.workspacePath;
     if (!root) {
@@ -247,7 +314,6 @@ export default function App() {
     };
   }, [workspace.workspacePath, workspace.inventory]);
 
-  // Retrieval: deterministic, eligible only, respects budget, explains why — Phase 16 graph-aware when available
   const retrievalResult: RetrievalResult | null = useMemo(() => {
     try {
       if (analysisGraph) {
@@ -268,7 +334,6 @@ export default function App() {
     }
   }, [conversation.draft, workspace.contextFiles, symbolIndex, analysisGraph]);
 
-  // Evidence-first: bounded report for prompt grounding + UI transparency (reuses index/graph/retrieval/budget)
   const evidenceReport = useMemo(() => {
     try {
       return buildEvidenceReport({
@@ -282,7 +347,14 @@ export default function App() {
     } catch {
       return null;
     }
-  }, [symbolIndex, analysisGraph, retrievalResult, contextPlan, workspace.selectedPaths, manualValidation.validationState.status]);
+  }, [
+    symbolIndex,
+    analysisGraph,
+    retrievalResult,
+    contextPlan,
+    workspace.selectedPaths,
+    manualValidation.validationState.status,
+  ]);
 
   const evidenceManifest = useMemo(() => {
     if (!evidenceReport) return null;
@@ -296,7 +368,12 @@ export default function App() {
   const patchMissing = useMemo(() => {
     if (!generationTargetPath || !evidenceReport) return null;
     try {
-      return getPatchMissingEvidence(generationTargetPath, evidenceReport, retrievalResult, contextPlan);
+      return getPatchMissingEvidence(
+        generationTargetPath,
+        evidenceReport,
+        retrievalResult,
+        contextPlan,
+      );
     } catch {
       return null;
     }
@@ -311,9 +388,12 @@ export default function App() {
         " included, " +
         retrievalResult.omitted.length +
         " omitted (budget), reasons: " +
-        (retrievalResult.included.map((r) => r.path + " (" + r.reason + ")").join("; ") || "selected only")
+        (retrievalResult.included.map((r) => r.path + " (" + r.reason + ")").join("; ") ||
+          "selected only")
       : "no retrieval";
-    const retrievalSummaryShort = retrievalResult ? retrievalResult.included.length + " included" : "none";
+    const retrievalSummaryShort = retrievalResult
+      ? retrievalResult.included.length + " included"
+      : "none";
     const graphSummary = analysisGraph
       ? ` Graph: ${analysisGraph.nodes.length} files, ${analysisGraph.edges.length} edges, ${analysisGraph.cycles.length} cycles${analysisGraph.truncated ? ", truncated" : ""}.`
       : "";
@@ -335,23 +415,32 @@ export default function App() {
         retrievalSummaryShort +
         graphSummary +
         ".\n";
-    // Evidence manifest adds per-query verified/inferred/unavailable + limitations + reliability instructions (never invent tests/builds, separate observations/hypotheses, note partial)
     const manifestBlock = evidenceManifest ? "\n" + evidenceManifest + "\n" : "";
     return groundedHeader + manifestBlock + "\n" + base;
-  }, [filteredContextBlock, workspace.contextBlock, symbolIndex, retrievalResult, evidenceManifest, analysisGraph]);
+  }, [
+    filteredContextBlock,
+    workspace.contextBlock,
+    symbolIndex,
+    retrievalResult,
+    evidenceManifest,
+    analysisGraph,
+  ]);
 
+  // Signed-out users execute local chat directly with zero forced sign-in gate.
   const handleSubmit = useCallback(() => {
     const block = groundedContextBlock ?? filteredContextBlock ?? workspace.contextBlock;
     const hasContext = block !== null && block.length > 0;
     submit(hasContext ? { contextBlock: block } : undefined);
   }, [submit, groundedContextBlock, filteredContextBlock, workspace.contextBlock]);
 
-  // Phase 15: auto-validate manual patch proposals (non-mutating, bounded, cancellable)
   useEffect(() => {
     if (patch.patchState.status === "preview" && patch.patchState.proposal) {
       void manualValidation.validate(patch.patchState.proposal);
-    } else if (patch.patchState.status === "idle" || patch.patchState.status === "editing" || patch.patchState.status === "error") {
-      // Reset validation when not in preview; keep repair state for error inspection unless explicitly reset
+    } else if (
+      patch.patchState.status === "idle" ||
+      patch.patchState.status === "editing" ||
+      patch.patchState.status === "error"
+    ) {
       if (patch.patchState.status === "idle" || patch.patchState.status === "editing") {
         manualValidation.reset();
         manualRepair.reset();
@@ -359,7 +448,6 @@ export default function App() {
     }
   }, [patch.patchState]);
 
-  // Handle manual path entry from WorkspacePanel (custom event)
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail;
@@ -371,7 +459,6 @@ export default function App() {
     return () => window.removeEventListener("workspace:openManual" as never, handler as never);
   }, [workspace]);
 
-  // Workspace settings: restore last path once, then persist on change (no auto-scan)
   useEffect(() => {
     if (settingsRestored) return;
     void getWorkspaceSettings()
@@ -381,14 +468,12 @@ export default function App() {
         setCodeLigatures(Boolean(s.preferences.codeLigatures));
         setReducedMotion(Boolean(s.preferences.reducedMotion));
         setSettingsRestored(true);
-        // Do not auto-scan; the remembered path is a manual-open hint only.
       })
       .catch(() => setSettingsRestored(true));
   }, [settingsRestored]);
 
   useEffect(() => {
     if (!settingsRestored) return;
-    // Persist last path and preferences states on change
     const pref = {
       explorerCollapsed: sidebarCollapsed,
       founderModeEnabled,
@@ -396,8 +481,17 @@ export default function App() {
       reducedMotion,
     };
     const last = workspace.workspacePath ?? null;
-    void saveWorkspaceSettings({ version: 1, lastWorkspacePath: last, preferences: pref }).catch(() => {});
-  }, [settingsRestored, workspace.workspacePath, sidebarCollapsed, founderModeEnabled, codeLigatures, reducedMotion]);
+    void saveWorkspaceSettings({ version: 1, lastWorkspacePath: last, preferences: pref }).catch(
+      () => {},
+    );
+  }, [
+    settingsRestored,
+    workspace.workspacePath,
+    sidebarCollapsed,
+    founderModeEnabled,
+    codeLigatures,
+    reducedMotion,
+  ]);
 
   const handleStatus = useCallback(
     (next: AppStatus) => {
@@ -421,21 +515,24 @@ export default function App() {
       });
   }, [reload]);
 
-  // The status returned by `load_model` is only a bridge until the next
-  // authoritative read; never let it outlive a fresh snapshot.
   useEffect(() => {
     setLoadedStatus(null);
   }, [status]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || event.altKey || event.metaKey) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
         return;
       }
 
       switch (event.key.toLowerCase()) {
+        case "k":
+          event.preventDefault();
+          setSearchOpen((current) => !current);
+          break;
         case "l":
           event.preventDefault();
+          setSearchOpen(false);
           navigateTo("chat");
           setChatFocusNonce((current) => current + 1);
           break;
@@ -444,11 +541,8 @@ export default function App() {
           startNewChat();
           break;
         case "b":
-          // Only meaningful where the sidebar exists (never on the welcome flow).
-          if (!flowRoute) {
-            event.preventDefault();
-            setSidebarCollapsed((current) => !current);
-          }
+          event.preventDefault();
+          setSidebarCollapsed((current) => !current);
           break;
         default:
           break;
@@ -457,207 +551,232 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [startNewChat, flowRoute]);
+  }, [startNewChat]);
 
   const desktop = isDesktopShell();
-  const pageLabel = route.id === "notFound"
-    ? "Page not found"
-    : (ROUTES.find((candidate) => candidate.id === route.id)?.label ?? "Nexora");
+  const pageLabel =
+    route.id === "notFound"
+      ? "Page not found"
+      : (ROUTES.find((candidate) => candidate.id === route.id)?.label ?? "Nexora");
 
   return (
-    <div
-      className={`app ${sidebarCollapsed ? "app--collapsed" : ""}${flowRoute ? " app--flow" : ""}${reducedMotion ? " reduced-motion" : ""}${!codeLigatures ? " no-ligatures" : ""}`.trim()}
-    >
-      <div className="aurora-ambient" aria-hidden="true" data-testid="aurora-ambient">
-        <div className="aurora-beam aurora-beam--1" />
-        <div className="aurora-beam aurora-beam--2" />
-        <div className="aurora-beam aurora-beam--3" />
+    <>
+      <div
+        className={`app ${sidebarCollapsed ? "app--collapsed" : ""}${reducedMotion ? " reduced-motion" : ""}${!codeLigatures ? " no-ligatures" : ""}`.trim()}
+      >
+        <TitleBar
+          pageLabel={pageLabel}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+        />
+
+        <Sidebar
+          currentRoute={route.id as AnyRouteId}
+          status={engineStatus}
+          statusFailed={statusError !== null}
+          collapsed={sidebarCollapsed}
+          founderModeEnabled={founderModeEnabled}
+          onNewChat={startNewChat}
+          onOpenSearch={() => setSearchOpen(true)}
+          onUnload={desktop ? handleUnload : undefined}
+          unloading={unloading}
+          conversations={conversation.conversations}
+          activeId={conversation.activeId}
+          historyLoading={conversation.listLoading}
+          historyError={conversation.listError}
+          onSelectConversation={openConversation}
+          onRenameConversation={conversation.renameById}
+          onDeleteConversation={conversation.deleteConversationById}
+          onRetryHistory={conversation.refreshList}
+          user={auth.user}
+          onOpenAuthModal={(mode = "signin") => openAuthModal(mode, null)}
+        />
+
+        <main className="workspace" aria-label={pageLabel}>
+          {statusError ? (
+            <div className="notice" role="status">
+              <Icon name="alert" size={14} />
+              <span>
+                Could not read the engine status from the desktop core. It is not
+                known whether a model is available.
+              </span>
+              <button
+                type="button"
+                className="notice__action"
+                onClick={reload}
+                disabled={loading}
+              >
+                {loading ? "Retrying…" : "Retry"}
+              </button>
+            </div>
+          ) : null}
+
+          {engineError ? (
+            <div className="notice notice--danger" role="alert">
+              <Icon name="alert" size={14} />
+              <span>{engineError}</span>
+              <button
+                type="button"
+                className="notice__action"
+                onClick={() => setEngineError(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
+
+          {route.id === "home" ? (
+            <HomePage
+              status={engineStatus}
+              statusError={statusError}
+              engineReady={engineReady}
+              workspacePath={workspace.workspacePath}
+              workspaceName={workspace.workspaceName}
+              fileCount={workspace.inventory?.stats.fileCount ?? 0}
+              selectedFileCount={workspace.selectedPaths.size}
+              symbolCount={symbolIndex?.symbols.length ?? 0}
+              relationshipCount={analysisGraph?.edges.length ?? 0}
+              recentConversations={conversation.conversations.slice(0, 3)}
+              conversationCount={conversation.conversations.length}
+              onNewChat={startNewChat}
+              onOpenProject={() => void workspace.openWorkspace()}
+              onOpenPath={(path) => void workspace.openWorkspace(path)}
+              onSelectConversation={openConversation}
+            />
+          ) : route.id === "chat" ? (
+            <ChatPage
+              conversation={conversation}
+              workspace={workspace}
+              engineStatus={engineStatus}
+              statusError={statusError}
+              engineReady={engineReady}
+              desktop={desktop}
+              contextPlan={contextPlan}
+              retrievalResult={retrievalResult}
+              evidenceReport={evidenceReport}
+              textareaRef={textareaRef}
+              focusNonce={chatFocusNonce}
+              onSubmit={handleSubmit}
+              usage={usage}
+              serverUsage={serverUsage}
+              models={models}
+              onModelLoaded={reload}
+            />
+          ) : route.id === "projects" ? (
+            <ProjectsPage
+              workspace={workspace}
+              patch={patch}
+              validation={manualValidation}
+              repair={manualRepair}
+              evidenceReport={evidenceReport}
+              patchMissing={patchMissing}
+              generationTargetPath={generationTargetPath}
+              generationOriginalContent={generationOriginalContent}
+              groundedContextBlock={groundedContextBlock ?? filteredContextBlock}
+              engineStatus={engineStatus}
+              symbolIndex={symbolIndex}
+              isStreaming={conversation.streaming}
+              profileId={selectedProfileId}
+            />
+          ) : route.id === "code" ? (
+            <CodeIntelligencePage
+              workspacePath={workspace.workspacePath}
+              workspaceName={workspace.workspaceName}
+              onPreview={workspace.loadPreview}
+              symbolIndex={symbolIndex}
+              onIndexChange={setSymbolIndex}
+              analysisTargetPath={
+                generationTargetPath ??
+                workspace.previewPath ??
+                (workspace.contextFiles[0]?.path ?? null)
+              }
+              onOpenWorkspace={() => void workspace.openWorkspace()}
+            />
+          ) : route.id === "models" ? (
+            <ModelManagerPage
+              profileId={models.selected?.profile.id ?? null}
+              status={engineStatus}
+              statusError={statusError}
+              desktop={desktop}
+              unloading={unloading}
+              onStatus={handleStatus}
+              onRefresh={reload}
+              onUnload={desktop ? handleUnload : undefined}
+              onModelsChanged={modelRefresh}
+            />
+          ) : route.id === "plans" ? (
+            <PlansPage
+              isAuthenticated={auth.isAuthenticated}
+              onRequestSignIn={() =>
+                openAuthModal(
+                  "signin",
+                  "Sign in is required to manage account plans and billing. Local AI chat remains available without signing in.",
+                )
+              }
+            />
+          ) : route.id === "settings" ? (
+            <SettingsPage
+              status={engineStatus}
+              sidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+              workspacePath={workspace.workspacePath}
+              founderModeEnabled={founderModeEnabled}
+              onToggleFounderMode={() => setFounderModeEnabled((current) => !current)}
+              codeLigatures={codeLigatures}
+              onToggleCodeLigatures={() => setCodeLigatures((current) => !current)}
+              reducedMotion={reducedMotion}
+              onToggleReducedMotion={() => setReducedMotion((current) => !current)}
+            />
+          ) : route.id === "account" ? (
+            <AccountPage onOpenAuthModal={(mode) => openAuthModal(mode, null)} />
+          ) : route.id === "founder" ? (
+            <FounderPage status={engineStatus} />
+          ) : route.id === "licensing" ? (
+            <LicensingPage />
+          ) : (
+            <NotFoundPage path={route.path} />
+          )}
+        </main>
       </div>
 
-      <TitleBar
-        pageLabel={pageLabel}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-        showSidebarToggle={!flowRoute}
-      />
-
-      {flowRoute ? null : (
-      <Sidebar
-        currentRoute={route.id as AnyRouteId}
-        status={engineStatus}
-        statusFailed={statusError !== null}
-        collapsed={sidebarCollapsed}
-        founderModeEnabled={founderModeEnabled}
-        onNewChat={startNewChat}
-        onUnload={desktop ? handleUnload : undefined}
-        unloading={unloading}
+      <ConversationSearchModal
+        open={searchOpen}
         conversations={conversation.conversations}
         activeId={conversation.activeId}
         historyLoading={conversation.listLoading}
         historyError={conversation.listError}
+        onClose={() => setSearchOpen(false)}
         onSelectConversation={openConversation}
-        onRenameConversation={conversation.renameById}
-        onDeleteConversation={conversation.deleteConversationById}
+        onNewChat={startNewChat}
         onRetryHistory={conversation.refreshList}
       />
-      )}
 
-      <main className={flowRoute ? "welcome-stage" : "workspace"} aria-label={pageLabel}>
-        {flowRoute ? (
-          route.id === "onboarding" ? (
-            <OnboardingPage
-              onBack={() => navigateTo("welcome")}
-              onEnterWorkspace={() => navigateTo("home")}
-              onSignIn={() => navigateTo("signin")}
-            />
-          ) : route.id === "signin" ? (
-            <SignInPage onBack={() => navigateTo("onboarding")} />
-          ) : route.id === "signup" ? (
-            <CreateAccountPage onBack={() => navigateTo("signin")} />
-          ) : route.id === "verify" ? (
-            <VerifyEmailPage onBack={() => navigateTo("signin")} />
-          ) : route.id === "recover" ? (
-            <RecoverPasswordPage onBack={() => navigateTo("signin")} />
-          ) : route.id === "reset" ? (
-            <ResetPasswordPage onBack={() => navigateTo("signin")} />
-          ) : (
-            <WelcomePage onContinue={() => navigateTo("onboarding")} />
-          )
-        ) : (
-          <>
-        {/* Global engine notices — visible on every workspace page, never guessed away. */}
-        {statusError ? (
-          <div className="notice" role="status">
-            <Icon name="alert" size={14} />
-            <span>
-              Could not read the engine status from the desktop core. It is not
-              known whether a model is available.
-            </span>
-            <button
-              type="button"
-              className="notice__action"
-              onClick={reload}
-              disabled={loading}
-            >
-              {loading ? "Retrying…" : "Retry"}
-            </button>
-          </div>
-        ) : null}
-
-        {engineError ? (
-          <div className="notice notice--danger" role="alert">
-            <Icon name="alert" size={14} />
-            <span>{engineError}</span>
-            <button
-              type="button"
-              className="notice__action"
-              onClick={() => setEngineError(null)}
-            >
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        {route.id === "home" ? (
-          <HomePage
-            status={engineStatus}
-            statusError={statusError}
-            engineReady={engineReady}
-            workspacePath={workspace.workspacePath}
-            workspaceName={workspace.workspaceName}
-            fileCount={workspace.inventory?.stats.fileCount ?? 0}
-            selectedFileCount={workspace.selectedPaths.size}
-            symbolCount={symbolIndex?.symbols.length ?? 0}
-            relationshipCount={analysisGraph?.edges.length ?? 0}
-            recentConversations={conversation.conversations.slice(0, 3)}
-            conversationCount={conversation.conversations.length}
-            onNewChat={startNewChat}
-            onOpenProject={() => void workspace.openWorkspace()}
-            onOpenPath={(path) => void workspace.openWorkspace(path)}
-            onSelectConversation={openConversation}
-          />
-        ) : route.id === "chat" ? (
-          <ChatPage
-            conversation={conversation}
-            workspace={workspace}
-            engineStatus={engineStatus}
-            statusError={statusError}
-            engineReady={engineReady}
-            desktop={desktop}
-            contextPlan={contextPlan}
-            retrievalResult={retrievalResult}
-            evidenceReport={evidenceReport}
-            textareaRef={textareaRef}
-            focusNonce={chatFocusNonce}
-            onSubmit={handleSubmit}
-            usage={usage}
-            models={models}
-          />
-        ) : route.id === "projects" ? (
-          <ProjectsPage
-            workspace={workspace}
-            patch={patch}
-            validation={manualValidation}
-            repair={manualRepair}
-            evidenceReport={evidenceReport}
-            patchMissing={patchMissing}
-            generationTargetPath={generationTargetPath}
-            generationOriginalContent={generationOriginalContent}
-            groundedContextBlock={groundedContextBlock ?? filteredContextBlock}
-            engineStatus={engineStatus}
-            symbolIndex={symbolIndex}
-            isStreaming={conversation.streaming}
-            profileId={selectedProfileId}
-          />
-        ) : route.id === "code" ? (
-          <CodeIntelligencePage
-            workspacePath={workspace.workspacePath}
-            workspaceName={workspace.workspaceName}
-            onPreview={workspace.loadPreview}
-            symbolIndex={symbolIndex}
-            onIndexChange={setSymbolIndex}
-            analysisTargetPath={
-              generationTargetPath ?? workspace.previewPath ?? (workspace.contextFiles[0]?.path ?? null)
-            }
-            onOpenWorkspace={() => void workspace.openWorkspace()}
-          />
-        ) : route.id === "models" ? (
-          <ModelManagerPage
-            profileId={models.selected?.profile.id ?? null}
-            status={engineStatus}
-            statusError={statusError}
-            desktop={desktop}
-            unloading={unloading}
-            onStatus={handleStatus}
-            onRefresh={reload}
-            onUnload={desktop ? handleUnload : undefined}
-            onModelsChanged={modelRefresh}
-          />
-        ) : route.id === "settings" ? (
-          <SettingsPage
-            status={engineStatus}
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-            workspacePath={workspace.workspacePath}
-            founderModeEnabled={founderModeEnabled}
-            onToggleFounderMode={() => setFounderModeEnabled((current) => !current)}
-            codeLigatures={codeLigatures}
-            onToggleCodeLigatures={() => setCodeLigatures((current) => !current)}
-            reducedMotion={reducedMotion}
-            onToggleReducedMotion={() => setReducedMotion((current) => !current)}
-          />
-        ) : route.id === "account" ? (
-          <AccountPage />
-        ) : route.id === "founder" ? (
-          <FounderPage status={engineStatus} />
-        ) : route.id === "licensing" ? (
-          <LicensingPage />
-        ) : (
-          <NotFoundPage path={route.path} />
-        )}
-          </>
-        )}
-      </main>
-    </div>
+      <AuthModal
+        open={authOpen}
+        initialMode={authMode}
+        reason={authReason}
+        preservedPrompt={conversation.draft}
+        onClose={() => {
+          setAuthOpen(false);
+          setAuthReason(null);
+        }}
+        onLogin={async (payload) => {
+          const loggedIn = await auth.login(payload);
+          void refreshServerUsage();
+          return loggedIn;
+        }}
+        onRegister={auth.register}
+        onVerifyEmail={auth.verifyEmail}
+        onResendVerification={auth.resendVerification}
+        onRecoverPassword={auth.recoverPassword}
+        onResetPassword={auth.resetPassword}
+        onGoogleSignIn={async () => {
+          const loggedIn = await auth.signInWithGoogle();
+          void refreshServerUsage();
+          return loggedIn;
+        }}
+        onCancelGoogle={auth.cancelGoogleSignIn}
+      />
+    </>
   );
 }

@@ -61,7 +61,7 @@ async fn health_payload_matches_typed_struct() {
 
 #[tokio::test]
 async fn unknown_routes_return_predictable_404() {
-    for uri in ["/", "/nope", "/v1/auth/login", "/health/extra"] {
+    for uri in ["/", "/nope", "/v1/auth/unknown", "/health/extra"] {
         let response = get(build_router(), uri).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "uri: {uri}");
         assert_eq!(body_string(response).await, NOT_FOUND_BODY, "uri: {uri}");

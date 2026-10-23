@@ -176,6 +176,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 /// Human-readable instant for error copy. The UI formats its own local time;
 /// this is only used inside a message string, so UTC is stated explicitly.
+pub fn format_utc_instant(ms: i64) -> String {
+    format_instant(ms)
+}
+
 fn format_instant(ms: i64) -> String {
     let day = ms.div_euclid(MILLIS_PER_DAY);
     let seconds = ms.rem_euclid(MILLIS_PER_DAY) / 1_000;

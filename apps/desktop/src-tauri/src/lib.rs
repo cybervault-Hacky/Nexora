@@ -8,6 +8,28 @@ mod workspace;
 
 use tauri::Manager;
 
+/// Stops all desktop child processes and cancels in-flight background work
+/// without panicking, even if a state mutex was poisoned earlier.
+fn shutdown_desktop_resources(app: &tauri::AppHandle) {
+    if let Some(auth_state) = app.try_state::<auth::commands::AuthState>() {
+        auth_state
+            .google_cancel
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    if let Some(export_state) = app.try_state::<export::ExportState>() {
+        if let Ok(slot) = export_state.active.lock() {
+            if let Some(flag) = slot.as_ref() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    if let Some(state) = app.try_state::<inference::InferenceState>() {
+        state.shutdown();
+    }
+}
+
 /// Starts the Nexora desktop shell.
 ///
 /// The only capabilities exposed to the webview are the read-only status
@@ -16,15 +38,16 @@ use tauri::Manager;
 /// There is no shell, no filesystem browsing, and no network access from the
 /// UI.
 pub fn run() {
-    tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&config_dir)?;
+            std::fs::create_dir_all(&data_dir)?;
+
             app.manage(inference::InferenceState::load(config_dir.clone()));
             app.manage(usage::UsageState::load(&config_dir));
-            app.manage(history::commands::HistoryState::new(
-                app.path().app_data_dir()?,
-            ));
+            app.manage(history::commands::HistoryState::new(data_dir));
             app.manage(workspace::commands::WorkspaceState::new());
             app.manage(export::ExportState::new());
             app.manage(workspace::commands::WorkspaceSettingsState::new(
@@ -39,12 +62,8 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.try_state::<inference::InferenceState>() {
-                    if let Ok(mut supervisor) = state.supervisor.lock() {
-                        supervisor.stop();
-                    }
-                }
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                shutdown_desktop_resources(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -106,6 +125,7 @@ pub fn run() {
             export::commands::export_zip,
             export::commands::cancel_export,
             auth::commands::auth_get_session,
+            auth::commands::auth_refresh_session,
             auth::commands::auth_login,
             auth::commands::auth_register,
             auth::commands::auth_verify_email,
@@ -117,10 +137,35 @@ pub fn run() {
             auth::commands::get_developer_diagnostics,
             auth::commands::auth_google_begin,
             auth::commands::auth_google_cancel,
+            auth::commands::account_get_profile,
+            auth::commands::account_update_profile,
+            auth::commands::account_link_google,
+            auth::commands::account_export_data,
+            auth::commands::account_delete,
+            auth::commands::billing_list_plans,
+            auth::commands::billing_get_status,
+            auth::commands::billing_create_checkout,
+            auth::commands::billing_verify_order,
+            auth::commands::billing_cancel_subscription,
+            auth::commands::billing_change_plan,
+            auth::commands::billing_open_portal,
+            auth::commands::usage_get_server_summary,
             licensing::commands::licence_get_status,
             licensing::commands::licence_activate,
             licensing::commands::licence_deactivate,
         ])
-        .run(tauri::generate_context!())
-        .expect("Nexora failed to start");
+        .build(tauri::generate_context!())
+    {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("nexora: failed to initialize desktop application: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            shutdown_desktop_resources(app_handle);
+        }
+    });
 }

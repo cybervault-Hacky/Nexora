@@ -1,313 +1,289 @@
 import { useState, type FormEvent } from "react";
+import type { AuthModalMode } from "../components/AuthModal";
 import { Icon } from "../components/Icon";
 import { RouterLink } from "../components/RouterLink";
 import { useAuth } from "../features/auth/useAuth";
-import { PASSWORD_MIN_LENGTH, validatePasswordConfirmation } from "../lib/formValidation";
+import { navigateTo } from "../lib/router";
 import { PageHeader } from "./PageHeader";
 
-interface StatusNotice {
-  tone: "info" | "success" | "error";
-  message: string;
+interface AccountPageProps {
+  onOpenAuthModal?: (mode: AuthModalMode) => void;
 }
 
-/**
- * Phase 25 — Developer Account & Profile Management
- *
- * Provides developers and founders with verified identity details, password
- * updates, verification management, and secure OS session termination.
- * Unauthenticated guest users are presented with clear guest status and
- * seamless links to sign in, preserving complete offline AI functionality.
- */
-export function AccountPage() {
+export function AccountPage({ onOpenAuthModal }: AccountPageProps = {}) {
   const { user, isAuthenticated, loading, logout, changePassword, resendVerification } = useAuth();
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPasswords, setShowPasswords] = useState(false);
-  const [submittingPassword, setSubmittingPassword] = useState(false);
-  const [passwordNotice, setPasswordNotice] = useState<StatusNotice | null>(null);
+  const [pwdStatus, setPwdStatus] = useState<{ type: "success" | "error"; message: string } | null>(
+    null,
+  );
+  const [changingPwd, setChangingPwd] = useState(false);
 
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
-  const [resendNotice, setResendNotice] = useState<StatusNotice | null>(null);
 
-  const handlePasswordSubmit = async (e: FormEvent<HTMLFormElement>) => {
+  async function handleLogout() {
+    await logout();
+    navigateTo("chat");
+  }
+
+  async function handleChangePassword(e: FormEvent) {
     e.preventDefault();
-    if (submittingPassword) return;
+    setPwdStatus(null);
 
-    setPasswordNotice(null);
-
-    if (!currentPassword) {
-      setPasswordNotice({ tone: "error", message: "Enter your current password." });
+    if (newPassword.length < 8) {
+      setPwdStatus({ type: "error", message: "New password must be at least 8 characters long." });
       return;
     }
 
-    if (newPassword.length < PASSWORD_MIN_LENGTH) {
-      setPasswordNotice({
-        tone: "error",
-        message: `New password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
-      });
+    if (newPassword !== confirmPassword) {
+      setPwdStatus({ type: "error", message: "Passwords do not match." });
       return;
     }
 
-    const matchErr = validatePasswordConfirmation(newPassword, confirmPassword);
-    if (matchErr) {
-      setPasswordNotice({ tone: "error", message: matchErr });
-      return;
-    }
-
-    setSubmittingPassword(true);
+    setChangingPwd(true);
     try {
-      const res = await changePassword({ currentPassword, newPassword });
+      const resp = await changePassword({
+        currentPassword,
+        newPassword,
+      });
+      setPwdStatus({ type: "success", message: resp.message || "Password changed successfully." });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setPasswordNotice({ tone: "success", message: res.message || "Password updated successfully." });
     } catch (err: unknown) {
-      const msg = typeof err === "object" && err !== null && "message" in err
-        ? String((err as { message: unknown }).message)
-        : "Failed to update password. Check your current password and try again.";
-      setPasswordNotice({ tone: "error", message: msg });
+      const msg =
+        typeof err === "object" && err !== null && "message" in err
+          ? String((err as { message: unknown }).message)
+          : "Failed to change password.";
+      setPwdStatus({ type: "error", message: msg });
     } finally {
-      setSubmittingPassword(false);
+      setChangingPwd(false);
     }
-  };
+  }
 
-  const handleResendVerification = async () => {
-    if (!user || resending) return;
+  async function handleResendVerification() {
+    if (!user?.email) return;
     setResending(true);
-    setResendNotice(null);
+    setResendStatus(null);
     try {
-      const res = await resendVerification(user.email);
-      setResendNotice({ tone: "info", message: res.message || "Verification email sent if account is unverified." });
+      const resp = await resendVerification(user.email);
+      setResendStatus(resp.message || "Verification email sent.");
     } catch (err: unknown) {
-      const msg = typeof err === "object" && err !== null && "message" in err
-        ? String((err as { message: unknown }).message)
-        : "Could not send verification email. Try again shortly.";
-      setResendNotice({ tone: "error", message: msg });
+      const msg =
+        typeof err === "object" && err !== null && "message" in err
+          ? String((err as { message: unknown }).message)
+          : "Could not resend verification email.";
+      setResendStatus(msg);
     } finally {
       setResending(false);
     }
-  };
-
-  const handleSignOut = async () => {
-    await logout();
-  };
+  }
 
   return (
     <div className="page page--account">
       <PageHeader
-        eyebrow="Identity & Security"
+        eyebrow="Account"
         title="Developer Account"
-        copy="Manage your developer profile, credential security, and session status. Local AI, code intelligence, and workspace tools remain completely functional without requiring authentication."
+        copy="Manage your Nexora account identity and security settings. Local inference and conversation history stay on your device."
       />
 
       <div className="page-stack">
-        {/* Profile / Guest Status Section */}
-        <section className="settings-group" aria-label="Account details">
-          <h2 className="settings-group__title">Profile Status</h2>
+        <section className="settings-group" aria-label="Account profile">
+          <h2 className="settings-group__title">Profile</h2>
 
           {loading ? (
+            <p className="settings-row__hint">Checking session status…</p>
+          ) : !isAuthenticated || !user ? (
             <div className="settings-row settings-row--static">
-              <span>Checking credential vault…</span>
+              <span>
+                <span className="settings-row__label">Local Guest Mode (Unauthenticated)</span>
+                <span className="settings-row__hint">
+                  Local AI chat, conversation search, and workspace tools work on this machine without signing in. Sign in is optional for account management and server plan sync.
+                </span>
+              </span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <RouterLink
+                  to="signin"
+                  className="button button--primary"
+                  onClick={
+                    onOpenAuthModal
+                      ? (e) => {
+                          e.preventDefault();
+                          onOpenAuthModal("signin");
+                        }
+                      : undefined
+                  }
+                >
+                  Sign in
+                </RouterLink>
+                <RouterLink
+                  to="signup"
+                  className="button button--ghost"
+                  onClick={
+                    onOpenAuthModal
+                      ? (e) => {
+                          e.preventDefault();
+                          onOpenAuthModal("signup");
+                        }
+                      : undefined
+                  }
+                >
+                  Create account
+                </RouterLink>
+              </div>
             </div>
-          ) : isAuthenticated && user ? (
+          ) : (
             <>
               <div className="settings-row settings-row--static">
                 <span>
-                  <span className="settings-row__label">Developer Name</span>
-                  <span className="settings-row__hint">{user.name || "Unnamed developer"}</span>
+                  <span className="settings-row__label">Display name</span>
+                  <span className="settings-row__hint">Your Nexora account display name.</span>
                 </span>
-                <span className="badge badge--local">Active Session</span>
+                <span className="settings-row__value">{user.name}</span>
               </div>
 
               <div className="settings-row settings-row--static">
                 <span>
                   <span className="settings-row__label">Email address</span>
-                  <span className="settings-row__hint">{user.email}</span>
+                  <span className="settings-row__hint">Used for account authentication and recovery.</span>
                 </span>
-                {user.emailVerified ? (
-                  <span className="badge badge--success" style={{ color: "var(--accent-success, #34d399)" }}>
-                    <Icon name="check" size={12} /> Verified
-                  </span>
-                ) : (
-                  <span className="badge badge--warning" style={{ color: "var(--accent-warning, #fbbf24)" }}>
-                    <Icon name="alert" size={12} /> Unverified
-                  </span>
-                )}
+                <span className="settings-row__value">{user.email}</span>
               </div>
 
               <div className="settings-row settings-row--static">
                 <span>
-                  <span className="settings-row__label">Account Identifier</span>
-                  <span className="settings-row__hint" style={{ fontFamily: "monospace" }}>
-                    {user.id}
-                  </span>
+                  <span className="settings-row__label">Account ID</span>
+                  <span className="settings-row__hint">Unique identifier for your Nexora identity.</span>
                 </span>
+                <span className="settings-row__value mono">{user.id}</span>
               </div>
 
               <div className="settings-row settings-row--static">
                 <span>
-                  <span className="settings-row__label">Developer Edition & Licencing</span>
+                  <span className="settings-row__label">Email verification</span>
                   <span className="settings-row__hint">
-                    Manage your edition, commercial rights, and offline activation keys.
+                    {user.emailVerified
+                      ? "Confirmed for account recovery and notifications."
+                      : "Please confirm your email address."}
                   </span>
                 </span>
-                <RouterLink to="licensing" className="button button--ghost button--sm">
-                  <Icon name="shield" size={12} /> Manage Licence
-                </RouterLink>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {user.emailVerified ? (
+                    <span className="badge badge--local">
+                      <Icon name="check" size={12} /> Verified
+                    </span>
+                  ) : (
+                    <>
+                      <span className="badge">Unverified</span>
+                      <button
+                        type="button"
+                        className="button button--ghost button--sm"
+                        disabled={resending}
+                        onClick={handleResendVerification}
+                      >
+                        {resending ? "Sending…" : "Resend email"}
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
-              {!user.emailVerified && (
-                <div className="settings-row settings-row--static">
-                  <span>
-                    <span className="settings-row__label">Email verification</span>
-                    <span className="settings-row__hint">
-                      Your email address has not been verified yet. Check your inbox for the link.
-                    </span>
-                    {resendNotice && (
-                      <span className={`status status--${resendNotice.tone}`} style={{ display: "block", marginTop: 4 }}>
-                        {resendNotice.message}
-                      </span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className="button button--ghost button--sm"
-                    disabled={resending}
-                    onClick={handleResendVerification}
-                  >
-                    <Icon name="refresh" size={13} /> {resending ? "Sending…" : "Resend email"}
-                  </button>
+              {resendStatus && (
+                <div className="status status--info" role="status" style={{ marginTop: 8 }}>
+                  {resendStatus}
                 </div>
               )}
-            </>
-          ) : (
-            <div className="settings-row settings-row--static" style={{ flexDirection: "column", alignItems: "flex-start", gap: 12 }}>
-              <span>
-                <span className="settings-row__label">Local Guest Mode (Unauthenticated)</span>
-                <span className="settings-row__hint">
-                  You are not currently signed in. Nexora works offline-first: local models, conversations, projects,
-                  and code analysis are completely unrestricted.
+
+              <div className="settings-row settings-row--static">
+                <span>
+                  <span className="settings-row__label">Active Session</span>
+                  <span className="settings-row__hint">
+                    Signing out clears your account token from OS credential storage while keeping local conversations intact.
+                  </span>
                 </span>
-              </span>
-              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                <RouterLink to="signin" className="button button--primary button--sm">
-                  Sign in
-                </RouterLink>
-                <RouterLink to="signup" className="button button--ghost button--sm">
-                  Create account
-                </RouterLink>
+                <button type="button" className="button button--ghost" onClick={handleLogout}>
+                  Sign out
+                </button>
               </div>
-            </div>
+            </>
           )}
         </section>
 
-        {/* Password Security Section (Authenticated users) */}
-        {isAuthenticated && (
+        {isAuthenticated && user && (
           <section className="settings-group" aria-label="Password security">
-            <h2 className="settings-group__title">Change Password</h2>
-            <form onSubmit={handlePasswordSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {passwordNotice && (
-                <div className={`status status--${passwordNotice.tone}`} role="status">
-                  {passwordNotice.message}
+            <h2 className="settings-group__title">Change password</h2>
+
+            <form
+              onSubmit={handleChangePassword}
+              style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 420 }}
+            >
+              {pwdStatus && (
+                <div
+                  className={`status status--${pwdStatus.type === "error" ? "error" : "success"}`}
+                  role="alert"
+                >
+                  {pwdStatus.message}
                 </div>
               )}
 
-              <div className="settings-row settings-row--static" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                <label htmlFor="account-current-pw" className="settings-row__label">
-                  Current password
-                </label>
+              <label className="field">
+                <span className="field__label">Current password</span>
                 <input
-                  id="account-current-pw"
-                  type={showPasswords ? "text" : "password"}
+                  className="field__input"
+                  type="password"
+                  required
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="input"
-                  style={{ width: "100%", maxWidth: 360 }}
-                  placeholder="Enter current password"
-                  autoComplete="current-password"
-                  disabled={submittingPassword}
                 />
-              </div>
+              </label>
 
-              <div className="settings-row settings-row--static" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                <label htmlFor="account-new-pw" className="settings-row__label">
-                  New password (at least 8 characters)
-                </label>
+              <label className="field">
+                <span className="field__label">New password (at least 8 characters)</span>
                 <input
-                  id="account-new-pw"
-                  type={showPasswords ? "text" : "password"}
+                  className="field__input"
+                  type="password"
+                  required
+                  minLength={8}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="input"
-                  style={{ width: "100%", maxWidth: 360 }}
-                  placeholder="Enter new password"
-                  autoComplete="new-password"
-                  disabled={submittingPassword}
                 />
-              </div>
+              </label>
 
-              <div className="settings-row settings-row--static" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                <label htmlFor="account-confirm-pw" className="settings-row__label">
-                  Confirm new password
-                </label>
+              <label className="field">
+                <span className="field__label">Confirm new password</span>
                 <input
-                  id="account-confirm-pw"
-                  type={showPasswords ? "text" : "password"}
+                  className="field__input"
+                  type="password"
+                  required
+                  minLength={8}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="input"
-                  style={{ width: "100%", maxWidth: 360 }}
-                  placeholder="Confirm new password"
-                  autoComplete="new-password"
-                  disabled={submittingPassword}
                 />
-              </div>
+              </label>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-                <button
-                  type="button"
-                  className="button button--ghost button--sm"
-                  onClick={() => setShowPasswords(!showPasswords)}
-                >
-                  <Icon name={showPasswords ? "eye-off" : "eye"} size={13} />
-                  {showPasswords ? "Hide passwords" : "Show passwords"}
-                </button>
-                <button
-                  type="submit"
-                  className="button button--primary button--sm"
-                  disabled={submittingPassword || !currentPassword || !newPassword}
-                >
-                  {submittingPassword ? "Updating…" : "Update password"}
+              <div>
+                <button type="submit" className="button button--primary" disabled={changingPwd}>
+                  {changingPwd ? "Updating…" : "Update password"}
                 </button>
               </div>
             </form>
           </section>
         )}
 
-        {/* Session Management */}
-        {isAuthenticated && (
-          <section className="settings-group" aria-label="Session management">
-            <h2 className="settings-group__title">Session & Sign Out</h2>
-            <div className="settings-row settings-row--static">
-              <span>
-                <span className="settings-row__label">Active OS Session</span>
-                <span className="settings-row__hint">
-                  Session tokens are encrypted in the OS Credential Manager. Signing out revokes
-                  the session and purges local credentials.
-                </span>
+        <section className="settings-group" aria-label="Privacy guarantee">
+          <h2 className="settings-group__title">Local Privacy Boundary</h2>
+          <div className="settings-row settings-row--static">
+            <span>
+              <span className="settings-row__label">Zero cloud code transmission</span>
+              <span className="settings-row__hint">
+                Your source code, prompts, model weights, and local conversation transcripts remain on your machine.
               </span>
-              <button
-                type="button"
-                className="button button--ghost button--sm"
-                onClick={handleSignOut}
-              >
-                Sign out
-              </button>
-            </div>
-          </section>
-        )}
+            </span>
+          </div>
+        </section>
       </div>
     </div>
   );

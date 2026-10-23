@@ -76,6 +76,14 @@ impl GenerateRequest {
             ));
         }
 
+        if self.request_id.trim() != self.request_id
+            || self.request_id.chars().any(char::is_control)
+        {
+            return Err(InferenceError::invalid_request(
+                "The request identifier contains invalid characters.",
+            ));
+        }
+
         if self.messages.is_empty() {
             return Err(InferenceError::invalid_request("There is nothing to send."));
         }
@@ -128,7 +136,8 @@ impl GenerateRequest {
 }
 
 /// Events streamed to the UI while a response is generated.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GenerationEvent {
     Started {
@@ -150,7 +159,7 @@ pub struct GenerationOutcome {
     pub cancelled: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineState {
     NotConfigured,
@@ -221,6 +230,7 @@ pub struct LoadFailure {
 pub struct ActiveDownload {
     pub profile_id: &'static str,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub verifying: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub struct InferenceState {
@@ -491,14 +501,32 @@ impl InferenceState {
     /// A failed health check is reported as `loading` or `error`, never as
     /// "ready", and a configured-but-stopped engine is distinct from an
     /// unconfigured one.
+    #[cfg(test)]
     pub async fn status(&self, version: String) -> AppStatus {
+        let dirs = process::RuntimeSearchDirs {
+            exe_dir: std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf)),
+            resource_dir: None,
+            data_dir: Some(self.config_dir.clone()),
+        };
+        self.status_with_dirs(version, &dirs).await
+    }
+
+    /// Same as [`Self::status`], additionally checking caller-supplied bundle
+    /// resource/sidecar search directories when `settings.runtime_path` is unset.
+    pub async fn status_with_dirs(
+        &self,
+        version: String,
+        dirs: &process::RuntimeSearchDirs,
+    ) -> AppStatus {
         // A child that died since the last read makes the "loaded" mark stale.
         // Reap it here, before anything reports what is running.
         self.reconcile_engine();
 
         let settings = self.settings_snapshot();
 
-        let (running, port, last_error) = {
+        let (running, endpoint, last_error) = {
             let mut supervisor = match self.supervisor.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -508,7 +536,7 @@ impl InferenceState {
 
             (
                 running,
-                supervisor.endpoint().map(|(port, _)| port),
+                supervisor.endpoint(),
                 supervisor.last_error.clone(),
             )
         };
@@ -524,12 +552,17 @@ impl InferenceState {
         // than pretending the engine is merely stopped.
         let last_error = last_error.or_else(|| self.failure_message());
 
-        let healthy = match (running, port) {
-            (true, Some(port)) => process::health_ok(port).await,
+        let healthy = match (running, endpoint) {
+            (true, Some((port, key))) => process::health_ok_with_key(port, Some(&key)).await,
             _ => false,
         };
 
-        let configured = settings.model_path.is_some() && settings.runtime_path.is_some();
+        let discovered_runtime = process::discover_sidecar(dirs)
+            .ok()
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned());
+        let resolved_runtime = settings.runtime_path.clone().or(discovered_runtime);
+        let configured = settings.model_path.is_some() && resolved_runtime.is_some();
         let (state, detail) = classify_engine(
             running,
             healthy,
@@ -554,7 +587,7 @@ impl InferenceState {
             version,
             engine: EngineStatus {
                 state,
-                runtime: settings.runtime_path.clone(),
+                runtime: resolved_runtime,
                 // Owned up front: `settings.model_path` is moved into this
                 // payload a few lines below, and a borrow here would fight it.
                 model: running_path
@@ -607,6 +640,36 @@ impl InferenceState {
         active.cancel.notify_one();
 
         true
+    }
+
+    /// Cancels all active background tasks and reaps any supervised child runtime.
+    pub fn shutdown(&self) {
+        if let Ok(slot) = self.active.lock() {
+            if let Some(active) = slot.as_ref() {
+                active.cancelled.store(true, Ordering::SeqCst);
+                active.cancel.notify_one();
+            }
+        }
+
+        if let Ok(slot) = self.download.lock() {
+            if let Some(download) = slot.as_ref() {
+                download.cancel.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mut supervisor = match self.supervisor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        supervisor.stop();
+        drop(supervisor);
+        self.clear_loaded();
+    }
+}
+
+impl Drop for InferenceState {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

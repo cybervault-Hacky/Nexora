@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 
 use sqlx::PgPool;
 
-use crate::password::{self, PasswordError};
+use crate::password;
 use crate::registration::validate_email;
 use crate::session::{self, CreatedSession, SessionError};
 
@@ -123,9 +123,7 @@ fn verify_any(password_input: &str, password_hash: Option<&str>) -> Result<(), (
 fn validate_login_request(request: &LoginRequest) -> Result<String, LoginError> {
     let email = validate_email(&request.email).map_err(LoginError::Validation)?;
     if request.password.is_empty() {
-        return Err(LoginError::Validation(
-            "Password is required.".to_string(),
-        ));
+        return Err(LoginError::Validation("Password is required.".to_string()));
     }
     Ok(email)
 }
@@ -157,32 +155,27 @@ pub async fn login(
     .await
     .map_err(|_| LoginError::Internal)?;
 
-    let (user_id, name, email_out, verified, status): (
-        String,
-        String,
-        String,
-        bool,
-        String,
-    ) = match row {
-        Some(row) => {
-            use sqlx::Row;
-            let id: String = row.get("id");
-            let name: String = row.get("name");
-            let email: String = row.get("email");
-            let password_hash: Option<String> = row.get("password_hash");
-            let verified: bool = row.get("verified");
-            let status: String = row.get("status");
-            if verify_any(&request.password, password_hash.as_deref()).is_err() {
+    let (user_id, name, email_out, verified, status): (String, String, String, bool, String) =
+        match row {
+            Some(row) => {
+                use sqlx::Row;
+                let id: String = row.get("id");
+                let name: String = row.get("name");
+                let email: String = row.get("email");
+                let password_hash: Option<String> = row.get("password_hash");
+                let verified: bool = row.get("verified");
+                let status: String = row.get("status");
+                if verify_any(&request.password, password_hash.as_deref()).is_err() {
+                    return Err(LoginError::InvalidCredentials);
+                }
+                (id, name, email, verified, status)
+            }
+            None => {
+                // Unknown account: same generic failure after equal work.
+                let _ = verify_any(&request.password, None);
                 return Err(LoginError::InvalidCredentials);
             }
-            (id, name, email, verified, status)
-        }
-        None => {
-            // Unknown account: same generic failure after equal work.
-            let _ = verify_any(&request.password, None);
-            return Err(LoginError::InvalidCredentials);
-        }
-    };
+        };
 
     // Account-status model (Phase 23B: active | locked | deleted).
     if status != "active" {
@@ -193,22 +186,17 @@ pub async fn login(
         return Err(LoginError::EmailUnverified);
     }
 
-    let session = session::insert_session(
-        &mut *tx,
-        &user_id,
-        session_ttl_secs,
-        app_version,
-        platform,
-    )
-    .await
-    .map_err(|error| match error {
-        SessionError::DependencyUnavailable => LoginError::DependencyUnavailable,
-        SessionError::Internal => LoginError::Internal,
-        other => {
-            let _ = other;
-            LoginError::Internal
-        }
-    })?;
+    let session =
+        session::insert_session(&mut *tx, &user_id, session_ttl_secs, app_version, platform)
+            .await
+            .map_err(|error| match error {
+                SessionError::DependencyUnavailable => LoginError::DependencyUnavailable,
+                SessionError::Internal => LoginError::Internal,
+                other => {
+                    let _ = other;
+                    LoginError::Internal
+                }
+            })?;
     tx.commit().await.map_err(|_| LoginError::Internal)?;
 
     Ok(LoginOutcome {
@@ -229,7 +217,10 @@ mod tests {
             email: "  Ada@Example.Test  ".to_string(),
             password: "whatever".to_string(),
         };
-        assert_eq!(validate_login_request(&request).unwrap(), "ada@example.test");
+        assert_eq!(
+            validate_login_request(&request).unwrap(),
+            "ada@example.test"
+        );
     }
 
     #[test]

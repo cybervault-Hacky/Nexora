@@ -4,7 +4,16 @@ import { describe, expect, it } from "vitest";
 
 import { READINESS_STATES } from "../../lib/ipc";
 import type { ReadinessState } from "../../lib/ipc";
-import { estimateLines, readinessLabel, readinessTone } from "./readiness";
+import {
+  APPROVED_PROFILE_IDS,
+  NEXORA_MINI_ID,
+  NEXORA_SONNET_ID,
+  estimateLines,
+  formatDownloadProgress,
+  isApprovedProfileId,
+  readinessLabel,
+  readinessTone,
+} from "./readiness";
 import { makeReadiness } from "../../test/fixtures";
 
 // Vitest may be started from the repo root, `apps/`, or `apps/desktop`, and
@@ -35,7 +44,7 @@ describe("readiness presentation", () => {
   it("matches every state name the Rust core emits", () => {
     const rust = rustStateNames();
 
-    expect(rust).toHaveLength(14);
+    expect(rust).toHaveLength(16);
     expect([...READINESS_STATES].sort()).toEqual([...rust].sort());
   });
 
@@ -58,5 +67,48 @@ describe("readiness presentation", () => {
 
   it("does not call an unknown state ready", () => {
     expect(readinessLabel("something_new" as ReadinessState)).toBe("Unknown state");
+  });
+
+  it("matches approved registry IDs from registry.rs verbatim and rejects unknown profiles", () => {
+    const registryPath = RUST_SOURCE.replace("readiness.rs", "registry.rs");
+    const registrySource = readFileSync(registryPath, "utf8");
+
+    expect(registrySource).toContain(`pub const NEXORA_MINI_ID: &str = "${NEXORA_MINI_ID}";`);
+    expect(registrySource).toContain(`pub const NEXORA_SONNET_ID: &str = "${NEXORA_SONNET_ID}";`);
+    expect(registrySource).toContain("static PROFILES: [ModelProfile; 2] = [NEXORA_MINI, NEXORA_SONNET];");
+
+    expect(APPROVED_PROFILE_IDS).toEqual([NEXORA_MINI_ID, NEXORA_SONNET_ID]);
+    expect(isApprovedProfileId(NEXORA_MINI_ID)).toBe(true);
+    expect(isApprovedProfileId(NEXORA_SONNET_ID)).toBe(true);
+    expect(isApprovedProfileId("rogue-model-id")).toBe(false);
+    expect(isApprovedProfileId("")).toBe(false);
+    expect(isApprovedProfileId(null)).toBe(false);
+  });
+
+  it("formats real transfer byte progress without inventing ETAs or premature 100%", () => {
+    const mid = formatDownloadProgress({
+      received: 2 * 1024 ** 3,
+      total: 4 * 1024 ** 3,
+      verifying: false,
+    });
+    expect(mid).toBe("Downloading 2.00 of 4.00 GiB (50%)");
+    expect(mid).not.toMatch(/min|sec|eta/i);
+
+    // Even when all bytes arrived, stays capped at 99% until SHA-256 verification completes
+    expect(
+      formatDownloadProgress({
+        received: 4 * 1024 ** 3,
+        total: 4 * 1024 ** 3,
+        verifying: false,
+      }),
+    ).toBe("Downloading 4.00 of 4.00 GiB (99%)");
+
+    expect(
+      formatDownloadProgress({
+        received: 4 * 1024 ** 3,
+        total: 4 * 1024 ** 3,
+        verifying: true,
+      }),
+    ).toBe("Verifying SHA-256 integrity before publishing…");
   });
 });

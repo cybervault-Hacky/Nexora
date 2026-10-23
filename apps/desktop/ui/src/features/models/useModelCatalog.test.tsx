@@ -185,4 +185,63 @@ describe("useModelCatalog — profile switching", () => {
 
     expect(result.current.selected?.profile.displayName).toBe("Nexora Mini");
   });
+
+  it("filters out unapproved profiles and refuses unknown profile IDs without silent fallback", async () => {
+    const base = catalog(MINI_ID);
+    const rogue = entry({
+      profile: profile("unapproved-cloud-model-99b", "Rogue Cloud Model"),
+      selected: false,
+    });
+    fetchMock.mockResolvedValue({ ...base, entries: [...base.entries, rogue] });
+
+    const { result } = renderHook(() => useModelCatalog());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.entries.map((item) => item.profile.id)).toEqual([MINI_ID, SONNET_ID]);
+
+    await act(async () => {
+      await result.current.select("unknown-profile-id");
+    });
+
+    expect(selectMock).not.toHaveBeenCalled();
+    expect(result.current.switchError).toContain("No approved model profile is registered");
+    expect(result.current.selected?.profile.id).toBe(MINI_ID);
+  });
+
+  it("never substitutes Mini when no approved profile is marked selected", async () => {
+    const unselected = catalog("none");
+    fetchMock.mockResolvedValue(unselected);
+
+    const { result } = renderHook(() => useModelCatalog());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.selected).toBeNull();
+    expect(result.current.selectionError).toContain("unrecognized or unavailable");
+  });
+
+  it("discards stale out-of-order fetchModelCatalog responses", async () => {
+    let resolveSlowFirst!: (value: Payload) => void;
+    const slowFirstPromise = new Promise<Payload>((resolve) => {
+      resolveSlowFirst = resolve;
+    });
+
+    fetchMock
+      .mockImplementationOnce(() => slowFirstPromise)
+      .mockResolvedValueOnce(catalog(SONNET_ID));
+
+    const { result, rerender } = renderHook(({ key }) => useModelCatalog(key), {
+      initialProps: { key: 0 },
+    });
+
+    // Trigger newer refresh (seq 2 -> SONNET_ID) before seq 1 settles
+    rerender({ key: 1 });
+    await waitFor(() => expect(result.current.selected?.profile.id).toBe(SONNET_ID));
+
+    // Resolve stale seq 1 with MINI_ID afterwards — must be completely ignored
+    await act(async () => {
+      resolveSlowFirst(catalog(MINI_ID));
+    });
+
+    expect(result.current.selected?.profile.id).toBe(SONNET_ID);
+  });
 });

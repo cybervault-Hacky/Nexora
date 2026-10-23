@@ -46,6 +46,16 @@ pub const RUNTIME_OVERHEAD_GIB: f64 = 1.0;
 /// the product cannot contradict each other.
 pub const MEMORY_HEADROOM_GIB: f64 = 2.0;
 
+/// What happened to the most recent download attempt for a profile in this
+/// session, before a file was installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferOutcome {
+    /// A network, HTTP, size, or SHA-256 error aborted the transfer.
+    Failed(String),
+    /// The user explicitly cancelled the transfer.
+    Cancelled,
+}
+
 /// Which file, per profile, was confirmed as the approved artefact this session.
 ///
 /// Deliberately session-scoped and path-keyed: after a restart Nexora no longer
@@ -56,12 +66,16 @@ pub const MEMORY_HEADROOM_GIB: f64 = 2.0;
 pub struct VerificationLedger {
     verified: BTreeMap<&'static str, PathBuf>,
     failed: BTreeSet<&'static str>,
+    in_progress: BTreeSet<&'static str>,
+    transfers: BTreeMap<&'static str, TransferOutcome>,
 }
 
 impl VerificationLedger {
     /// Records a digest match for `profile_id` at `path`.
     pub fn mark_verified(&mut self, profile_id: &'static str, path: &Path) {
         self.failed.remove(profile_id);
+        self.in_progress.remove(profile_id);
+        self.transfers.remove(profile_id);
         self.verified.insert(profile_id, normalise(path));
     }
 
@@ -69,7 +83,38 @@ impl VerificationLedger {
     /// stale "verified" can never outlive the evidence for it.
     pub fn mark_failed(&mut self, profile_id: &'static str) {
         self.verified.remove(profile_id);
+        self.in_progress.remove(profile_id);
         self.failed.insert(profile_id);
+    }
+
+    pub fn begin_verifying(&mut self, profile_id: &'static str) {
+        self.in_progress.insert(profile_id);
+    }
+
+    pub fn finish_verifying(&mut self, profile_id: &'static str) {
+        self.in_progress.remove(profile_id);
+    }
+
+    pub fn is_verifying(&self, profile_id: &str) -> bool {
+        self.in_progress.contains(profile_id)
+    }
+
+    pub fn clear_transfer(&mut self, profile_id: &'static str) {
+        self.transfers.remove(profile_id);
+    }
+
+    pub fn record_download_failed(&mut self, profile_id: &'static str, reason: String) {
+        self.transfers
+            .insert(profile_id, TransferOutcome::Failed(reason));
+    }
+
+    pub fn record_download_cancelled(&mut self, profile_id: &'static str) {
+        self.transfers
+            .insert(profile_id, TransferOutcome::Cancelled);
+    }
+
+    pub fn last_transfer(&self, profile_id: &str) -> Option<TransferOutcome> {
+        self.transfers.get(profile_id).cloned()
     }
 
     pub fn is_verified(&self, profile_id: &str, path: &Path) -> bool {
@@ -160,6 +205,8 @@ pub struct ReadinessInput<'a> {
     pub memory: MemoryStatus,
     pub files: FileFacts,
     pub download_active: bool,
+    pub verifying_active: bool,
+    pub last_transfer: Option<TransferOutcome>,
     pub engine: EngineFacts,
 }
 
@@ -175,8 +222,12 @@ pub enum ReadinessState {
     ReadyToDownload,
     /// A download is running right now.
     Downloading,
-    /// A partial file was left by a cancelled or interrupted download.
+    /// A partial file was left or the previous download failed.
     DownloadIncomplete,
+    /// The user explicitly cancelled the most recent download.
+    DownloadCancelled,
+    /// SHA-256 integrity verification is running right now.
+    Verifying,
     /// A digest check ran and did not match the published value.
     VerificationFailed,
     /// The file is present at the exact published length but unverified.
@@ -208,6 +259,8 @@ impl ReadinessState {
             ReadinessState::ReadyToDownload => "ready_to_download",
             ReadinessState::Downloading => "downloading",
             ReadinessState::DownloadIncomplete => "download_incomplete",
+            ReadinessState::DownloadCancelled => "download_cancelled",
+            ReadinessState::Verifying => "verifying",
             ReadinessState::VerificationFailed => "verification_failed",
             ReadinessState::Unverified => "unverified",
             ReadinessState::DownloadedVerified => "downloaded_verified",
@@ -605,6 +658,12 @@ pub fn assess(input: &ReadinessInput<'_>) -> Readiness {
             "The engine is starting and loading this model. Nothing is confirmed until it answers."
                 .to_string(),
         )
+    } else if input.verifying_active {
+        (
+            ReadinessState::Verifying,
+            "Verifying integrity",
+            "Checking the SHA-256 digest against the approved artifact before use.".to_string(),
+        )
     } else if input.download_active {
         (
             ReadinessState::Downloading,
@@ -632,6 +691,30 @@ pub fn assess(input: &ReadinessInput<'_>) -> Readiness {
             ReadinessState::DownloadIncomplete,
             "Download incomplete",
             "An earlier download did not finish. Nexora never treats a partial file as installed; start again to replace it.".to_string(),
+        )
+    } else if matches!(
+        input.last_transfer,
+        Some(TransferOutcome::Failed(_)) if !input.files.installed_exact
+    ) {
+        let detail = match input.last_transfer.as_ref() {
+            Some(TransferOutcome::Failed(reason)) => reason.clone(),
+            _ => {
+                "The previous download failed. Nothing was installed; retry when ready.".to_string()
+            }
+        };
+        (
+            ReadinessState::DownloadIncomplete,
+            "Download incomplete",
+            detail,
+        )
+    } else if matches!(
+        input.last_transfer,
+        Some(TransferOutcome::Cancelled) if !input.files.installed_exact
+    ) {
+        (
+            ReadinessState::DownloadCancelled,
+            "Download cancelled",
+            "Download cancelled. Nothing was installed; start again whenever ready.".to_string(),
         )
     } else if input.files.installed_exact && input.files.verified {
         if memory_blocks {
@@ -694,16 +777,19 @@ pub fn assess(input: &ReadinessInput<'_>) -> Readiness {
     let can_download = has_artifact
         && !input.files.installed_exact
         && !input.download_active
+        && !input.verifying_active
         && !storage_blocks
         && input.files.wrong_size_bytes.is_none()
         && !input.files.verification_failed;
 
     // A running engine holds the single runtime slot, so this profile cannot be
     // loaded until that engine is unloaded — even when it is a different model.
-    let can_verify = input.files.installed_exact && !input.files.verified;
+    let can_verify =
+        input.files.installed_exact && !input.files.verified && !input.verifying_active;
 
     let can_load = input.files.installed_exact
         && input.files.verified
+        && !input.verifying_active
         && !input.engine.running
         && !memory_blocks;
 
@@ -750,6 +836,8 @@ mod tests {
             memory: memory(32.0, 24.0),
             files: FileFacts::default(),
             download_active: false,
+            verifying_active: false,
+            last_transfer: None,
             engine: idle(),
         }
     }
@@ -1416,6 +1504,11 @@ mod tests {
             "download_incomplete"
         );
         assert_eq!(
+            ReadinessState::DownloadCancelled.as_str(),
+            "download_cancelled"
+        );
+        assert_eq!(ReadinessState::Verifying.as_str(), "verifying");
+        assert_eq!(
             ReadinessState::VerificationFailed.as_str(),
             "verification_failed"
         );
@@ -1443,6 +1536,8 @@ mod tests {
             ReadinessState::ReadyToDownload,
             ReadinessState::Downloading,
             ReadinessState::DownloadIncomplete,
+            ReadinessState::DownloadCancelled,
+            ReadinessState::Verifying,
             ReadinessState::VerificationFailed,
             ReadinessState::Unverified,
             ReadinessState::DownloadedVerified,
@@ -1462,6 +1557,34 @@ mod tests {
         names.dedup();
 
         assert_eq!(names.len(), total);
+    }
+
+    #[test]
+    fn verifying_cancelled_and_failed_transfers_report_distinct_honest_states() {
+        let mut verifying = base(&NEXORA_MINI, 8_192);
+        verifying.verifying_active = true;
+        let assessed = assess(&verifying);
+        assert_eq!(assessed.state, ReadinessState::Verifying);
+        assert!(!assessed.can_download);
+        assert!(!assessed.can_verify);
+        assert!(!assessed.can_load);
+
+        let mut cancelled = base(&NEXORA_MINI, 8_192);
+        cancelled.last_transfer = Some(TransferOutcome::Cancelled);
+        let assessed = assess(&cancelled);
+        assert_eq!(assessed.state, ReadinessState::DownloadCancelled);
+        assert!(assessed.can_download, "cancelled download must allow retry");
+        assert!(!assessed.can_load);
+
+        let mut failed = base(&NEXORA_MINI, 8_192);
+        failed.last_transfer = Some(TransferOutcome::Failed(
+            "The model host answered 503 Service Unavailable. No file was written.".to_string(),
+        ));
+        let assessed = assess(&failed);
+        assert_eq!(assessed.state, ReadinessState::DownloadIncomplete);
+        assert!(assessed.detail.contains("503"));
+        assert!(assessed.can_download, "failed download must allow retry");
+        assert!(!assessed.can_load);
     }
 
     #[test]

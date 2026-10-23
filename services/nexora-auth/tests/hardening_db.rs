@@ -27,8 +27,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
 async fn test_pool() -> PgPool {
@@ -40,8 +38,10 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
-    MIGRATIONS.run(&pool).await.expect("run migrations");
-    sqlx::query("TRUNCATE users CASCADE")
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("run migrations");
+    sqlx::query("TRUNCATE users, login_attempts, google_oauth_states CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -52,7 +52,10 @@ async fn test_pool() -> PgPool {
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn exponential_backoff_escalates_for_persistent_offenders() {
     let pool = test_pool().await;
-    let rule = RateLimitRule { max_failures: 2, window_secs: 600 };
+    let rule = RateLimitRule {
+        max_failures: 2,
+        window_secs: 600,
+    };
     let key = rate_limit::email_key("brute@example.test");
 
     // Exactly one exhausted window → plain window as Retry-After.
@@ -75,25 +78,41 @@ async fn exponential_backoff_escalates_for_persistent_offenders() {
         .await
         .unwrap_err();
     assert!(retry >= 2_400, "expected escalation, got {retry}");
-    assert!(retry <= MAX_BACKOFF_SECS, "backoff must stay bounded, got {retry}");
+    assert!(
+        retry <= MAX_BACKOFF_SECS,
+        "backoff must stay bounded, got {retry}"
+    );
 
     // A calm key is unaffected.
-    assert!(rate_limit::check(&pool, "login", &rate_limit::email_key("calm@example.test"), rule, CountMode::FailuresOnly)
-        .await
-        .is_ok());
+    assert!(rate_limit::check(
+        &pool,
+        "login",
+        &rate_limit::email_key("calm@example.test"),
+        rule,
+        CountMode::FailuresOnly
+    )
+    .await
+    .is_ok());
 }
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn window_boundary_blocks_exactly_at_the_limit() {
     let pool = test_pool().await;
-    let rule = RateLimitRule { max_failures: 3, window_secs: 900 };
+    let rule = RateLimitRule {
+        max_failures: 3,
+        window_secs: 900,
+    };
     let key = rate_limit::ip_key("203.0.113.7");
 
     rate_limit::record(&pool, "register", &key, "failure").await;
     rate_limit::record(&pool, "register", &key, "failure").await;
     // 2 of 3 → allowed.
-    assert!(rate_limit::check(&pool, "register", &key, rule, CountMode::FailuresOnly).await.is_ok());
+    assert!(
+        rate_limit::check(&pool, "register", &key, rule, CountMode::FailuresOnly)
+            .await
+            .is_ok()
+    );
     rate_limit::record(&pool, "register", &key, "failure").await;
     // 3 of 3 → blocked with a Retry-After the handler turns into a header.
     let retry = rate_limit::check(&pool, "register", &key, rule, CountMode::FailuresOnly)
@@ -134,20 +153,16 @@ async fn forwarded_headers_are_never_used_for_rate_limit_keys() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    let (spoofed,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM login_attempts WHERE key = $1",
-    )
-    .bind(rate_limit::ip_key("10.99.99.99"))
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let (peer_rows,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM login_attempts WHERE key = $1",
-    )
-    .bind(rate_limit::ip_key("203.0.113.9"))
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (spoofed,): (i64,) = sqlx::query_as("SELECT count(*) FROM login_attempts WHERE key = $1")
+        .bind(rate_limit::ip_key("10.99.99.99"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (peer_rows,): (i64,) = sqlx::query_as("SELECT count(*) FROM login_attempts WHERE key = $1")
+        .bind(rate_limit::ip_key("203.0.113.9"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(spoofed, 0, "forwarded headers must never key the limiter");
     assert!(peer_rows > 0, "the socket peer must key the limiter");
 }
@@ -159,7 +174,10 @@ async fn rate_limited_response_carries_retry_after_and_generic_body() {
     let mut state = AppState::unconfigured();
     state.pool = Some(pool.clone());
     state.email = std::sync::Arc::new(UnconfiguredEmailProvider);
-    state.rate_limit_login = RateLimitRule { max_failures: 1, window_secs: 900 };
+    state.rate_limit_login = RateLimitRule {
+        max_failures: 1,
+        window_secs: 900,
+    };
     let app = build_router_with_state(Arc::new(state));
 
     let peer: SocketAddr = "203.0.113.10:52000".parse().unwrap();
@@ -178,7 +196,9 @@ async fn rate_limited_response_carries_retry_after_and_generic_body() {
         .method("POST")
         .uri("/v1/auth/login")
         .header("content-type", "application/json")
-        .body(Body::from(r#"{"email":"brute@example.test","password":"second-wrong-pass"}"#))
+        .body(Body::from(
+            r#"{"email":"brute@example.test","password":"second-wrong-pass"}"#,
+        ))
         .unwrap();
     request.extensions_mut().insert(ConnectInfo(peer));
     let second = app.oneshot(request).await.unwrap();
@@ -208,7 +228,10 @@ async fn escalated_retry_after_is_pure_and_bounded() {
         assert!(value >= 600);
         assert!(value <= MAX_BACKOFF_SECS);
         if windows > 0 {
-            assert!(value >= previous, "backoff never shrinks with more failures");
+            assert!(
+                value >= previous,
+                "backoff never shrinks with more failures"
+            );
         }
         previous = value;
     }

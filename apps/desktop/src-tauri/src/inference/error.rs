@@ -47,12 +47,34 @@ impl InferenceError {
         Self::new("already_exists", message)
     }
 
+    /// The configured or expected runtime executable does not exist on disk.
+    pub fn runtime_missing(message: impl Into<String>) -> Self {
+        Self::new("runtime_missing", message)
+    }
+
+    /// The candidate runtime binary exists, is empty, or is incompatible with this OS.
+    pub fn incompatible_runtime(message: impl Into<String>) -> Self {
+        Self::new("incompatible_runtime", message)
+    }
+
+    pub fn auth_failed(message: impl Into<String>) -> Self {
+        Self::new("auth_failed", message)
+    }
+
     pub fn spawn_failed(message: impl Into<String>) -> Self {
         Self::new("spawn_failed", message)
     }
 
     pub fn load_failed(message: impl Into<String>) -> Self {
         Self::new("load_failed", message)
+    }
+
+    pub fn process_exited(message: impl Into<String>) -> Self {
+        Self::new("process_exited", message)
+    }
+
+    pub fn generation_failed(message: impl Into<String>) -> Self {
+        Self::new("generation_failed", message)
     }
 
     pub fn not_running(message: impl Into<String>) -> Self {

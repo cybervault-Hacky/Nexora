@@ -16,6 +16,11 @@ async fn main() {
         std::process::exit(2);
     });
 
+    let catalog = nexora_auth::billing::PlanCatalogConfig::from_env().unwrap_or_else(|error| {
+        eprintln!("nexora-auth: plan catalogue configuration error: {error}");
+        std::process::exit(2);
+    });
+
     // Build the pool lazily from the configured URL (never printed). When a
     // database is configured, verify connectivity at startup so a broken
     // deployment fails loudly instead of serving 503s indefinitely.
@@ -25,7 +30,9 @@ async fn main() {
                 .max_connections(5)
                 .connect_lazy(url)
                 .unwrap_or_else(|_| {
-                    eprintln!("nexora-auth: {DATABASE_URL_LABEL} could not be used. (Value withheld.)");
+                    eprintln!(
+                        "nexora-auth: {DATABASE_URL_LABEL} could not be used. (Value withheld.)"
+                    );
                     std::process::exit(2);
                 });
             if let Err(error) = sqlx::query("SELECT 1").execute(&pool).await {
@@ -33,6 +40,14 @@ async fn main() {
                     "nexora-auth: configured database is unreachable ({error}). \
                      (Connection string withheld.)"
                 );
+                std::process::exit(1);
+            }
+            if let Err(error) = nexora_auth::run_migrations(&pool).await {
+                eprintln!("nexora-auth: database migrations failed ({error}).");
+                std::process::exit(1);
+            }
+            if let Err(error) = nexora_auth::billing::sync_plan_catalog(&pool, &catalog).await {
+                eprintln!("nexora-auth: failed to synchronize plan catalogue ({error}).");
                 std::process::exit(1);
             }
             Some(pool)
@@ -55,11 +70,33 @@ async fn main() {
     // process configuration only — never logged.
     let google_provider: Option<Arc<dyn nexora_auth::oauth::GoogleProvider>> =
         match (&config.google_client_id, &config.google_redirect_uri) {
-            (Some(client_id), Some(_)) => Some(Arc::new(nexora_auth::oauth::HttpGoogleProvider::new(
-                client_id.clone(),
-                config.google_client_secret.clone(),
-            ))),
+            (Some(client_id), Some(_)) => {
+                Some(Arc::new(nexora_auth::oauth::HttpGoogleProvider::new(
+                    client_id.clone(),
+                    config.google_client_secret.clone(),
+                )))
+            }
             _ => None,
+        };
+
+    let payment_provider: Arc<dyn nexora_auth::billing::PaymentProvider> =
+        match &config.stripe_secret_key {
+            Some(secret_key) => Arc::new(nexora_auth::billing::StripeHttpProvider::new(
+                secret_key.clone(),
+                config
+                    .stripe_success_url
+                    .clone()
+                    .unwrap_or_else(|| "https://nexora.local/billing/success".to_string()),
+                config
+                    .stripe_cancel_url
+                    .clone()
+                    .unwrap_or_else(|| "https://nexora.local/billing/cancel".to_string()),
+                config
+                    .stripe_portal_return_url
+                    .clone()
+                    .unwrap_or_else(|| "https://nexora.local/billing/return".to_string()),
+            )),
+            None => Arc::new(nexora_auth::billing::UnconfiguredPaymentProvider),
         };
 
     let state = Arc::new(AppState {
@@ -76,12 +113,16 @@ async fn main() {
         rate_limit_recovery: config.rate_limit_recovery,
         google_provider,
         google_redirect_uri: config.google_redirect_uri.clone(),
+        payment_provider,
+        stripe_webhook_secret: config.stripe_webhook_secret.clone(),
     });
 
-    let listener = tokio::net::TcpListener::bind(config.bind).await.unwrap_or_else(|error| {
-        eprintln!("nexora-auth: cannot bind {}: {error}", config.bind);
-        std::process::exit(1);
-    });
+    let listener = tokio::net::TcpListener::bind(config.bind)
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("nexora-auth: cannot bind {}: {error}", config.bind);
+            std::process::exit(1);
+        });
 
     // Startup output prints the resolved bind address and capability flags
     // only — never environment contents or secret values.
@@ -106,7 +147,8 @@ async fn main() {
     // ConnectInfo feeds the per-IP rate-limit keys (plan §4).
     if let Err(error) = axum::serve(
         listener,
-        build_router_with_state(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        build_router_with_state(state)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await

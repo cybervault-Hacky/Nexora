@@ -96,7 +96,9 @@ async fn exchange_without_configuration_is_honest_503() {
     let (status, body) = post_json("/v1/auth/google/exchange", &valid_body()).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(body.contains("dependency_unavailable"), "body: {body}");
-    assert!(!body.contains("not configured in this build") || body.contains("dependency_unavailable"));
+    assert!(
+        !body.contains("not configured in this build") || body.contains("dependency_unavailable")
+    );
     // No session, no user, no token — nothing that looks like success.
     assert!(!body.contains("token"));
     assert!(!body.contains("\"session\""));
@@ -134,7 +136,12 @@ async fn oauth_routes_reject_wrong_methods_with_json_envelope() {
 #[tokio::test]
 async fn health_and_unknown_routes_keep_the_existing_surface() {
     let response = build_router()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

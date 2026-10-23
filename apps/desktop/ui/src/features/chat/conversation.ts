@@ -87,3 +87,34 @@ export function isCurrentConversation(
 ): boolean {
   return capturedConversationId === activeConversationId;
 }
+
+/**
+ * Computes the base message history for retrying the last failed or stopped turn
+ * without duplicating the user message or combining partial assistant output.
+ */
+export function planRetry(messages: readonly ChatMessage[]): ChatMessage[] | null {
+  if (messages.length === 0) {
+    return null;
+  }
+
+  const last = messages[messages.length - 1];
+  if (!last) {
+    return null;
+  }
+
+  if (last.role === "user") {
+    return [...messages];
+  }
+
+  if (
+    last.role === "assistant" &&
+    (last.state === "error" || last.state === "stopped")
+  ) {
+    const previous = messages[messages.length - 2];
+    if (previous?.role === "user") {
+      return messages.slice(0, -1);
+    }
+  }
+
+  return null;
+}

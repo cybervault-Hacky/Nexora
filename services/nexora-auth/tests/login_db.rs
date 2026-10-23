@@ -24,8 +24,6 @@ use nexora_auth::session;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
 const GOOD_PASSWORD: &str = "correct horse battery";
@@ -67,8 +65,10 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
-    MIGRATIONS.run(&pool).await.expect("run migrations");
-    sqlx::query("TRUNCATE users CASCADE")
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("run migrations");
+    sqlx::query("TRUNCATE users, login_attempts, google_oauth_states CASCADE")
         .execute(&pool)
         .await
         .expect("truncate");
@@ -133,13 +133,18 @@ async fn login_succeeds_and_stores_only_the_token_hash() {
     assert!(outcome.session.expires_at_rfc3339.contains('T'));
 
     // Hash at rest: the raw token must not appear in the sessions table.
-    let digests: Vec<Vec<u8>> = sqlx::query_as("SELECT token_hash FROM sessions")
+    let digests: Vec<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM sessions")
         .fetch_all(&pool)
         .await
         .unwrap();
     assert_eq!(digests.len(), 1);
-    assert_eq!(digests[0], session::hash_session_token(&outcome.session.raw_token));
-    assert!(digests.iter().all(|row| row != outcome.session.raw_token.as_bytes()));
+    assert_eq!(
+        digests[0],
+        session::hash_session_token(&outcome.session.raw_token)
+    );
+    assert!(digests
+        .iter()
+        .all(|row| row != outcome.session.raw_token.as_bytes()));
 
     // The issued token authenticates.
     let context = session::authenticate(&pool, &outcome.session.raw_token, 604_800)
@@ -226,7 +231,7 @@ async fn unverified_and_locked_accounts_are_refused() {
         None,
     )
     .await
-        .unwrap_err();
+    .unwrap_err();
     assert_eq!(error.code(), "invalid_credentials");
 }
 
@@ -246,7 +251,9 @@ async fn absolute_and_idle_expiry_both_reject_sessions() {
     )
     .await
     .unwrap();
-    sqlx::query("UPDATE sessions SET expires_at = now() - interval '1 second'")
+    sqlx::query(
+        "UPDATE sessions SET created_at = now() - interval '2 hours', last_used_at = now() - interval '2 hours', expires_at = now() - interval '1 second'",
+    )
         .execute(&pool)
         .await
         .unwrap();
@@ -309,14 +316,15 @@ async fn logout_revokes_the_whole_family_including_rotated_siblings() {
     // Both the rotated token and the original are dead — and reuse detection
     // reports the same generic error.
     for token in [&rotated.raw_token, &outcome.session.raw_token] {
-        let error = session::authenticate(&pool, token, 604_800).await.unwrap_err();
+        let error = session::authenticate(&pool, token, 604_800)
+            .await
+            .unwrap_err();
         assert_eq!(error.code(), "invalid_or_expired_token");
     }
-    let (live,): (i64,) =
-        sqlx::query_as("SELECT count(*) FROM sessions WHERE revoked_at IS NULL")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (live,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions WHERE revoked_at IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(live, 0);
 }
 
@@ -378,14 +386,12 @@ async fn concurrent_revocation_cannot_be_revived() {
 
     let token = outcome.session.raw_token.clone();
     let revoke_pool = pool.clone();
-    let revoke = tokio::spawn(async move {
-        session::revoke_family(&revoke_pool, &token, 604_800).await
-    });
+    let revoke =
+        tokio::spawn(async move { session::revoke_family(&revoke_pool, &token, 604_800).await });
     let use_pool = pool.clone();
     let use_token = outcome.session.raw_token.clone();
-    let used = tokio::spawn(async move {
-        session::authenticate(&use_pool, &use_token, 604_800).await
-    });
+    let used =
+        tokio::spawn(async move { session::authenticate(&use_pool, &use_token, 604_800).await });
 
     let _ = revoke.await.unwrap();
     let first = used.await.unwrap();
@@ -404,7 +410,10 @@ async fn rate_limiting_windows_block_excess_failures_without_lockout() {
     use nexora_auth::rate_limit::{self, CountMode, RateLimitRule};
 
     let pool = test_pool().await;
-    let rule = RateLimitRule { max_failures: 2, window_secs: 900 };
+    let rule = RateLimitRule {
+        max_failures: 2,
+        window_secs: 900,
+    };
     let key = rate_limit::email_key("brute@example.test");
 
     for _ in 0..2 {
@@ -421,8 +430,8 @@ async fn rate_limiting_windows_block_excess_failures_without_lockout() {
     // Successes do not consume the failure window (no lockout for real users
     // with a correct password).
     rate_limit::record(&pool, "login", &key, "success").await;
-    let still_blocked = rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly)
-        .await;
+    let still_blocked =
+        rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly).await;
     assert!(still_blocked.is_err());
 }
 

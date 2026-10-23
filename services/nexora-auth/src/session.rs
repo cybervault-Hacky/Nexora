@@ -80,7 +80,9 @@ pub enum SessionError {
     Expired,
     /// Session was revoked; `reuse` marks the family-reuse case (the family
     /// has been revoked as a precaution).
-    Revoked { reuse: bool },
+    Revoked {
+        reuse: bool,
+    },
     DependencyUnavailable,
     Internal,
 }
@@ -269,7 +271,11 @@ pub async fn authenticate(
     let _ = updated;
 
     Ok(SessionContext {
-        user: SessionUser { id: user_id, name, email },
+        user: SessionUser {
+            id: user_id,
+            name,
+            email,
+        },
         session_id,
         family_id,
     })
@@ -325,7 +331,10 @@ pub async fn rotate_session(
         return Err(SessionError::Revoked { reuse: false });
     }
 
-    transaction.commit().await.map_err(|_| SessionError::Internal)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| SessionError::Internal)?;
 
     use sqlx::Row;
     let expires_at_rfc3339: String = row.get(0);
@@ -405,7 +414,10 @@ mod tests {
     fn ttl_clamp_holds_bounds() {
         assert_eq!(clamp_ttl(1), MIN_SESSION_TTL_SECS);
         assert_eq!(clamp_ttl(u64::MAX), MAX_SESSION_TTL_SECS);
-        assert_eq!(clamp_ttl(DEFAULT_SESSION_TTL_SECS), DEFAULT_SESSION_TTL_SECS);
+        assert_eq!(
+            clamp_ttl(DEFAULT_SESSION_TTL_SECS),
+            DEFAULT_SESSION_TTL_SECS
+        );
     }
 
     #[test]

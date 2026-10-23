@@ -6,6 +6,7 @@ export type IconName =
   | "arrow-up"
   | "branch"
   | "check"
+  | "chevron-down"
   | "chip"
   | "circle"
   | "close"
@@ -21,6 +22,7 @@ export type IconName =
   | "maximize"
   | "message"
   | "minimize"
+  | "moon"
   | "panel-left"
   | "plus"
   | "refresh"
@@ -28,6 +30,7 @@ export type IconName =
   | "settings"
   | "shield"
   | "stop"
+  | "sun"
   | "terminal"
   | "trash"
   | "user"
@@ -67,6 +70,11 @@ const ICONS: Record<IconName, ReactElement> = {
   ),
   maximize: <rect x="6.5" y="6.5" width="11" height="11" rx="1.2" />,
   minimize: <path d="M6.5 12h11" />,
+  moon: (
+    <>
+      <path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10Z" />
+    </>
+  ),
   home: (
     <>
       <path d="M4 11.2 12 4.5l8 6.7" />
@@ -112,9 +120,20 @@ const ICONS: Record<IconName, ReactElement> = {
     </>
   ),
   stop: <rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor" stroke="none" />,
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" />
+    </>
+  ),
   check: (
     <>
       <path d="M6 12.5l4 4 8-8.5" />
+    </>
+  ),
+  "chevron-down": (
+    <>
+      <path d="m6.5 9.5 5.5 5.5 5.5-5.5" />
     </>
   ),
   edit: (

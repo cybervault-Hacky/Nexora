@@ -169,27 +169,19 @@ describe("Phase 23 Step 7 — Offline AI & Unauthenticated Regression Suite", ()
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("allows navigating from the sign-in screen back to onboarding and workspace without logging in", async () => {
+  it("allows closing the floating sign-in modal back to the workspace without logging in", async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Navigate to sign-in page
+    // Navigate to sign-in alias -> opens floating modal directly over AI Chat
     goto("#/signin");
-    expect(await screen.findByRole("heading", { name: "Welcome back" })).toBeTruthy();
+    expect(await screen.findByRole("dialog")).toBeTruthy();
 
-    // Back to onboarding
-    const backBtn = screen.getByRole("button", { name: "Back to onboarding" });
-    await user.click(backBtn);
-    expect(await screen.findByRole("heading", { name: "Sign-in is the next step." })).toBeTruthy();
-
-    // Open workspace from onboarding
-    const openWorkspace = screen.getByRole("button", { name: "Open the workspace" });
-    expect(openWorkspace).toBeTruthy();
-    await user.click(openWorkspace);
-
-    // Lands on workspace without needing credentials or auth tokens
-    expect(await screen.findByRole("heading", { name: "Welcome to Nexora" })).toBeTruthy();
-    expect(window.location.hash).toBe("#/home");
+    // Close modal back to AI Chat workspace without needing credentials
+    await user.click(screen.getByRole("button", { name: "Close sign-in dialog" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByRole("region", { name: "Conversation messages" })).toBeTruthy();
+    expect(window.location.hash).toBe("#/chat");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -125,11 +125,11 @@ describe("Phase 26 — Developer Licensing & Workspace Tiering Integration", () 
     expect(screen.getByText(/Community Sovereignty Guarantee/i)).toBeTruthy();
   });
 
-  it("navigates to Licensing page via /billing alias", async () => {
+  it("navigates to Plans & Billing page via /billing alias", async () => {
     render(<App />);
     goto("#/billing");
 
-    expect(await screen.findByRole("heading", { name: "Developer Licensing" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Plans & Billing" })).toBeTruthy();
   });
 
   it("Settings page provides direct navigation link to Licensing page", async () => {

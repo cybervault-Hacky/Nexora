@@ -1,13 +1,10 @@
 /**
- * Parser for the small Markdown subset a coding assistant actually needs.
+ * Safe text-node Markdown parser for Nexora assistant responses.
  *
- * Model output is untrusted text. This module turns it into plain data — blocks
- * and inline segments — so the renderer only ever creates text nodes. Nothing
- * here interprets HTML, and nothing escapes to a raw-markup path.
- *
- * The subset is deliberately narrow: fenced code with an optional language,
- * paragraphs, and inline code spans. Anything else stays literal text, which is
- * the safe failure mode while a reply is still streaming.
+ * Model output is untrusted text. Every token produced here resolves strictly
+ * to plain strings rendered as React text nodes — never HTML markup. Raw tags
+ * such as `<script>` or `<img onerror=...>` stay inert literal text, and links
+ * accept only validated `http:` / `https:` URLs.
  */
 
 export interface TextBlock {
@@ -36,18 +33,37 @@ export interface InlineSegment {
   text: string;
 }
 
+export type RichInlineNode =
+  | { kind: "text"; text: string }
+  | { kind: "code"; text: string }
+  | { kind: "strong"; text: string }
+  | { kind: "em"; text: string }
+  | { kind: "link"; label: string; href: string };
+
+export type RichBlock =
+  | { kind: "paragraph"; text: string }
+  | { kind: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
+  | { kind: "list"; ordered: boolean; start: number; items: string[] }
+  | { kind: "table"; headers: string[]; rows: string[][] }
+  | { kind: "blockquote"; text: string }
+  | { kind: "hr" }
+  | CodeBlockData;
+
 /** Longest fence language Nexora will display; anything longer is not a tag. */
 const MAX_LANGUAGE_LENGTH = 24;
 /** Guards the UI against a pathological single reply. */
 const MAX_BLOCKS = 4_000;
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const HEADING = /^ {0,3}(#{1,6})\s+(.+?)\s*#*$/;
+const UNORDERED_ITEM = /^ {0,3}[-*+]\s+(.+)$/;
+const ORDERED_ITEM = /^ {0,3}(\d+)\.\s+(.+)$/;
+const BLOCKQUOTE_LINE = /^ {0,3}>\s?(.*)$/;
+const HORIZONTAL_RULE = /^ {0,3}(?:-\s*){3,}$|^ {0,3}(?:\*\s*){3,}$|^ {0,3}(?:_\s*){3,}$/;
+const TABLE_SEPARATOR = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
 
 /**
  * Keeps a fence info word only when it looks like a language tag.
- *
- * The label is displayed, so it is restricted to characters that cannot be
- * confused with markup: letters, digits, and `+`, `-`, `_`, `#`, `.`, `/`.
  */
 export function normaliseLanguage(info: string): string | null {
   const token = info.trim().split(/\s+/)[0] ?? "";
@@ -64,10 +80,7 @@ export function normaliseLanguage(info: string): string | null {
 }
 
 /**
- * Splits inline text on backtick spans.
- *
- * A single backtick opens a span; the matching run closes it. Backticks with no
- * partner stay literal, which is what a user sees mid-stream.
+ * Splits inline text on backtick spans (core contract preserved verbatim).
  */
 export function parseInline(text: string): InlineSegment[] {
   const segments: InlineSegment[] = [];
@@ -98,7 +111,6 @@ export function parseInline(text: string): InlineSegment[] {
     const close = text.indexOf(fence, index);
 
     if (close === -1) {
-      // No partner: the backticks are ordinary characters.
       plain += fence;
       continue;
     }
@@ -122,10 +134,85 @@ export function parseInline(text: string): InlineSegment[] {
 }
 
 /**
- * Splits a reply into text paragraphs and code blocks.
- *
- * Blank lines separate paragraphs; single newlines inside a paragraph are kept
- * so a short code-ish answer does not lose its shape.
+ * Validates that a Markdown link destination uses a safe external web protocol.
+ * Any `javascript:`, `data:`, `vbscript:`, `file:`, or malformed URL is rejected
+ * so the source text remains plain inert text.
+ */
+export function sanitizeMarkdownUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 2048) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+const RICH_TOKEN = /(\[([^\]\n]+)\]\(([^)\s\n]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*)/g;
+
+/**
+ * Parses inline code, bold (`**text**`), emphasis (`*text*`), and validated
+ * external links (`[label](https://...)`) without ever interpreting HTML.
+ */
+export function parseRichInline(text: string): RichInlineNode[] {
+  const base = parseInline(text);
+  const out: RichInlineNode[] = [];
+
+  for (const segment of base) {
+    if (segment.code) {
+      out.push({ kind: "code", text: segment.text });
+      continue;
+    }
+
+    let cursor = 0;
+    RICH_TOKEN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = RICH_TOKEN.exec(segment.text)) !== null) {
+      if (match.index > cursor) {
+        out.push({ kind: "text", text: segment.text.slice(cursor, match.index) });
+      }
+
+      const full = match[0];
+      const linkLabel = match[2];
+      const linkTarget = match[3];
+      const boldText = match[4];
+      const italicText = match[5];
+
+      if (linkLabel !== undefined && linkTarget !== undefined) {
+        const safeHref = sanitizeMarkdownUrl(linkTarget);
+        if (safeHref) {
+          out.push({ kind: "link", label: linkLabel, href: safeHref });
+        } else {
+          out.push({ kind: "text", text: full });
+        }
+      } else if (boldText !== undefined) {
+        out.push({ kind: "strong", text: boldText });
+      } else if (italicText !== undefined) {
+        out.push({ kind: "em", text: italicText });
+      } else {
+        out.push({ kind: "text", text: full });
+      }
+
+      cursor = match.index + full.length;
+    }
+
+    if (cursor < segment.text.length) {
+      out.push({ kind: "text", text: segment.text.slice(cursor) });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Splits a reply into text paragraphs and code blocks (core contract preserved verbatim).
  */
 export function parseMessage(content: string): ContentBlock[] {
   const blocks: ContentBlock[] = [];
@@ -133,14 +220,11 @@ export function parseMessage(content: string): ContentBlock[] {
   let text: string[] = [];
 
   const flushText = () => {
-    // A blank-line separated run becomes one paragraph per run, preserving the
-    // inner newlines.
     const runs = text.join("\n").split(/\n{2,}/);
 
     for (const run of runs) {
       const trimmed = run.replace(/^\n+|\n+$/g, "");
 
-      // A run of spaces is not a paragraph; rendering it would add dead space.
       if (trimmed.trim().length > 0) {
         blocks.push({ kind: "text", text: trimmed });
       }
@@ -173,7 +257,6 @@ export function parseMessage(content: string): ContentBlock[] {
       const closing = FENCE.exec(inner);
       const closingMarker = closing?.[1] ?? "";
 
-      // A fence closes only with its own character, without an info string.
       if (
         closing &&
         closingMarker[0] === fenceCharacter &&
@@ -189,8 +272,6 @@ export function parseMessage(content: string): ContentBlock[] {
     blocks.push({
       kind: "code",
       language,
-      // The streamed tail may end with the fence's own trailing newline; keep
-      // the code verbatim but drop a single trailing blank line added by it.
       code: code.join("\n"),
       closed,
     });
@@ -199,4 +280,152 @@ export function parseMessage(content: string): ContentBlock[] {
   flushText();
 
   return blocks.slice(0, MAX_BLOCKS);
+}
+
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+/**
+ * Converts a plain `TextBlock` into rich structural Markdown blocks:
+ * headings, unordered/ordered lists, pipe tables, blockquotes, horizontal rules,
+ * and standard paragraphs.
+ */
+function expandProseBlocks(text: string): RichBlock[] {
+  const lines = text.split("\n");
+  const out: RichBlock[] = [];
+  let paragraph: string[] = [];
+
+  const flushParagraph = () => {
+    const joined = paragraph.join("\n").trim();
+    if (joined.length > 0) {
+      out.push({ kind: "paragraph", text: joined });
+    }
+    paragraph = [];
+  };
+
+  let idx = 0;
+  while (idx < lines.length) {
+    const line = lines[idx] ?? "";
+    const trimmed = line.trim();
+
+    if (trimmed.length === 0) {
+      flushParagraph();
+      idx += 1;
+      continue;
+    }
+
+    // Horizontal rule
+    if (HORIZONTAL_RULE.test(line)) {
+      flushParagraph();
+      out.push({ kind: "hr" });
+      idx += 1;
+      continue;
+    }
+
+    // ATX Heading (# .. ######)
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flushParagraph();
+      const level = Math.min(6, Math.max(1, (heading[1] ?? "#").length)) as 1 | 2 | 3 | 4 | 5 | 6;
+      out.push({ kind: "heading", level, text: heading[2] ?? "" });
+      idx += 1;
+      continue;
+    }
+
+    // Pipe Table (header line + separator line + 0..N rows)
+    const nextLine = lines[idx + 1] ?? "";
+    if (line.includes("|") && TABLE_SEPARATOR.test(nextLine)) {
+      const headers = splitTableRow(line);
+      if (headers.length >= 1 && headers.some((cell) => cell.length > 0)) {
+        flushParagraph();
+        const rows: string[][] = [];
+        idx += 2;
+        while (idx < lines.length) {
+          const rowLine = lines[idx] ?? "";
+          if (!rowLine.includes("|") || rowLine.trim().length === 0) {
+            break;
+          }
+          const cells = splitTableRow(rowLine);
+          const padded = headers.map((_, colIdx) => cells[colIdx] ?? "");
+          rows.push(padded);
+          idx += 1;
+        }
+        out.push({ kind: "table", headers, rows });
+        continue;
+      }
+    }
+
+    // Unordered list
+    const ulMatch = UNORDERED_ITEM.exec(line);
+    if (ulMatch) {
+      flushParagraph();
+      const items: string[] = [];
+      while (idx < lines.length) {
+        const candidate = UNORDERED_ITEM.exec(lines[idx] ?? "");
+        if (!candidate) break;
+        items.push(candidate[1] ?? "");
+        idx += 1;
+      }
+      out.push({ kind: "list", ordered: false, start: 1, items });
+      continue;
+    }
+
+    // Ordered list
+    const olMatch = ORDERED_ITEM.exec(line);
+    if (olMatch) {
+      flushParagraph();
+      const start = Number.parseInt(olMatch[1] ?? "1", 10) || 1;
+      const items: string[] = [];
+      while (idx < lines.length) {
+        const candidate = ORDERED_ITEM.exec(lines[idx] ?? "");
+        if (!candidate) break;
+        items.push(candidate[2] ?? "");
+        idx += 1;
+      }
+      out.push({ kind: "list", ordered: true, start, items });
+      continue;
+    }
+
+    // Blockquote
+    const quoteMatch = BLOCKQUOTE_LINE.exec(line);
+    if (quoteMatch) {
+      flushParagraph();
+      const quoteLines: string[] = [];
+      while (idx < lines.length) {
+        const candidate = BLOCKQUOTE_LINE.exec(lines[idx] ?? "");
+        if (!candidate) break;
+        quoteLines.push(candidate[1] ?? "");
+        idx += 1;
+      }
+      out.push({ kind: "blockquote", text: quoteLines.join("\n").trim() });
+      continue;
+    }
+
+    paragraph.push(line);
+    idx += 1;
+  }
+
+  flushParagraph();
+  return out;
+}
+
+/**
+ * Parses an assistant message into rich ChatGPT-style blocks (headings, lists,
+ * tables, blockquotes, horizontal rules, fenced code blocks, and paragraphs).
+ */
+export function parseRichMessage(content: string): RichBlock[] {
+  const base = parseMessage(content);
+  const rich: RichBlock[] = [];
+
+  for (const block of base) {
+    if (block.kind === "code") {
+      rich.push(block);
+    } else {
+      rich.push(...expandProseBlocks(block.text));
+    }
+  }
+
+  return rich.slice(0, MAX_BLOCKS);
 }

@@ -324,6 +324,7 @@ describe("usePersistentConversation", () => {
     await act(async () => finishOld(snapshot("older")));
     expect(result.current.messages[0]?.content).toBe("newer");
     expect(generateMock).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   // ---- stream integrity (Phase 6) ------------------------------------------
@@ -525,6 +526,68 @@ describe("usePersistentConversation", () => {
     await act(async () => run.settle());
     await expect(history.loadConversation(id)).rejects.toMatchObject({code:"not_found"});
     expect(await history.listConversations()).toHaveLength(0);
+  });
+
+  it("blocks late deltas after stop, persists profileId, cancels on unmount, and retries cleanly without duplicating user messages", async () => {
+    const first = session();
+    const { result, unmount } = renderHook(() =>
+      usePersistentConversation({ profileId: SONNET_ID }),
+    );
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("Implement binary search in Rust"));
+    act(() => result.current.submit());
+    act(() => first.send("half broken outp"));
+    await act(async () => {
+      first.fail({ code: "network", message: "Connection reset mid-stream." });
+    });
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1]?.state).toBe("error");
+    expect(result.current.messages[1]?.profileId).toBe(SONNET_ID);
+    expect(result.current.canRetry).toBe(true);
+
+    // Retry replaces the failed partial assistant turn and NEVER duplicates the user prompt!
+    const retryRun = session();
+    act(() => result.current.retry());
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]?.content).toBe("Implement binary search in Rust");
+    expect(result.current.messages[1]?.content).toBe("");
+    expect(sentRequest(1).messages).toEqual([
+      { role: "user", content: "Implement binary search in Rust" },
+    ]);
+
+    act(() => retryRun.send("pub fn binary_search() {}"));
+    await act(async () => {
+      retryRun.settle();
+    });
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+    await waitFor(() => expect(result.current.saveStatus).toBe("saved"), { timeout: 1000 });
+
+    const convId = result.current.activeId!;
+    expect(result.current.messages[1]?.profileId).toBe(SONNET_ID);
+    expect(result.current.canRetry).toBe(false);
+
+    // Unmounting during an active third stream cancels generation immediately!
+    const liveOnUnmount = session();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    act(() => result.current.setDraft("follow up"));
+    act(() => result.current.submit());
+    const thirdReqId = liveOnUnmount.requestId();
+    unmount();
+    expect(cancelMock).toHaveBeenCalledWith(thirdReqId);
+
+    // Reopen across simulated restart and confirm profileId + clean non-duplicated transcript persisted!
+    const { result: reopened } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(reopened.current.listLoading).toBe(false));
+    act(() => reopened.current.selectConversation(convId));
+    await waitFor(() => expect(reopened.current.messages.length).toBeGreaterThanOrEqual(2));
+    expect(reopened.current.messages[0]?.content).toBe("Implement binary search in Rust");
+    expect(reopened.current.messages[1]?.content).toBe("pub fn binary_search() {}");
+    expect(reopened.current.messages[1]?.profileId).toBe(SONNET_ID);
   });
 
 });

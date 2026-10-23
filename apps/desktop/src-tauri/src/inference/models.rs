@@ -410,11 +410,24 @@ fn round2(value: f64) -> f64 {
 /// Reads a bounded prefix of the runtime executable so a wrong file is caught
 /// before it is ever launched.
 pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
-    let file_path = Path::new(path.trim());
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(InferenceError::not_configured(
+            "Choose the llama-server executable before loading.",
+        ));
+    }
+
+    let file_path = Path::new(trimmed);
+
+    if !file_path.exists() {
+        return Err(InferenceError::runtime_missing(format!(
+            "No runtime executable exists at {trimmed}."
+        )));
+    }
 
     if !file_path.is_file() {
-        return Err(InferenceError::not_configured(format!(
-            "No runtime executable exists at {path}."
+        return Err(InferenceError::incompatible_runtime(format!(
+            "The runtime path {trimmed} is not a regular file."
         )));
     }
 
@@ -423,7 +436,9 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
     let read = read_magic(&mut file, &mut magic)?;
 
     if read < 2 {
-        return Err(InferenceError::invalid_model("That runtime file is empty."));
+        return Err(InferenceError::incompatible_runtime(
+            "That runtime file is empty.",
+        ));
     }
 
     let is_windows_binary = &magic[..2] == b"MZ";
@@ -436,7 +451,7 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
     let runs_here = (is_windows_binary && cfg!(windows)) || (is_script && cfg!(unix)) || is_elf;
 
     if !runs_here {
-        return Err(InferenceError::invalid_model(if cfg!(windows) {
+        return Err(InferenceError::incompatible_runtime(if cfg!(windows) {
             "That file is not a Windows executable. Choose llama-server.exe."
         } else {
             "That file is not an executable for this platform. Choose the llama-server binary."
@@ -445,7 +460,7 @@ pub fn looks_like_executable(path: &str) -> InferenceResult<()> {
 
     // Reject a directory masquerading as a file and confirm we can seek.
     file.seek(SeekFrom::Start(0))
-        .map_err(|error| InferenceError::invalid_model(error.to_string()))?;
+        .map_err(|error| InferenceError::incompatible_runtime(error.to_string()))?;
 
     Ok(())
 }

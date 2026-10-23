@@ -13,23 +13,19 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nexora_auth::app::build_router;
+use nexora_auth::config::{AuthConfig, GoogleSettings};
 use nexora_auth::email::EmailMessage;
 use nexora_auth::login::{LoginError, LoginRequest};
 use nexora_auth::oauth::{GoogleExchangeRequest, OAuthError};
-use nexora_auth::recovery::{
-    ChangePasswordRequest, RecoveryError, ResetPasswordRequest,
-};
+use nexora_auth::recovery::{ChangePasswordRequest, RecoveryError, ResetPasswordRequest};
 use nexora_auth::registration::{RegisterRequest, VerifyEmailRequest};
 use nexora_auth::session::CreatedSession;
-use nexora_auth::config::{AuthConfig, ConfigError, GoogleSettings};
 use tower::ServiceExt;
 
 const SENTINEL_PASSWORD: &str = "SENTINEL_Hunter2_pass!";
-const SENTINEL_TOKEN: &str =
-    "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
+const SENTINEL_TOKEN: &str = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
 const SENTINEL_CODE: &str = "4/0SENTINEL-authz-code";
-const SENTINEL_VERIFIER: &str =
-    "SENTINEL_pkce_verifier_SENTINEL_pkce_verifier_SENT1";
+const SENTINEL_VERIFIER: &str = "SENTINEL_pkce_verifier_SENTINEL_pkce_verifier_SENT1";
 const SENTINEL_STATE: &str = "5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f";
 const SENTINEL_DB_URL: &str = "postgres://sentinel-user:SENTINEL_db_pass@db.example.test/nexora";
 const SENTINEL_SECRET: &str = "SENTINEL_google_client_secret";
@@ -72,7 +68,9 @@ fn debug_output_of_request_types_never_renders_secrets() {
     };
     assert_clean("RegisterRequest Debug", &format!("{register:?}"));
 
-    let verify = VerifyEmailRequest { token: SENTINEL_TOKEN.to_string() };
+    let verify = VerifyEmailRequest {
+        token: SENTINEL_TOKEN.to_string(),
+    };
     assert_clean("VerifyEmailRequest Debug", &format!("{verify:?}"));
 
     let reset = ResetPasswordRequest {
@@ -108,7 +106,10 @@ fn debug_output_of_credentials_and_messages_never_renders_secrets() {
     };
     let rendered = format!("{session:?}");
     assert_clean("CreatedSession Debug", &rendered);
-    assert!(rendered.contains("2026-11-01T00:00:00Z"), "expiry stays visible");
+    assert!(
+        rendered.contains("2026-11-01T00:00:00Z"),
+        "expiry stays visible"
+    );
 
     let message = EmailMessage {
         to: "ada@example.test".to_string(),
@@ -117,21 +118,25 @@ fn debug_output_of_credentials_and_messages_never_renders_secrets() {
     };
     let rendered = format!("{message:?}");
     assert_clean("EmailMessage Debug", &rendered);
-    assert!(rendered.contains("ada@example.test"), "recipient stays visible");
+    assert!(
+        rendered.contains("ada@example.test"),
+        "recipient stays visible"
+    );
 
     // Config Debug: DB URL and OAuth secret must never render.
     let mut config =
         AuthConfig::resolve_with_database(Some("127.0.0.1:8787"), None, Some(SENTINEL_DB_URL))
             .unwrap();
-    config.apply_google_settings(
-        GoogleSettings::resolve(
-            Some("sentinel-client-id"),
-            Some(SENTINEL_SECRET),
-            Some("http://127.0.0.1:49152/callback"),
+    config
+        .apply_google_settings(
+            GoogleSettings::resolve(
+                Some("sentinel-client-id"),
+                Some(SENTINEL_SECRET),
+                Some("http://127.0.0.1:49152/callback"),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .unwrap();
+        .unwrap();
     let rendered = format!("{config:?}");
     assert_clean("AuthConfig Debug", &rendered);
 
@@ -146,7 +151,7 @@ fn debug_output_of_credentials_and_messages_never_renders_secrets() {
     // ConfigError messages withhold values by construction.
     let error = GoogleSettings::resolve(Some("sentinel-client-id"), None, None).unwrap_err();
     assert_clean("ConfigError message", &format!("{error:?}"));
-    assert_clean("ConfigError message", &error.message());
+    assert_clean("ConfigError message", error.message());
 }
 
 #[test]
@@ -223,6 +228,7 @@ async fn post_json(uri: &str, json: &str, auth: Option<&str>) -> (StatusCode, St
 
 #[tokio::test]
 async fn http_error_envelopes_never_echo_request_secrets() {
+    let bearer_header = format!("Bearer {SENTINEL_BEARER}");
     let cases: Vec<(&str, String, Option<&str>)> = vec![
         (
             "/v1/auth/login",
@@ -251,7 +257,7 @@ async fn http_error_envelopes_never_echo_request_secrets() {
             format!(
                 r#"{{"currentPassword":"{SENTINEL_PASSWORD}","newPassword":"{SENTINEL_PASSWORD}2"}}"#
             ),
-            Some(&format!("Bearer {SENTINEL_BEARER}")),
+            Some(bearer_header.as_str()),
         ),
         (
             "/v1/auth/google/exchange",
@@ -274,7 +280,10 @@ async fn http_error_envelopes_never_echo_request_secrets() {
         );
         assert_clean(uri, &response_body);
         // The standard envelope shape is preserved.
-        assert!(response_body.contains("\"error\"") || response_body.is_empty(), "{uri}: {response_body}");
+        assert!(
+            response_body.contains("\"error\"") || response_body.is_empty(),
+            "{uri}: {response_body}"
+        );
     }
 }
 
@@ -285,6 +294,25 @@ async fn protected_route_rejection_never_echoes_the_bearer_token() {
         ("POST", "/v1/auth/refresh"),
         ("GET", "/v1/auth/me"),
     ] {
+        // Malformed bearer token -> 401 without echoing token.
+        let response = build_router()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("authorization", "Bearer SENTINEL_malformed_bearer_token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        assert_clean(uri, &body);
+
+        // Well-formed 64-hex bearer token without DB -> 503 without echoing token.
         let response = build_router()
             .oneshot(
                 Request::builder()
@@ -299,7 +327,7 @@ async fn protected_route_rejection_never_echoes_the_bearer_token() {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(bytes.to_vec()).unwrap();
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
         assert_clean(uri, &body);
     }
 }

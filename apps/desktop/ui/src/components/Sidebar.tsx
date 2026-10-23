@@ -1,5 +1,6 @@
-import type { AppStatus } from "../lib/ipc";
+import type { AuthUser } from "../lib/auth";
 import type { ConversationSummary } from "../lib/history";
+import type { AppStatus } from "../lib/ipc";
 import type { AnyRouteId, RouteId } from "../lib/router";
 import { ApertureMark } from "./ApertureMark";
 import { EngineStatus } from "./EngineStatus";
@@ -7,13 +8,14 @@ import { HistoryList } from "./HistoryList";
 import { Icon, type IconName } from "./Icon";
 import { RouterLink } from "./RouterLink";
 
-/** Primary page navigation. Every item is a real link to a real page. */
+/** Primary workspace destinations — every item links to a working view. */
 const NAV_ITEMS: Array<{ id: RouteId; label: string; icon: IconName }> = [
   { id: "home", label: "Home", icon: "home" },
   { id: "chat", label: "AI Chat", icon: "message" },
   { id: "projects", label: "Projects", icon: "folder" },
   { id: "code", label: "Code Intelligence", icon: "code" },
   { id: "models", label: "Local Models", icon: "chip" },
+  { id: "plans", label: "Plans", icon: "activity" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
 
@@ -25,6 +27,7 @@ interface SidebarProps {
   collapsed: boolean;
   founderModeEnabled?: boolean;
   onNewChat: () => void;
+  onOpenSearch?: () => void;
   onUnload?: () => void;
   unloading?: boolean;
   // History
@@ -36,6 +39,9 @@ interface SidebarProps {
   onRenameConversation?: (id: string, newTitle: string) => Promise<void>;
   onDeleteConversation?: (id: string) => Promise<void>;
   onRetryHistory?: () => void;
+  // Optional Account / Sign-in entry
+  user?: AuthUser | null;
+  onOpenAuthModal?: (mode?: "signin" | "signup") => void;
 }
 
 export function Sidebar({
@@ -45,6 +51,7 @@ export function Sidebar({
   collapsed,
   founderModeEnabled = false,
   onNewChat,
+  onOpenSearch,
   onUnload,
   unloading = false,
   conversations = [],
@@ -55,22 +62,56 @@ export function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onRetryHistory,
+  user = null,
+  onOpenAuthModal,
 }: SidebarProps) {
   const navItems = [
     ...NAV_ITEMS,
-    ...(founderModeEnabled ? [{ id: "founder" as RouteId, label: "Founder Control", icon: "terminal" as IconName }] : []),
+    ...(founderModeEnabled
+      ? [{ id: "founder" as RouteId, label: "Founder Control", icon: "terminal" as IconName }]
+      : []),
   ];
 
   return (
     <aside id="sidebar" className="sidebar" aria-label="Workspace">
       <div className="sidebar__brand">
         <span className="sidebar__mark" aria-hidden="true">
-          <ApertureMark size={22} />
+          <ApertureMark size={19} />
         </span>
         <span className="sidebar__brand-text">
           <span className="sidebar__name">Nexora</span>
-          <span className="sidebar__tagline">Local coding studio</span>
+          <span className="sidebar__tagline">Local coding assistant</span>
         </span>
+      </div>
+
+      <div className="sidebar__actions">
+        <button
+          type="button"
+          className="new-chat"
+          aria-label="New chat"
+          aria-keyshortcuts="Control+N"
+          title="New chat (Ctrl+N)"
+          onClick={onNewChat}
+        >
+          <Icon name="edit" size={15} />
+          <span className="new-chat__label">New chat</span>
+        </button>
+
+        {onOpenSearch ? (
+          <button
+            type="button"
+            className="sidebar__search-btn"
+            aria-label="Search conversations"
+            aria-keyshortcuts="Control+K"
+            title="Search conversations (Ctrl+K)"
+            data-testid="sidebar-search-button"
+            onClick={onOpenSearch}
+          >
+            <Icon name="search" size={15} />
+            <span className="sidebar__search-label">Search chats</span>
+            {!collapsed ? <kbd className="sidebar__shortcut">Ctrl+K</kbd> : null}
+          </button>
+        ) : null}
       </div>
 
       <nav className="sidebar__nav" aria-label="Primary">
@@ -94,18 +135,6 @@ export function Sidebar({
           })}
         </ul>
       </nav>
-
-      <button
-        type="button"
-        className="new-chat"
-        aria-label="New chat"
-        aria-keyshortcuts="Control+N"
-        title="New chat (Ctrl+N)"
-        onClick={onNewChat}
-      >
-        <Icon name="plus" size={16} />
-        <span className="new-chat__label">New chat</span>
-      </button>
 
       {onSelectConversation ? (
         <HistoryList
@@ -136,6 +165,32 @@ export function Sidebar({
           onUnload={onUnload}
           unloading={unloading}
         />
+
+        {user ? (
+          <RouterLink
+            to="account"
+            className={`sidebar__account${currentRoute === "account" ? " sidebar__account--active" : ""}`}
+            aria-label="Developer Account"
+            title={user.name ? `${user.name} (${user.email})` : user.email}
+          >
+            <Icon name="user" size={15} />
+            {!collapsed ? (
+              <span className="sidebar__account-name">Account</span>
+            ) : null}
+          </RouterLink>
+        ) : onOpenAuthModal ? (
+          <button
+            type="button"
+            className="sidebar__signin-btn"
+            aria-label="Sign in"
+            title="Sign in (optional — local chat works without signing in)"
+            onClick={() => onOpenAuthModal("signin")}
+          >
+            <Icon name="user" size={15} />
+            {!collapsed ? <span className="sidebar__account-name">Sign in</span> : null}
+          </button>
+        ) : null}
+
         <div className="sidebar__legal">
           <span>Nexora {status?.version ?? "0.1.0"}</span>
           <span aria-hidden="true">·</span>

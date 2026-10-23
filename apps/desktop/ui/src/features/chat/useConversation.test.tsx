@@ -447,4 +447,40 @@ describe("useConversation", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.runtimeError).toBeNull();
   });
+
+  it("drops late deltas after stop() and retries without duplicating the user turn", async () => {
+    const first = session();
+    const { result } = renderHook(() => useConversation());
+
+    act(() => result.current.setDraft("Explain borrow checker"));
+    act(() => result.current.submit());
+    act(() => first.send("partial"));
+    act(() => result.current.stop());
+    // Late delta arriving after stop() must be dropped immediately.
+    act(() => first.send(" LATE-GARBAGE"));
+    await act(async () => {
+      first.settle({ cancelled: false, finishReason: "stop" });
+    });
+
+    expect(result.current.messages[1]?.content).toBe("partial");
+    expect(result.current.messages[1]?.state).toBe("stopped");
+    expect(result.current.canRetry).toBe(true);
+
+    // Retry reuses the existing user turn without duplicating it or mixing partial text!
+    const second = session();
+    act(() => result.current.retry());
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]?.content).toBe("Explain borrow checker");
+    expect(result.current.messages[1]?.content).toBe("");
+    act(() => second.send("Complete fresh explanation."));
+    await act(async () => {
+      second.settle();
+    });
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]?.content).toBe("Explain borrow checker");
+    expect(result.current.messages[1]?.content).toBe("Complete fresh explanation.");
+    expect(result.current.messages[1]?.state).toBe("complete");
+    expect(result.current.canRetry).toBe(false);
+  });
 });

@@ -21,6 +21,7 @@ pub enum SseLine {
 #[derive(Default)]
 pub struct LineBuffer {
     pending: Vec<u8>,
+    overflowed: bool,
 }
 
 /// Hard cap for a single unterminated line, so a misbehaving server cannot
@@ -50,9 +51,30 @@ impl LineBuffer {
 
         if self.pending.len() > MAX_PENDING_BYTES {
             self.pending.clear();
+            self.overflowed = true;
         }
 
         lines
+    }
+
+    /// Returns true once if an unterminated line exceeded `MAX_PENDING_BYTES`
+    /// and had to be discarded to bound memory.
+    pub fn take_overflow(&mut self) -> bool {
+        std::mem::take(&mut self.overflowed)
+    }
+
+    /// Flushes a trailing line left without a final newline when the stream closes.
+    pub fn finish(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+
+        let mut raw: Vec<u8> = self.pending.drain(..).collect();
+        if raw.last() == Some(&b'\r') {
+            raw.pop();
+        }
+
+        (!raw.is_empty()).then(|| String::from_utf8_lossy(&raw).into_owned())
     }
 
     /// Test-facing probe: how many bytes are waiting for a newline.
@@ -140,6 +162,26 @@ mod tests {
 
         assert!(lines.is_empty());
         assert_eq!(buffer.buffered_bytes(), 0);
+        assert!(buffer.take_overflow());
+        assert!(!buffer.take_overflow());
+    }
+
+    #[test]
+    fn reassembles_byte_by_byte_split_utf8_emoji_and_cjk_without_loss() {
+        let raw =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"🦀 日本語 नमस्ते 🎉\"}}]}\ndata: [DONE]\n";
+        let mut buffer = LineBuffer::new();
+        let mut out = Vec::new();
+        for byte in raw.as_bytes() {
+            out.extend(buffer.push(std::slice::from_ref(byte)));
+        }
+        assert_eq!(
+            out,
+            vec![
+                "data: {\"choices\":[{\"delta\":{\"content\":\"🦀 日本語 नमस्ते 🎉\"}}]}".to_string(),
+                "data: [DONE]".to_string(),
+            ]
+        );
     }
 
     #[test]

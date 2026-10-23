@@ -1,51 +1,162 @@
+/*
+ * Nexora Neutral ChatGPT-Inspired Desktop Design Tokens (Phase 07).
+ *
+ * Dark mode reference:
+ *   - Main chat canvas:  #212121
+ *   - Sidebar & chrome:  #171717
+ *   - Secondary surface: #2f2f2f
+ *   - Hover charcoal:    #383838
+ *   - Border:            #424242
+ *   - Primary text:      #f3f3f3  (13.48:1 WCAG AAA on #212121)
+ *   - Secondary text:    #afafaf  ( 7.13:1 WCAG AAA on #212121)
+ *
+ * Light mode reference:
+ *   - Main chat canvas:  #ffffff
+ *   - Sidebar & chrome:  #f9f9f9
+ *   - Secondary surface: #f4f4f4
+ *   - Hover surface:     #ececec
+ *   - Border:            #e5e5e5
+ *   - Primary text:      #202123  (16.07:1 WCAG AAA on #ffffff)
+ *   - Secondary text:    #6b6b6b  ( 5.33:1 WCAG AA  on #ffffff)
+ *
+ * Solid opaque surfaces with zero glass blur, zero neon accents, and zero
+ * purple/blue AI gradients.
+ */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: #212121;
+  --bg-sidebar: #171717;
+  --bg-panel: #2f2f2f;
+  --bg-elevated: #2f2f2f;
+  --bg-raised: #383838;
+  --bg-hover: #2f2f2f;
+  --bg-hover-strong: #383838;
+  --bg-active: #343434;
+  --bg-code: #171717;
+  --composer-bg: #2f2f2f;
+  --user-bubble-bg: #2f2f2f;
+
+  --glass-chrome: #171717;
+  --glass-sidebar: #171717;
+  --glass-panel: #2f2f2f;
+  --glass-card: #292929;
+  --glass-control: #2f2f2f;
+  --glass-control-hover: #383838;
+  --glass-scrim: rgba(0, 0, 0, 0.62);
+  --glass-border: #424242;
+  --glass-border-strong: #565656;
+  --glass-highlight: transparent;
+  --glass-highlight-control: none;
+  --glass-blur: none;
+
+  --aurora-color-1: transparent;
+  --aurora-color-2: transparent;
+  --aurora-color-3: transparent;
+
+  --border-subtle: #383838;
+  --border-default: #424242;
+  --border-strong: #565656;
+  --border-focus: #d4d4d4;
+
+  --text-primary: #f3f3f3;
+  --text-secondary: #afafaf;
+  --text-tertiary: #8e8e8e;
+  --text-inverse: #171717;
+
+  /* Neutral ChatGPT high-contrast primary control tokens (zero neon/blue/purple) */
+  --accent: #ececec;
+  --accent-rgb: 236, 236, 236;
+  --accent-hover: #ffffff;
+  --accent-pressed: #d4d4d4;
+  --accent-subtle: rgba(255, 255, 255, 0.08);
+  --accent-wash: rgba(255, 255, 255, 0.07);
+  --accent-border: #565656;
+  --link-color: #d9d9d9;
+
+  --success: #10a37f;
+  --success-rgb: 16, 163, 127;
+  --warning: #e09f3e;
+  --warning-rgb: 224, 159, 62;
+  --danger: #ef4444;
+  --danger-rgb: 239, 68, 68;
+
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.36);
+  --shadow-high: 0 16px 40px rgba(0, 0, 0, 0.48);
+  --shadow-glass: 0 2px 10px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: #ffffff;
+  --bg-sidebar: #f9f9f9;
+  --bg-panel: #f4f4f4;
+  --bg-elevated: #f4f4f4;
+  --bg-raised: #ececec;
+  --bg-hover: #ececec;
+  --bg-hover-strong: #e3e3e3;
+  --bg-active: #e8e8e8;
+  --bg-code: #f7f7f8;
+  --composer-bg: #f4f4f4;
+  --user-bubble-bg: #f4f4f4;
+
+  --glass-chrome: #f9f9f9;
+  --glass-sidebar: #f9f9f9;
+  --glass-panel: #ffffff;
+  --glass-card: #f9f9f9;
+  --glass-control: #f4f4f4;
+  --glass-control-hover: #ececec;
+  --glass-scrim: rgba(0, 0, 0, 0.42);
+  --glass-border: #e5e5e5;
+  --glass-border-strong: #d1d1d1;
+  --glass-highlight: transparent;
+  --glass-highlight-control: none;
+  --glass-blur: none;
+
+  --aurora-color-1: transparent;
+  --aurora-color-2: transparent;
+  --aurora-color-3: transparent;
+
+  --border-subtle: #e5e5e5;
+  --border-default: #e5e5e5;
+  --border-strong: #d1d1d1;
+  --border-focus: #202123;
+
+  --text-primary: #202123;
+  --text-secondary: #6b6b6b;
+  --text-tertiary: #6e6e73;
+  --text-inverse: #ffffff;
+
+  --accent: #202123;
+  --accent-rgb: 32, 33, 35;
+  --accent-hover: #343541;
+  --accent-pressed: #0d0d0f;
+  --accent-subtle: rgba(32, 33, 35, 0.06);
+  --accent-wash: rgba(32, 33, 35, 0.06);
+  --accent-border: #c8c8c8;
+  --link-color: #202123;
+
+  --success: #0f7b5f;
+  --success-rgb: 15, 123, 95;
+  --warning: #b45309;
+  --warning-rgb: 180, 83, 9;
+  --danger: #dc2626;
+  --danger-rgb: 220, 38, 38;
+
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --shadow-high: 0 16px 40px rgba(0, 0, 0, 0.16);
+  --shadow-glass: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
 :root {
-  /* Graphite surfaces — each step is a small, deliberate lift in luminance. */
-  --bg-base: #0b0d10;
-  --bg-panel: #111419;
-  --bg-elevated: #171a21;
-  --bg-raised: #1d222a;
-  --bg-hover: #242a33;
-  --bg-code: #0d0f14;
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", "Consolas", ui-monospace, monospace;
 
-  /* Borders stay quiet until interaction or selection gives them meaning. */
-  --border-subtle: rgba(238, 235, 246, 0.075);
-  --border-strong: rgba(238, 235, 246, 0.14);
-  --border-focus: rgba(170, 145, 241, 0.72);
-
-  /* Text colors are tuned for long sessions and small technical labels. */
-  --text-primary: #f1eef6;
-  --text-secondary: #b9b5c3;
-  --text-tertiary: #96919f;
-  --text-inverse: #0b0d10;
-
-  /* Restrained violet is reserved for actions, focus, and active selection. */
-  --accent: #aa91f1;
-  --accent-hover: #baa7f5;
-  --accent-pressed: #9478dd;
-  --accent-rgb: 170, 145, 241;
-  --accent-subtle: rgba(var(--accent-rgb), 0.12);
-  --accent-wash: rgba(var(--accent-rgb), 0.06);
-  --accent-border: rgba(var(--accent-rgb), 0.28);
-  --accent-selection: rgba(var(--accent-rgb), 0.25);
-
-  /* Status colors are paired with non-color labels/icons in the UI. */
-  --success: #69d5a0;
-  --success-rgb: 105, 213, 160;
-  --warning: #e8c078;
-  --warning-rgb: 232, 192, 120;
-  --danger: #ef858c;
-  --danger-rgb: 239, 133, 140;
-  --info: #8dc7df;
-  --info-rgb: 141, 199, 223;
-
-  /* Consistent geometry: compact controls, restrained panels, soft composer. */
-  --radius-chip: 5px;
-  --radius-input: 8px;
-  --radius-card: 10px;
-  --radius-panel: 12px;
-  --radius-composer: 18px;
-
-  /* Spacing rhythm */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -53,64 +164,20 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --space-12: 48px;
+  --space-10: 40px;
 
-  /* Window and workspace proportions */
-  --titlebar-height: 42px;
-  --sidebar-width: 256px;
-  --sidebar-collapsed-width: 68px;
-  --explorer-width: 340px;
-  --content-max: 820px;
+  --radius-chip: 6px;
+  --radius-input: 10px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+  --radius-composer: 24px;
 
-  /* Motion is short and consistent; reduced-motion overrides are below (§3.6). */
-  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
-  --motion-instant: 80ms linear;
-  --motion-fast: 140ms var(--ease-standard);
-  --motion-base: 200ms var(--ease-standard);
-  --motion-slow: 280ms var(--ease-standard);
-  --motion-exit: 120ms var(--ease-exit);
+  --motion-instant: 90ms cubic-bezier(0.2, 0, 0, 1);
+  --motion-fast: 140ms cubic-bezier(0.2, 0, 0, 1);
+  --motion-base: 180ms cubic-bezier(0.2, 0, 0, 1);
 
-  /* Living Aurora ambient lighting tokens (§3.1, §3.2, Phase 30) */
-  --aurora-color-1: rgba(170, 145, 241, 0.10);
-  --aurora-color-2: rgba(141, 199, 223, 0.07);
-  --aurora-color-3: rgba(105, 213, 160, 0.05);
-  --aurora-speed: 22s;
-
-  /* Quiet depth; borders do most of the work on the graphite surfaces. */
-  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.32);
-  --shadow-high: 0 24px 64px rgba(0, 0, 0, 0.45);
-
-  /* Original Phase 1/Phase 29 Glassmorphism System (§3.2):
-     - glass/panel: rgba(17,20,25,0.68) + blur(20px) saturate(130%) + 1 px border/subtle + inset top highlight rgba(255,255,255,0.05)
-     - glass/raised: rgba(24,28,35,0.80) + blur(28px) saturate(140%) + border/strong
-     - glass/scrim: rgba(5,7,10,0.55) + blur(8px)
-  */
-  --glass-panel: rgba(17, 20, 25, 0.68);
-  --glass-raised: rgba(24, 28, 35, 0.80);
-  --glass-scrim: rgba(5, 7, 10, 0.55);
-
-  --glass-chrome: rgba(13, 16, 21, 0.72);
-  --glass-sidebar: rgba(16, 19, 25, 0.75);
-  --glass-control: rgba(27, 31, 39, 0.65);
-  --glass-control-focus: rgba(33, 38, 48, 0.80);
-
-  --glass-border: rgba(238, 235, 246, 0.08);
-  --glass-border-subtle: rgba(238, 235, 246, 0.08);
-  --glass-border-strong: rgba(238, 235, 246, 0.14);
-  --glass-highlight: rgba(255, 255, 255, 0.05);
-
-  --glass-blur: blur(20px) saturate(130%);
-  --glass-blur-raised: blur(28px) saturate(140%);
-  --glass-blur-scrim: blur(8px);
-  --shadow-glass: 0 12px 32px rgba(0, 0, 0, 0.35);
-
-  /* System faces only; Nexora never downloads fonts. */
-  --font-ui: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui,
-    -apple-system, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
-
-  color-scheme: dark;
+  --titlebar-height: 38px;
+  --sidebar-width: 260px;
+  --sidebar-collapsed-width: 56px;
+  --content-max: 768px;
 }
