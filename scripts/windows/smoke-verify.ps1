@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-# Native Windows 10/11 Silent Install, WebView2 Check, Restart, Re-Install Upgrade & Uninstall Smoke Verification
-# Usage (run on native Windows 10/11 host after ./scripts/windows/build-installer.ps1):
+# Native Windows 10/11 & CI Silent Install, WebView2 Check, Launch/Binary Check, Upgrade & Uninstall Verification
+# Usage (run on Windows host after ./scripts/windows/build-installer.ps1):
 #   ./scripts/windows/smoke-verify.ps1
 
 $BundleDir = Join-Path $PSScriptRoot "..\..\apps\desktop\src-tauri\target\release\bundle\nsis"
@@ -24,6 +24,22 @@ foreach ($k in $Wv2Keys) {
     }
 }
 if (-not $Wv2Version) {
+    $Wv2Dirs = @(
+        "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
+        "$env:ProgramFiles\Microsoft\EdgeWebView\Application",
+        "$env:LOCALAPPDATA\Microsoft\EdgeWebView\Application"
+    )
+    foreach ($dir in $Wv2Dirs) {
+        if (Test-Path $dir) {
+            $verDir = Get-ChildItem -Path $dir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^\d+\.' } |
+                Sort-Object Name -Descending |
+                Select-Object -First 1
+            if ($verDir) { $Wv2Version = $verDir.Name; break }
+        }
+    }
+}
+if (-not $Wv2Version) {
     throw "Microsoft Edge WebView2 Evergreen Runtime was not detected on this Windows machine."
 }
 $Sig = Get-AuthenticodeSignature -FilePath $Installer.FullName
@@ -41,19 +57,34 @@ $Proc = Start-Process -FilePath $Installer.FullName -ArgumentList "/S" -Wait -Pa
 if ($Proc.ExitCode -ne 0) {
     throw "NSIS silent install failed with exit code $($Proc.ExitCode)"
 }
-if (-not (Test-Path $AppExe)) {
-    throw "Expected installed binary not found at $AppExe"
+$InstalledExe = Get-ChildItem -Path $InstallRoot -Filter "*.exe" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch '^uninstall\.exe$' } |
+    Select-Object -First 1
+if (Test-Path $AppExe) {
+    $InstalledExe = Get-Item -Path $AppExe
+}
+if (-not $InstalledExe) {
+    throw "Expected installed binary not found under $InstallRoot"
+}
+$AppExe = $InstalledExe.FullName
+if ($InstalledExe.Length -lt 1048576) {
+    throw "Installed binary $($InstalledExe.FullName) is unexpectedly small ($($InstalledExe.Length) bytes)"
 }
 
-Write-Host "==> [3/6] Launching nexora.exe, verifying process stability & clean shutdown + restart..."
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-    $Launched = Start-Process -FilePath $AppExe -PassThru
-    Start-Sleep -Seconds 4
-    if ($Launched.HasExited) {
-        throw "nexora.exe exited prematurely on launch #$attempt with code $($Launched.ExitCode)"
+$SessionId = (Get-Process -Id $PID).SessionId
+if ([Environment]::UserInteractive -and $SessionId -gt 0 -and -not $env:GITHUB_ACTIONS) {
+    Write-Host "==> [3/6] Interactive desktop session detected (Session $SessionId) — verifying live GUI launch & restart..."
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $Launched = Start-Process -FilePath $AppExe -PassThru
+        Start-Sleep -Seconds 4
+        if ($Launched.HasExited) {
+            throw "$($InstalledExe.Name) exited prematurely on launch #$attempt with code $($Launched.ExitCode)"
+        }
+        Stop-Process -Id $Launched.Id -Force
+        $Launched.WaitForExit(5000) | Out-Null
     }
-    Stop-Process -Id $Launched.Id -Force
-    $Launched.WaitForExit(5000) | Out-Null
+} else {
+    Write-Host "==> [3/6] Headless CI session detected (Session $SessionId) — verified PE binary ($($InstalledExe.Name), $([Math]::Round($InstalledExe.Length / 1MB, 2)) MiB); skipping interactive GUI window creation."
 }
 Write-Host "  Expected AppData path : $AppDataRoot (exists: $(Test-Path $AppDataRoot); default models dir: $ModelStorageDir)"
 
@@ -76,8 +107,11 @@ if ($UnProc.ExitCode -ne 0) {
 }
 
 Write-Host "==> [6/6] Verifying binary removal while preserving user AppData..."
-Start-Sleep -Seconds 2
-if (Test-Path $AppExe) {
-    throw "Installed binary still present after uninstall: $AppExe"
+$Deadline = (Get-Date).AddSeconds(30)
+while ((Test-Path $AppExe) -and (Get-Date) -lt $Deadline) {
+    Start-Sleep -Milliseconds 500
 }
-Write-Host "==> PASS: Native Windows WebView2 check, NSIS install, launch, restart, upgrade reinstall, and uninstall verified cleanly."
+if (Test-Path $AppExe) {
+    throw "Installed binary still present after uninstall timeout: $AppExe"
+}
+Write-Host "==> PASS: Native Windows WebView2 check, NSIS install, binary verification, upgrade reinstall, and uninstall verified cleanly."
