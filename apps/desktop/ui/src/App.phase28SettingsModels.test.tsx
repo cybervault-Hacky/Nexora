@@ -132,7 +132,7 @@ function installTauriMocks() {
         return [];
 
       case "auth_get_session":
-        return null;
+        return { authenticated: true, user: { id: "test-account", name: "Test User", email: "test@example.test", emailVerified: true } };
 
       case "licence_get_status":
         return {

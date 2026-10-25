@@ -58,7 +58,7 @@ const statusMock = vi.mocked(fetchStatus);
 const catalogMock = vi.mocked(fetchModelCatalog);
 const generateMock = vi.mocked(generate);
 
-describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", () => {
+describe("Direct-to-Chat launch, Signed-Out Local Chat & Auth Bottom Sheet", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -110,76 +110,26 @@ describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", (
     expect(window.location.href).not.toContain(verificationToken);
   });
 
-  it("keeps the Account route on the shared auth controller and opens its Create account flow only on request", async () => {
-    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
-      if (cmd === "auth_get_session") return { user: null, authenticated: false };
-      if (cmd === "get_developer_diagnostics") {
-        return {
-          platform: "windows",
-          arch: "x86_64",
-          appVersion: "0.1.0",
-          credentialVault: "Windows Credential Manager",
-          authServiceUrl: "https://accounts.example.test",
-          cspEnforced: true,
-          offlineCapable: true,
-        };
-      }
-      if (cmd === "auth_login") {
-        return {
-          id: "u-ada",
-          name: "Ada Lovelace",
-          email: "ada@example.com",
-          emailVerified: true,
-        };
-      }
-      if (cmd === "account_get_profile") {
-        return {
-          id: "u-ada",
-          name: "Ada Lovelace",
-          email: "ada@example.com",
-          emailVerified: true,
-          hasPassword: true,
-          providers: ["password"],
-          planId: "free",
-          planName: "Free",
-          createdAt: "2026-01-15T12:00:00Z",
-        };
-      }
-      if (cmd === "get_usage_status") return makeUsage();
-      if (cmd === "clear_symbol_index" || cmd === "clear_analysis_graph") return true;
-      return args ? true : undefined;
-    });
-
+  it("guards account deep links until a real session signs in", async () => {
     window.location.hash = "#/account";
-    act(() => {
-      window.dispatchEvent(new Event("hashchange"));
-    });
-    const user = userEvent.setup();
     render(<App />);
+    const guard = await screen.findByRole("region", { name: "Sign in required" });
+    expect(screen.queryByRole("region", { name: "Account profile" })).toBeNull();
+    await userEvent.setup().click(within(guard).getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("dialog", { name: "Welcome back" })).toBeTruthy();
+  });
 
-    const profile = await screen.findByRole("region", { name: "Account profile" });
-    expect(within(profile).getByText("Local Guest Mode (Unauthenticated)")).toBeTruthy();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    const createAccount = within(profile).getByRole("link", { name: "Create account" });
-    await user.click(createAccount);
-    const modal = await screen.findByRole("dialog", { name: "Create your Nexora account" });
-    expect(document.querySelector(".app")?.hasAttribute("inert")).toBe(true);
-    expect(within(modal).getByLabelText("Name")).toBeTruthy();
-
-    await user.click(within(modal).getByRole("button", { name: "Close authentication dialog" }));
-    expect(document.querySelector(".app")?.hasAttribute("inert")).toBe(false);
-    expect(within(profile).getByText("Local Guest Mode (Unauthenticated)")).toBeTruthy();
-
-    await user.click(within(profile).getByRole("link", { name: "Sign in" }));
-    const signInDialog = await screen.findByRole("dialog", { name: "Sign in to Nexora" });
-    await user.type(within(signInDialog).getByLabelText("Email address"), "ada@example.com");
-    await user.type(within(signInDialog).getByLabelText("Password"), "correct horse battery staple");
-    await user.click(within(signInDialog).getByRole("button", { name: "Sign in" }));
-
-    expect(await within(profile).findByText("Ada Lovelace")).toBeTruthy();
-    expect(within(profile).queryByText("Local Guest Mode (Unauthenticated)")).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("main"));
-    expect(invokeMock.mock.calls.filter(([command]) => command === "auth_get_session")).toHaveLength(1);
+  it("does not mount private settings or founder diagnostics from guest deep links", async () => {
+    render(<App />);
+    for (const hash of ["#/settings", "#/profile", "#/founder"]) {
+      act(() => { window.location.hash = hash; window.dispatchEvent(new Event("hashchange")); });
+      expect(await screen.findByRole("region", { name: "Sign in required" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Founder Control Centre" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
+    }
+    const nav = screen.getByRole("navigation", { name: "Primary" });
+    expect(within(nav).queryByRole("link", { name: "Founder Control" })).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Settings" })).toBeNull();
   });
 
   it("allows signed-out users to send local chat prompts directly without forced sign-in", async () => {
@@ -207,7 +157,7 @@ describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", (
     ).toBeTruthy();
   });
 
-  it("opens centred floating AuthModal when explicitly requested and preserves the unsent prompt across dismiss and login", async () => {
+  it("opens authentication bottom sheet when explicitly requested and preserves the unsent prompt across dismiss and login", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "auth_get_session") {
         return { user: null, authenticated: false };
@@ -255,14 +205,15 @@ describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", (
 
     // Dismissing with Escape leaves active chat & unsent draft intact
     await user.keyboard("{Escape}");
-    expect(screen.queryByTestId("auth-modal")).toBeNull();
+    await vi.waitFor(() => expect(screen.queryByTestId("auth-modal")).toBeNull());
     expect(composer.value).toBe(unsentPrompt);
 
-    // 2. Re-open and authenticate inside floating modal
+    // 2. Re-open and authenticate inside bottom sheet
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     const reopened = await screen.findByTestId("auth-modal");
-    expect(within(reopened).getByRole("button", { name: /Continue with Google/i })).toBeTruthy();
-    expect(within(reopened).getByRole("tab", { name: "Create account" })).toBeTruthy();
+    // Unknown or unconfigured Google OAuth must not be advertised as usable.
+    expect(within(reopened).queryByRole("button", { name: /Continue with Google/i })).toBeNull();
+    expect(within(reopened).getByRole("button", { name: "Create an account" })).toBeTruthy();
 
     await user.type(within(reopened).getByLabelText("Email address"), "ada@example.com");
     await user.type(within(reopened).getByLabelText("Password"), "correct horse battery staple");
@@ -274,6 +225,6 @@ describe("Direct-to-Chat launch, Signed-Out Local Chat & Floating Auth Modal", (
     });
     expect(document.activeElement).toBe(screen.getByRole("main"));
     expect(composer.value).toBe(unsentPrompt);
-    expect(await screen.findByLabelText("Local generation usage")).toBeTruthy();
+    expect(screen.queryByText("Your today's limit is over.")).toBeNull();
   });
 });

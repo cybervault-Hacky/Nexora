@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   type FormEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
@@ -26,6 +27,9 @@ interface ComposerProps {
    * allowance or a model mismatch. Null/undefined keeps the engine wording.
    */
   blockedReason?: string | null;
+  /** The existing approved model selector, rendered inside the composer. */
+  modelSelector?: ReactNode;
+  onOpenProjects?: () => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onStop: () => void;
@@ -39,6 +43,8 @@ export function Composer({
   busy,
   canGenerate,
   blockedReason = null,
+  onOpenProjects,
+  modelSelector,
   onChange,
   onSubmit,
   onStop,
@@ -93,6 +99,12 @@ export function Composer({
           Message Nexora
         </label>
 
+        {onOpenProjects && (
+          <button type="button" className="composer__attach" aria-label="Add project files" title="Choose project files" onClick={onOpenProjects}>
+            <Icon name="plus" size={19} />
+          </button>
+        )}
+
         <textarea
           id="composer-input"
           ref={textareaRef}
@@ -138,6 +150,7 @@ export function Composer({
         />
 
         <div className="composer__footer">
+          {modelSelector ? <div className="composer__model">{modelSelector}</div> : null}
           <p className="composer__status" id="composer-status">
             <span
               className={`status-dot ${busy ? "status-dot--busy" : canGenerate ? "status-dot--ok" : "status-dot--idle"}`}

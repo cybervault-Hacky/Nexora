@@ -1,14 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Composer } from "../components/Composer";
-import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { EmptyState } from "../components/EmptyState";
-import { EvidencePanel } from "../components/EvidencePanel";
 import { Icon } from "../components/Icon";
 import { MessageList } from "../components/MessageList";
 import { ModelSelector } from "../components/ModelSelector";
-import { RetrievalBar } from "../components/RetrievalBar";
 import { RouterLink } from "../components/RouterLink";
-import { UsageMeter } from "../components/UsageMeter";
 import type { usePersistentConversation } from "../features/chat/usePersistentConversation";
 import type { ModelCatalog } from "../features/models/useModelCatalog";
 import type { UsageView } from "../features/usage/useUsage";
@@ -20,6 +16,7 @@ import type { ServerUsageSummary } from "../lib/auth";
 import type { buildEvidenceReport } from "../lib/evidence";
 import type { AppStatus } from "../lib/ipc";
 import { isNearBottom } from "../lib/scroll";
+import { navigateTo } from "../lib/router";
 
 type ConversationState = ReturnType<typeof usePersistentConversation>;
 type WorkspaceState = ReturnType<typeof useWorkspace>;
@@ -33,7 +30,7 @@ export interface ChatPageProps {
   statusError: string | null;
   engineReady: boolean;
   desktop: boolean;
-  /** Prompt-grounding tools computed once in the shell so other pages can reuse them. */
+  /** Prompt-grounding stays in the shell; diagnostic panels are hidden from chat. */
   contextPlan: ContextPlan | null;
   retrievalResult: RetrievalResult | null;
   evidenceReport: EvidenceReport | null;
@@ -90,9 +87,6 @@ export function ChatPage({
   statusError,
   engineReady,
   desktop,
-  contextPlan,
-  retrievalResult,
-  evidenceReport,
   textareaRef,
   focusNonce,
   onSubmit,
@@ -134,13 +128,12 @@ export function ChatPage({
   const allowanceExhausted = usage.status?.exhausted ?? false;
   const missingApprovedSelection =
     !models.selected || !isApprovedProfileId(models.selected.profile.id);
-  const showUsage = usage.status !== null || usage.error !== null;
+  const showIntro = !hasMessages && !draft.trim() && !conversationLoading && !streaming;
   const conversationTitle = activeId
     ? activeTitle
     : hasMessages
       ? "Local conversation"
       : "New conversation";
-  const showSetup = !engineReady && !hasMessages && statusError === null;
 
   // Focus the composer on mount and whenever the shell asks (Ctrl+L).
   useEffect(() => {
@@ -196,16 +189,7 @@ export function ChatPage({
     <>
       <header className="conversation-header">
         <div className="conversation-header__left">
-          {desktop ? (
-            <ModelSelector
-              catalog={models}
-              disabled={streaming}
-              activeConversationId={activeId}
-              onModelLoaded={onModelLoaded}
-            />
-          ) : null}
-
-          <div className="conversation-header__titles">
+          {!showIntro ? <div className="conversation-header__titles">
             {renameEditing && activeId ? (
               <div className="conversation-header__rename">
                 <input
@@ -248,7 +232,7 @@ export function ChatPage({
             ) : (
               <h1 className="conversation-header__title">{conversationTitle}</h1>
             )}
-          </div>
+          </div> : null}
         </div>
 
         <div className="conversation-header__chips">
@@ -361,7 +345,7 @@ export function ChatPage({
       ) : null}
 
       <div
-        className="conversation"
+        className={`conversation${showIntro ? " conversation--intro" : ""}`}
         ref={scrollRef}
         role="region"
         aria-label="Conversation messages"
@@ -372,82 +356,26 @@ export function ChatPage({
           <p role="status">Loading conversation…</p>
         ) : hasMessages ? (
           <MessageList messages={messages} />
-        ) : showSetup ? (
-          <div className="empty">
-            <div className="empty__mark" aria-hidden="true">
-              <Icon name="cloud-off" size={30} />
-            </div>
-
-            {desktop ? (
-              <>
-                <h1 className="empty__title">Bring your own model.</h1>
-                <p className="empty__copy">
-                  Nexora runs entirely on this PC. Point it at a llama.cpp build
-                  and a GGUF model you already have. Nothing is downloaded and no
-                  prompt leaves the machine.
-                </p>
-                <p className="empty__note">
-                  Model setup lives on the Local Models page.
-                </p>
-                <RouterLink to="models" className="button button--primary empty__cta">
-                  <Icon name="chip" size={14} />
-                  Open local model manager
-                </RouterLink>
-              </>
-            ) : (
-              <>
-                <h1 className="empty__title">Desktop app required.</h1>
-                <p className="empty__copy">
-                  This is the browser preview of the Nexora interface. Local
-                  inference needs the Tauri desktop build, because the engine is
-                  a separate process on your machine that a browser tab cannot
-                  start or reach.
-                </p>
-                <p className="empty__note">
-                  The window itself is the real UI — same components, same
-                  layout, and the same honest engine reporting.
-                </p>
-              </>
-            )}
-          </div>
-        ) : statusError ? (
-          <div className="empty">
-            <div className="empty__mark" aria-hidden="true">
-              <Icon name="alert" size={28} />
-            </div>
-            <h1 className="empty__title">Engine state unavailable.</h1>
-            <p className="empty__copy">
-              The desktop core did not answer, so Nexora cannot tell whether a
-              model is loaded. It will not guess — retry the status read above.
-            </p>
-          </div>
-        ) : (
+        ) : showIntro ? (
           <EmptyState
+            showModelLink={desktop && !engineReady && !statusError}
+            note={statusError ? "Engine status unavailable. Retry the connection above." : !desktop ? "Local inference requires the Nexora desktop app." : !engineReady ? "No model loaded. Set up a model in Local Models to start chatting." : null}
             onPick={(prompt) => {
               setDraft(prompt);
               dismissError();
               textareaRef.current?.focus();
             }}
           />
-        )}
+        ) : null}
       </div>
-
-      {retrievalResult ? (
-        <RetrievalBar
-          retrieval={retrievalResult}
-          selectedPaths={workspace.selectedPaths}
-          onAdd={(p) => void workspace.toggleContext(p)}
-        />
-      ) : null}
-      {contextPlan ? <ContextBudgetBar plan={contextPlan} /> : null}
 
       {workspace.contextFiles.length > 0 ? (
         <div className="context-bar" role="status" aria-label="Selected project context">
           <div className="context-bar__label">
             <Icon name="file" size={12} />
             <span>
-              Context: {workspace.contextFiles.length} file
-              {workspace.contextFiles.length !== 1 ? "s" : ""} — read-only, not modifying files
+              {workspace.contextFiles.length} selected file
+              {workspace.contextFiles.length !== 1 ? "s" : ""}
             </span>
           </div>
           <ul className="context-bar__list">
@@ -471,31 +399,24 @@ export function ChatPage({
         </div>
       ) : null}
 
-      {evidenceReport && (draft.trim().length > 0 || workspace.contextFiles.length > 0 || streaming) ? (
-        <div className="composer__evidence">
-          <EvidencePanel report={evidenceReport} isStreaming={streaming} />
+      {allowanceExhausted && usage.status?.policyConfigured ? (
+        <div className="chat-limit" role="alert">
+          <p>Your today's limit is over.</p>
+          <RouterLink to="plans" className="button button--ghost button--sm">Upgrade to Plus</RouterLink>
         </div>
+      ) : usage.error ? (
+        <p className="chat-usage-warning" role="alert">Local usage is unavailable. Check the desktop engine before sending.</p>
       ) : null}
-
-      {serverUsage?.quotaConfigured && serverUsage.models.length > 0 ? (
-        <div className="server-quota-bar" role="region" aria-label="Daily model quota">
-          <span>
-            {serverUsage.models
-              .map(
-                (m) =>
-                  `${m.modelId === "nexora-sonnet" ? "Sonnet" : "Mini"}: ${m.remaining}/${m.dailyLimit}`,
-              )
-              .join(" · ")}
-          </span>
-          <RouterLink to="plans" className="server-quota-bar__upgrade">
-            Plans &amp; Premium
-          </RouterLink>
-        </div>
-      ) : null}
-
-      {showUsage ? <UsageMeter usage={usage} /> : null}
 
       <Composer
+        modelSelector={desktop ? (
+          <ModelSelector
+            catalog={models}
+            disabled={streaming}
+            activeConversationId={activeId}
+            onModelLoaded={onModelLoaded}
+          />
+        ) : null}
         value={draft}
         error={error}
         textareaRef={textareaRef}
@@ -518,6 +439,7 @@ export function ChatPage({
                   : "Select an approved local model before sending"
                 : null
         }
+        onOpenProjects={() => navigateTo("projects")}
         onChange={setDraft}
         onSubmit={() => {
           if (

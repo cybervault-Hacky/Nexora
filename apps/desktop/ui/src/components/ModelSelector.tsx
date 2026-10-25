@@ -497,7 +497,6 @@ function ModelSelectorInner({
         >
           <div className="model-popover__header">
             <span className="model-popover__heading">Local Models</span>
-            <span className="model-popover__privacy">Runs on device · 127.0.0.1</span>
           </div>
 
           {disabled ? (

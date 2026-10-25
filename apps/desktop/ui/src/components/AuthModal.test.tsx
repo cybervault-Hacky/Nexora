@@ -101,7 +101,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Phase 09 — floating authentication dialog", () => {
+describe("Authentication bottom sheet", () => {
   it("moves focus into the dialog, traps keyboard focus, and restores focus when closed", async () => {
     const user = userEvent.setup();
     const previousOverflow = "scroll";
@@ -110,39 +110,51 @@ describe("Phase 09 — floating authentication dialog", () => {
 
     const trigger = screen.getByRole("button", { name: "Open sign-in modal" });
     await user.click(trigger);
-    const modal = await screen.findByRole("dialog", { name: "Sign in to Nexora" });
+    const modal = await screen.findByRole("dialog", { name: "Welcome back" });
     const email = within(modal).getByLabelText("Email address");
     expect(document.activeElement).toBe(email);
     expect(document.body.style.overflow).toBe("hidden");
 
-    const lastLink = within(modal).getByRole("button", { name: "Have a verification code?" });
+    const lastLink = within(modal).getByRole("button", { name: "Create an account" });
     lastLink.focus();
     await user.tab();
     expect(document.activeElement).toBe(within(modal).getByRole("button", { name: "Close authentication dialog" }));
 
     await user.click(within(modal).getByRole("button", { name: "Close authentication dialog" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("auth-modal-backdrop").className).toContain("--exit");
+    expect(screen.getByTestId("auth-modal").getAttribute("aria-hidden")).toBe("true");
+    await waitFor(() => expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull());
     expect(document.activeElement).toBe(trigger);
     expect(document.body.style.overflow).toBe(previousOverflow);
   });
 
-  it("keeps authentication tab relationships aligned with the panel currently rendered", async () => {
+  it("switches sign-in and registration inside one sheet without losing the backdrop", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
-    const modal = await screen.findByRole("dialog");
+    const sheet = await screen.findByRole("dialog", { name: "Welcome back" });
+    const backdrop = screen.getByTestId("auth-modal-backdrop");
+    expect(within(sheet).getByRole("form", { name: "Sign in form" })).toBeTruthy();
+    await user.click(within(sheet).getByRole("button", { name: "Create an account" }));
+    expect(screen.getByTestId("auth-modal-backdrop")).toBe(backdrop);
+    expect(await screen.findByRole("dialog", { name: "Create your account" })).toBe(sheet);
+    expect(within(sheet).getByRole("form", { name: "Create account form" })).toBeTruthy();
+    await user.click(within(sheet).getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("dialog", { name: "Welcome back" })).toBe(sheet);
+  });
 
-    const signInTab = within(modal).getByRole("tab", { name: "Sign in" });
-    const signUpTab = within(modal).getByRole("tab", { name: "Create account" });
-    expect(signInTab.getAttribute("aria-selected")).toBe("true");
-    expect(modal.querySelector(`#${signInTab.getAttribute("aria-controls")}`)).toBeTruthy();
-    expect(signUpTab.hasAttribute("aria-controls")).toBe(false);
-
-    await user.click(signUpTab);
-    const activeSignUpTab = within(modal).getByRole("tab", { name: "Create account" });
-    expect(activeSignUpTab.getAttribute("aria-selected")).toBe("true");
-    expect(modal.querySelector(`#${activeSignUpTab.getAttribute("aria-controls")}`)).toBeTruthy();
-    expect(within(modal).getByRole("tabpanel", { name: "Create account" })).toBeTruthy();
+  it("toggles password visibility without submitting or losing its value", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
+    const password = await screen.findByLabelText("Password") as HTMLInputElement;
+    await user.type(password, "safe-password-123");
+    expect(password.type).toBe("password");
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(password.type).toBe("text");
+    expect(password.value).toBe("safe-password-123");
+    await user.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(password.type).toBe("password");
   });
 
   it("dismisses with Escape and backdrop click without navigating or mutating the form host", async () => {
@@ -153,15 +165,19 @@ describe("Phase 09 — floating authentication dialog", () => {
     await user.click(trigger);
     await user.type(await screen.findByLabelText("Email address"), "ada@example.com");
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("auth-modal-backdrop").className).toContain("--exit");
+    expect(screen.getByTestId("auth-modal").getAttribute("aria-hidden")).toBe("true");
+    await waitFor(() => expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull());
     expect(document.activeElement).toBe(trigger);
 
     await user.click(trigger);
-    const reopened = await screen.findByRole("dialog", { name: "Sign in to Nexora" });
+    const reopened = await screen.findByRole("dialog", { name: "Welcome back" });
     expect((within(reopened).getByLabelText("Email address") as HTMLInputElement).value).toBe("");
     const backdrop = await screen.findByTestId("auth-modal-backdrop");
     await user.click(backdrop);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("auth-modal-backdrop").className).toContain("--exit");
+    expect(screen.getByTestId("auth-modal").getAttribute("aria-hidden")).toBe("true");
+    await waitFor(() => expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull());
     expect(document.activeElement).toBe(trigger);
   });
 
@@ -196,7 +212,7 @@ describe("Phase 09 — floating authentication dialog", () => {
     expect(submit.disabled).toBe(true);
     expect(modal.getAttribute("aria-busy")).toBe("true");
 
-    fireEvent.submit(within(modal).getByRole("tabpanel"));
+    fireEvent.submit(within(modal).getByRole("form", { name: "Sign in form" }));
     expect(login).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -291,9 +307,8 @@ describe("Phase 09 — floating authentication dialog", () => {
     const modal = await screen.findByRole("dialog");
     expect(await within(modal).findByTestId("auth-backend-note")).toBeTruthy();
 
-    const googleButton = within(modal).getByRole("button", { name: /Continue with Google/i }) as HTMLButtonElement;
-    expect(googleButton.disabled).toBe(true);
-    expect(googleButton.getAttribute("aria-describedby")).toBeTruthy();
+    await within(modal).findByTestId("auth-backend-note");
+    expect(within(modal).queryByRole("button", { name: /Continue with Google/i })).toBeNull();
     expect(google).not.toHaveBeenCalled();
     expect((within(modal).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -309,9 +324,8 @@ describe("Phase 09 — floating authentication dialog", () => {
     await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
     const modal = await screen.findByRole("dialog");
 
-    const googleButton = within(modal).getByRole("button", { name: /Continue with Google/i }) as HTMLButtonElement;
-    expect(googleButton.disabled).toBe(true);
-    expect(await within(modal).findByText(/Google sign-in is not configured in this desktop build/i)).toBeTruthy();
+    await waitFor(() => expect((within(modal).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(modal).queryByRole("button", { name: /Continue with Google/i })).toBeNull();
     expect((within(modal).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(false);
     expect((within(modal).getByLabelText("Email address") as HTMLInputElement).disabled).toBe(false);
     expect(google).not.toHaveBeenCalled();
@@ -326,11 +340,43 @@ describe("Phase 09 — floating authentication dialog", () => {
     await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
     const modal = await screen.findByRole("dialog");
 
-    expect(await within(modal).findByText(/available only in the Nexora desktop app/i)).toBeTruthy();
+    expect(await within(modal).findByTestId("auth-backend-note")).toBeTruthy();
     expect((within(modal).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((within(modal).getByRole("button", { name: /Continue with Google/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(modal).queryByRole("button", { name: /Continue with Google/i })).toBeNull();
     expect(login).not.toHaveBeenCalled();
     expect(google).not.toHaveBeenCalled();
+  });
+
+  it("only shows configured Google sign-in and blocks duplicate requests while it is pending", async () => {
+    let resolveGoogle!: (user: AuthUser) => void;
+    const google = vi.fn(() => new Promise<AuthUser>((resolve) => { resolveGoogle = resolve; }));
+    const user = userEvent.setup();
+    render(<Harness onGoogleSignIn={google} />);
+    await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
+    const sheet = await screen.findByRole("dialog", { name: "Welcome back" });
+    const button = await within(sheet).findByRole("button", { name: "Continue with Google" });
+    await user.click(button);
+    expect(google).toHaveBeenCalledOnce();
+    expect((within(sheet).getByRole("button", { name: /Waiting for Google sign-in/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(sheet).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(google).toHaveBeenCalledOnce();
+    await act(async () => { resolveGoogle(signedInUser); });
+    await waitFor(() => expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull());
+  });
+
+  it("closes immediately without an animation delay when reduced motion is requested", async () => {
+    const prior = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: true }) });
+    try {
+      const user = userEvent.setup();
+      render(<Harness />);
+      await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
+      await user.click(screen.getByRole("button", { name: "Close authentication dialog" }));
+      expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull();
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: prior });
+    }
   });
 
   it("turns a real Google-provider-unavailable response into a clear unavailable state", async () => {
@@ -364,7 +410,7 @@ describe("Phase 09 — floating authentication dialog", () => {
     await user.click(googleButton);
 
     expect(google).toHaveBeenCalledTimes(1);
-    expect(await within(modal).findByRole("tabpanel", { name: "Sign in" })).toBeTruthy();
+    expect(await within(modal).findByRole("form", { name: "Sign in form" })).toBeTruthy();
     expect(within(modal).queryByRole("alert")).toBeNull();
     expect(within(modal).getByRole("button", { name: /Continue with Google/i })).toBeTruthy();
   });
@@ -387,6 +433,32 @@ describe("Phase 09 — floating authentication dialog", () => {
     expect(message).not.toContain("ECONNREFUSED");
   });
 
+  it("keeps registration in the sheet during a pending request and presents a safe error", async () => {
+    let rejectRegister!: (cause: unknown) => void;
+    const register = vi.fn(() => new Promise<AuthStatusResponse>((_resolve, reject) => {
+      rejectRegister = reject;
+    }));
+    const user = userEvent.setup();
+    render(<Harness onRegister={register} />);
+    await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
+    const sheet = await screen.findByRole("dialog", { name: "Welcome back" });
+    await user.click(within(sheet).getByRole("button", { name: "Create an account" }));
+    await user.type(within(sheet).getByLabelText("Full name"), "Ada Lovelace");
+    await user.type(within(sheet).getByLabelText("Email address"), "ada@example.com");
+    await user.type(within(sheet).getByLabelText("Password"), "correct-horse-battery");
+    await user.type(within(sheet).getByLabelText("Confirm password"), "correct-horse-battery");
+    await user.click(within(sheet).getByRole("button", { name: "Create account" }));
+    expect(register).toHaveBeenCalledOnce();
+    const submit = within(sheet).getByRole("button", { name: "Creating account…" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect((within(sheet).getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(within(sheet).getByRole("form", { name: "Create account form" }));
+    expect(register).toHaveBeenCalledOnce();
+    await act(async () => { rejectRegister({ code: "email_exists", message: "private diagnostic" }); });
+    expect(within(sheet).getByRole("alert").textContent).toContain("already exist");
+    expect(within(sheet).getByRole("button", { name: "Create account" })).toBeTruthy();
+  });
+
   it("shows the real registration status without claiming email delivery when the service says it is unconfigured", async () => {
     const register = vi.fn(async () => ({
       status: "verification_pending",
@@ -397,8 +469,8 @@ describe("Phase 09 — floating authentication dialog", () => {
     render(<Harness onRegister={register} />);
     await user.click(screen.getByRole("button", { name: "Open sign-in modal" }));
     const modal = await screen.findByRole("dialog");
-    await user.click(within(modal).getByRole("tab", { name: "Create account" }));
-    await user.type(within(modal).getByLabelText("Name"), "Ada Lovelace");
+    await user.click(within(modal).getByRole("button", { name: "Create an account" }));
+    await user.type(within(modal).getByLabelText("Full name"), "Ada Lovelace");
     await user.type(within(modal).getByLabelText("Email address"), "ada@example.com");
     await user.type(within(modal).getByLabelText("Password"), "correct-horse-battery");
     await user.type(within(modal).getByLabelText("Confirm password"), "correct-horse-battery");

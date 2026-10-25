@@ -252,7 +252,7 @@ describe("conversation surface", () => {
     // Transcript is cleared, but history retains the conversation title
     expect(document.querySelector(".message__prompt")).toBeNull();
     expect(screen.queryByRole("log")).toBeNull();
-    expect(screen.getByText("Build something real.")).toBeTruthy();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
     // History should still show the previous conversation
     expect(screen.getByText("temporary question")).toBeTruthy();
   });
@@ -288,7 +288,7 @@ describe("conversation surface", () => {
     });
 
     expect(screen.getByText("Stopped")).toBeTruthy();
-    expect(screen.getByText("Bring your own model.")).toBeTruthy();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement)
         .disabled,
@@ -414,7 +414,7 @@ describe("conversation surface", () => {
     });
   });
 
-  it("collapses and expands the sidebar from the title bar", async () => {
+  it("collapses and expands the sidebar from its brand control", async () => {
     const user = userEvent.setup();
 
     render(<App />);
@@ -435,15 +435,15 @@ describe("conversation surface", () => {
     ).toBe("true");
   });
 
-  it("fills the composer from an example prompt", async () => {
+  it("opens real project file selection from the composer without sending a message", async () => {
     const user = userEvent.setup();
-
     render(<App />);
     await screen.findByText("Engine ready");
-
-    await user.click(screen.getByText("Build a landing page"));
-
-    expect((compose() as HTMLTextAreaElement).value).toContain("landing page");
+    await user.type(compose(), "Keep this draft");
+    await user.click(screen.getByRole("button", { name: "Add project files" }));
+    expect(await screen.findByRole("heading", { name: "Projects" })).toBeTruthy();
     expect(generateMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("link", { name: "AI Chat" }));
+    expect((compose() as HTMLTextAreaElement).value).toBe("Keep this draft");
   });
 });

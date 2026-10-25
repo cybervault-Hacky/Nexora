@@ -16,6 +16,7 @@ export const ROUTES = [
   { id: "models", path: "/models", label: "Local Models" },
   { id: "plans", path: "/plans", label: "Plans & Premium" },
   { id: "account", path: "/account", label: "Account" },
+  { id: "profile", path: "/profile", label: "Profile" },
   { id: "settings", path: "/settings", label: "Settings" },
   { id: "founder", path: "/founder", label: "Diagnostics" },
   { id: "licensing", path: "/licensing", label: "Offline Licence" },
@@ -68,11 +69,13 @@ function normalizePath(hash: string): string {
 /** Maps a location hash to a route id; root opens directly into AI Chat (`"chat"`). */
 export function parseRoute(hash: string): RouteMatch {
   const path = normalizePath(hash);
-  if (path === "/") return { id: "chat", path };
+  if (path === "/" || path === "/search" || path === "/search-chats") return { id: "chat", path };
   if (path === "/dashboard") return { id: "home", path };
   if (path === "/billing" || path === "/pricing" || path === "/upgrade") {
     return { id: "plans", path };
   }
+  if (path === "/membership" || path === "/memberships" || path === "/premium") return { id: "plans", path };
+  if (path === "/u/me") return { id: "profile", path };
   if (path === "/intelligence") return { id: "code", path };
   if (path === "/preferences") return { id: "settings", path };
   if (path === "/model-setup" || path === "/engine") return { id: "models", path };

@@ -80,7 +80,7 @@ describe("Phase 19 page navigation", () => {
     await screen.findByRole("heading", { name: "Welcome to Nexora" });
 
     const nav = screen.getByRole("navigation", { name: "Primary" });
-    for (const name of ["Home", "AI Chat", "Projects", "Code Intelligence", "Local Models", "Settings"]) {
+    for (const name of ["Home", "AI Chat", "Projects", "Code Intelligence", "Local Models"]) {
       expect(within(nav).getByRole("link", { name })).toBeTruthy();
     }
     expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
@@ -106,8 +106,10 @@ describe("Phase 19 page navigation", () => {
     await user.click(within(nav).getByRole("link", { name: "Local Models" }));
     expect(await screen.findByRole("heading", { name: "Local models" })).toBeTruthy();
 
-    await user.click(within(nav).getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    // Settings is account-only; direct guest URLs must not render it.
+    goto("#/settings");
+    expect(await screen.findByRole("region", { name: "Sign in required" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
 
     await user.click(within(nav).getByRole("link", { name: "Home" }));
     expect(await screen.findByRole("heading", { name: "Welcome to Nexora" })).toBeTruthy();

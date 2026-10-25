@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -47,8 +46,8 @@ describe("Neutral Desktop Design System — Light & Dark Palette & Solid Surface
   const tokensCss = fs.readFileSync(path.resolve(__dirname, "styles/tokens.css"), "utf-8");
 
   it("defines solid opaque dark and light desktop themes with zero glass blur or aurora tint", () => {
-    expect(tokensCss).toContain(':root[data-theme="dark"]');
-    expect(tokensCss).toContain(':root[data-theme="light"]');
+    expect(tokensCss).toContain("--bg-base: #000000;");
+    expect(tokensCss).not.toContain(':root[data-theme="light"]');
     expect(tokensCss).toContain("--glass-blur: none;");
     expect(tokensCss).toContain("--aurora-color-1: transparent;");
   });
@@ -60,16 +59,9 @@ describe("Neutral Desktop Design System — Light & Dark Palette & Solid Surface
     expect(contrastRatio("#ffffff", "#4b5563")).toBeGreaterThan(7);
   });
 
-  it("switches live between Dark and Light themes from the desktop title bar and persists selection", async () => {
-    window.localStorage.clear();
-    const user = userEvent.setup();
+  it("does not expose a theme toggle", async () => {
     render(<App />);
-
-    const toggle = await screen.findByRole("button", { name: "Switch to light theme" });
-    await user.click(toggle);
-
-    expect(document.documentElement.dataset.theme).toBe("light");
-    expect(window.localStorage.getItem("nexora.theme")).toBe("light");
-    expect(screen.getByRole("button", { name: "Switch to dark theme" })).toBeTruthy();
+    expect(await screen.findByRole("main")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Switch to (light|dark) theme/i })).toBeNull();
   });
 });

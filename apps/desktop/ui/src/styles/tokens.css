@@ -1,46 +1,22 @@
-/*
- * Nexora Neutral ChatGPT-Inspired Desktop Design Tokens (Phase 07).
- *
- * Dark mode reference:
- *   - Main chat canvas:  #212121
- *   - Sidebar & chrome:  #171717
- *   - Secondary surface: #2f2f2f
- *   - Hover charcoal:    #383838
- *   - Border:            #424242
- *   - Primary text:      #f3f3f3  (13.48:1 WCAG AAA on #212121)
- *   - Secondary text:    #afafaf  ( 7.13:1 WCAG AAA on #212121)
- *
- * Light mode reference:
- *   - Main chat canvas:  #ffffff
- *   - Sidebar & chrome:  #f9f9f9
- *   - Secondary surface: #f4f4f4
- *   - Hover surface:     #ececec
- *   - Border:            #e5e5e5
- *   - Primary text:      #202123  (16.07:1 WCAG AAA on #ffffff)
- *   - Secondary text:    #6b6b6b  ( 5.33:1 WCAG AA  on #ffffff)
- *
- * Solid opaque surfaces with zero glass blur, zero neon accents, and zero
- * purple/blue AI gradients.
- */
+/* Nexora black-only design tokens. */
 
-:root,
-:root[data-theme="dark"] {
+:root {
   color-scheme: dark;
 
-  --bg-base: #212121;
-  --bg-sidebar: #171717;
+  --bg-base: #000000;
+  --bg-sidebar: #0b0b0b;
   --bg-panel: #2f2f2f;
   --bg-elevated: #2f2f2f;
   --bg-raised: #383838;
   --bg-hover: #2f2f2f;
   --bg-hover-strong: #383838;
   --bg-active: #343434;
-  --bg-code: #171717;
+  --bg-code: #111111;
   --composer-bg: #2f2f2f;
   --user-bubble-bg: #2f2f2f;
 
-  --glass-chrome: #171717;
-  --glass-sidebar: #171717;
+  --glass-chrome: #0b0b0b;
+  --glass-sidebar: #0b0b0b;
   --glass-panel: #2f2f2f;
   --glass-card: #292929;
   --glass-control: #2f2f2f;
@@ -87,70 +63,6 @@
   --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.36);
   --shadow-high: 0 16px 40px rgba(0, 0, 0, 0.48);
   --shadow-glass: 0 2px 10px rgba(0, 0, 0, 0.22);
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-
-  --bg-base: #ffffff;
-  --bg-sidebar: #f9f9f9;
-  --bg-panel: #f4f4f4;
-  --bg-elevated: #f4f4f4;
-  --bg-raised: #ececec;
-  --bg-hover: #ececec;
-  --bg-hover-strong: #e3e3e3;
-  --bg-active: #e8e8e8;
-  --bg-code: #f7f7f8;
-  --composer-bg: #f4f4f4;
-  --user-bubble-bg: #f4f4f4;
-
-  --glass-chrome: #f9f9f9;
-  --glass-sidebar: #f9f9f9;
-  --glass-panel: #ffffff;
-  --glass-card: #f9f9f9;
-  --glass-control: #f4f4f4;
-  --glass-control-hover: #ececec;
-  --glass-scrim: rgba(0, 0, 0, 0.42);
-  --glass-border: #e5e5e5;
-  --glass-border-strong: #d1d1d1;
-  --glass-highlight: transparent;
-  --glass-highlight-control: none;
-  --glass-blur: none;
-
-  --aurora-color-1: transparent;
-  --aurora-color-2: transparent;
-  --aurora-color-3: transparent;
-
-  --border-subtle: #e5e5e5;
-  --border-default: #e5e5e5;
-  --border-strong: #d1d1d1;
-  --border-focus: #202123;
-
-  --text-primary: #202123;
-  --text-secondary: #6b6b6b;
-  --text-tertiary: #6e6e73;
-  --text-inverse: #ffffff;
-
-  --accent: #202123;
-  --accent-rgb: 32, 33, 35;
-  --accent-hover: #343541;
-  --accent-pressed: #0d0d0f;
-  --accent-subtle: rgba(32, 33, 35, 0.06);
-  --accent-wash: rgba(32, 33, 35, 0.06);
-  --accent-border: #c8c8c8;
-  --link-color: #202123;
-
-  --success: #0f7b5f;
-  --success-rgb: 15, 123, 95;
-  --warning: #b45309;
-  --warning-rgb: 180, 83, 9;
-  --danger: #dc2626;
-  --danger-rgb: 220, 38, 38;
-
-  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.10);
-  --shadow-high: 0 16px 40px rgba(0, 0, 0, 0.16);
-  --shadow-glass: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 :root {

@@ -147,9 +147,11 @@ describe("Phase 23 Step 7 — Offline AI & Unauthenticated Regression Suite", ()
     await user.click(within(nav).getByRole("link", { name: "Local Models" }));
     expect(await screen.findByRole("heading", { name: "Local models" })).toBeTruthy();
 
-    // Settings
-    await user.click(within(nav).getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+    // Local destinations stay public; account pages are protected.
+    expect(within(nav).queryByRole("link", { name: "Settings" })).toBeNull();
+    window.location.hash = "#/settings";
+    window.dispatchEvent(new Event("hashchange"));
+    expect(await screen.findByRole("region", { name: "Sign in required" })).toBeTruthy();
 
     // Zero fetch calls occurred during entire multi-page navigation
     expect(fetchMock).not.toHaveBeenCalled();
@@ -161,7 +163,7 @@ describe("Phase 23 Step 7 — Offline AI & Unauthenticated Regression Suite", ()
 
     expect(await screen.findByRole("region", { name: "Conversation messages" })).toBeTruthy();
     expect(screen.getByText("Engine ready")).toBeTruthy();
-    expect(screen.getByText("Build something real.")).toBeTruthy();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Message Nexora" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
 

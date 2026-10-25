@@ -1,11 +1,11 @@
 import { createRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "./ChatPage";
 import type { ChatMessage } from "../features/chat/chat";
-import { makeReadiness, makeStatus } from "../test/fixtures";
+import { makeReadiness, makeStatus, makeUsage } from "../test/fixtures";
 import type { UsageView } from "../features/usage/useUsage";
 import type { ModelCatalog } from "../features/models/useModelCatalog";
 
@@ -245,16 +245,20 @@ describe("Phase 25 — ChatPage component", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "New conversation" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "What's New Today?" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "New conversation" })).toBeNull();
     expect(screen.getByText("Local-only")).toBeTruthy();
     expect(screen.getByText("Engine ready")).toBeTruthy();
+    const composer = screen.getByRole("form", { name: "Message composer" });
+    expect(within(composer).getByTestId("model-selector-trigger").textContent).toContain("Nexora Mini");
+    expect(document.querySelectorAll(".model-select")).toHaveLength(1);
+    expect(document.querySelector(".conversation-header .model-select")).toBeNull();
   });
 
   it("renders EmptyState with suggestion prompts when engine is ready and there are no messages", async () => {
     const conversation = makeConversationMock();
     const workspace = makeWorkspaceMock();
     const textareaRef = createRef<HTMLTextAreaElement>();
-    const user = userEvent.setup();
 
     render(
       <ChatPage
@@ -275,13 +279,9 @@ describe("Phase 25 — ChatPage component", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Build something real." })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Build a landing page/i })).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /Build a landing page/i }));
-    expect(conversation.setDraft).toHaveBeenCalledWith(
-      expect.stringContaining("Build a responsive landing page"),
-    );
+    expect(screen.getByRole("heading", { name: "What's New Today?" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Build a landing page/i })).toBeNull();
+    expect(screen.getByRole("form", { name: "Message composer" })).toBeTruthy();
   });
 
   it("renders 'Bring your own model' empty state when no model is loaded", () => {
@@ -308,8 +308,9 @@ describe("Phase 25 — ChatPage component", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Bring your own model." })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Open local model manager/i })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "What's New Today?" })).toBeTruthy();
+    expect(screen.getByText(/No model loaded. Set up a model/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Local Models" })).toBeTruthy();
   });
 
   it("renders user prompt and assistant reply when messages exist", () => {
@@ -392,7 +393,7 @@ describe("Phase 25 — ChatPage component", () => {
       />,
     );
 
-    expect(screen.getByText(/Context: 2 files — read-only, not modifying files/)).toBeTruthy();
+    expect(screen.getByText("2 selected files")).toBeTruthy();
     expect(screen.getByText("src/main.ts")).toBeTruthy();
     expect(screen.getByText("src/utils.ts")).toBeTruthy();
 
@@ -473,5 +474,46 @@ describe("Phase 25 — ChatPage component", () => {
     await user.click(newChatBtn);
 
     expect(conversation.newChat).toHaveBeenCalled();
+  });
+});
+
+
+describe("minimal home and trusted daily limit", () => {
+  function props(overrides: Partial<Parameters<typeof ChatPage>[0]> = {}): Parameters<typeof ChatPage>[0] {
+    return {
+      conversation: makeConversationMock(), workspace: makeWorkspaceMock(),
+      engineStatus: makeStatus({ state: "ready" }), statusError: null,
+      engineReady: true, desktop: true, contextPlan: null,
+      retrievalResult: null, evidenceReport: null,
+      textareaRef: createRef<HTMLTextAreaElement>(), focusNonce: 0,
+      onSubmit: vi.fn(), usage: makeUsageMock(), models: makeModelsMock(), ...overrides,
+    };
+  }
+
+  it("centres an untouched new chat, then repositions the same composer on draft and message", async () => {
+    const initial = props();
+    const { rerender } = render(<ChatPage {...initial} />);
+    const composer = screen.getByRole("form", { name: "Message composer" });
+    expect(screen.getByRole("heading", { name: "What's New Today?" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Conversation messages" }).className).toContain("conversation--intro");
+    rerender(<ChatPage {...initial} conversation={makeConversationMock({ draft: "An unsent idea" })} />);
+    expect(screen.queryByRole("heading", { name: "What's New Today?" })).toBeNull();
+    expect(screen.getByRole("form", { name: "Message composer" })).toBe(composer);
+    expect((screen.getByRole("textbox", { name: "Message Nexora" }) as HTMLTextAreaElement).value).toBe("An unsent idea");
+    rerender(<ChatPage {...initial} conversation={makeConversationMock({ messages: [{ id: "m1", role: "user", content: "Hello", createdAt: 1, state: "complete" }] })} />);
+    expect(screen.getByRole("form", { name: "Message composer" })).toBe(composer);
+    expect(screen.queryByRole("heading", { name: "What's New Today?" })).toBeNull();
+  });
+
+  it("shows the limit prompt only from an authoritative configured exhausted state", () => {
+    const initial = props();
+    const { rerender } = render(<ChatPage {...initial} />);
+    expect(screen.queryByText("Your today's limit is over.")).toBeNull();
+    rerender(<ChatPage {...initial} usage={makeUsageMock({ status: makeUsage({ policyConfigured: false, exhausted: true }) })} />);
+    expect(screen.queryByText("Your today's limit is over.")).toBeNull();
+    rerender(<ChatPage {...initial} usage={makeUsageMock({ status: makeUsage({ policyConfigured: true, used: 50, remaining: 0, exhausted: true }) })} />);
+    expect(screen.getByText("Your today's limit is over.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Upgrade to Plus" }).getAttribute("href")).toBe("#/plans");
+    expect((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

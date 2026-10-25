@@ -5,11 +5,10 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type KeyboardEvent,
   type RefObject,
 } from "react";
-import { ApertureMark } from "./ApertureMark";
 import { GoogleMark } from "./GoogleMark";
+import { NexoraMark } from "./NexoraMark";
 import { Icon } from "./Icon";
 import {
   getDeveloperDiagnostics,
@@ -105,10 +104,7 @@ export function AuthModal({
   const reasonId = useId();
   const errorId = useId();
   const noticeId = useId();
-  const signInTabId = useId();
-  const signUpTabId = useId();
-  const signInPanelId = useId();
-  const signUpPanelId = useId();
+  const passwordInputId = useId();
   const googleHelpId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -121,15 +117,19 @@ export function AuthModal({
   const requestIdRef = useRef(0);
   const requestInFlightRef = useRef(false);
   const googleFlowRef = useRef(false);
+  const exitTimerRef = useRef<number | null>(null);
+  const exitingRef = useRef(false);
 
   // Keep these guards current even before React commits state updates.
-  openRef.current = open;
+  openRef.current = open && !exitingRef.current;
   cancelGoogleRef.current = onCancelGoogle;
 
   const [mode, setMode] = useState<AuthModalMode>(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -187,6 +187,8 @@ export function AuthModal({
   useEffect(() => {
     if (!open) return;
 
+    exitingRef.current = false;
+    setExiting(false);
     setMode(initialMode);
     setName("");
     setEmail("");
@@ -194,6 +196,7 @@ export function AuthModal({
     setErrorField(null);
     setNotice(null);
     setPassword("");
+    setPasswordVisible(false);
     setConfirmPassword("");
     setToken(initialToken.trim());
     setBusy(false);
@@ -247,6 +250,9 @@ export function AuthModal({
 
   useEffect(() => {
     if (open) return;
+    if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
+    exitTimerRef.current = null;
+    exitingRef.current = false;
     if (googleFlowRef.current) {
       googleFlowRef.current = false;
       void onCancelGoogle().catch(() => {});
@@ -265,6 +271,7 @@ export function AuthModal({
   useEffect(
     () => () => {
       openRef.current = false;
+      if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
       requestIdRef.current += 1;
       requestInFlightRef.current = false;
       if (googleFlowRef.current) {
@@ -276,7 +283,7 @@ export function AuthModal({
   );
 
   function beginRequest(): number | null {
-    if (!openRef.current || requestInFlightRef.current) return null;
+    if (!openRef.current || exitingRef.current || requestInFlightRef.current) return null;
     requestInFlightRef.current = true;
     const requestId = ++requestIdRef.current;
     setBusy(true);
@@ -316,11 +323,15 @@ export function AuthModal({
     setNotice(null);
     // Secrets are not carried between unrelated auth operations.
     setPassword("");
+    setPasswordVisible(false);
     setConfirmPassword("");
     if (next !== "verify" && next !== "reset") setToken("");
   }
 
   function closeModal(): void {
+    if (exitingRef.current) return;
+    exitingRef.current = true;
+    setExiting(true);
     const shouldCancelGoogle = googleFlowRef.current;
     requestIdRef.current += 1;
     requestInFlightRef.current = false;
@@ -331,10 +342,15 @@ export function AuthModal({
     setName("");
     setEmail("");
     setPassword("");
+    setPasswordVisible(false);
     setConfirmPassword("");
     setToken("");
     if (shouldCancelGoogle) void onCancelGoogle().catch(() => {});
-    onClose();
+    // Keep the noninteractive sheet mounted until its exit animation completes.
+    // Reduced-motion users are never made to wait for an invisible transition.
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reducedMotion) onClose();
+    else exitTimerRef.current = window.setTimeout(onClose, 340);
   }
 
   function verifyServiceIsConfigured(): boolean {
@@ -656,6 +672,7 @@ export function AuthModal({
     if (!open) return;
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (exitingRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -712,17 +729,6 @@ export function AuthModal({
     .filter(Boolean)
     .join(" ");
 
-  function onAuthTabKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const next: AuthModalMode = mode === "signin" ? "signup" : "signin";
-    switchMode(next);
-    const tabMode = next === "signin" ? "signin" : "signup";
-    window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLElement>(`[data-auth-tab="${tabMode}"]`)?.focus();
-    });
-  }
-
   const errorProps = (field: AuthField) => ({
     "aria-invalid": error && errorField === field ? true : undefined,
     "aria-describedby": error && errorField === field ? errorId : undefined,
@@ -730,18 +736,20 @@ export function AuthModal({
 
   return (
     <div
-      className="auth-modal-backdrop"
+      className={`auth-modal-backdrop${exiting ? " auth-modal-backdrop--exit" : ""}`}
       role="presentation"
       data-testid="auth-modal-backdrop"
       onClick={(event) => {
-        if (event.target === event.currentTarget) closeModal();
+        if (event.target === event.currentTarget && !exitingRef.current) closeModal();
       }}
     >
       <div
         ref={dialogRef}
         className="auth-modal"
-        role="dialog"
-        aria-modal="true"
+        role={exiting ? undefined : "dialog"}
+        aria-modal={exiting ? undefined : "true"}
+        aria-hidden={exiting ? true : undefined}
+        inert={exiting ? true : undefined}
         aria-labelledby={titleId}
         aria-describedby={authDescriptionIds || undefined}
         aria-busy={busy || googleBusy}
@@ -750,8 +758,8 @@ export function AuthModal({
       >
         <div className="auth-modal__header">
           <div className="auth-modal__brand">
-            <ApertureMark size={18} />
-            <span>Nexora Account</span>
+            <NexoraMark size={20} />
+            <span>Nexora</span>
           </div>
           <button
             type="button"
@@ -763,16 +771,19 @@ export function AuthModal({
           </button>
         </div>
 
+        <div key={mode} className="auth-modal__view">
         <h2 id={titleId} className="auth-modal__title">
-          {mode === "signin" && "Sign in to Nexora"}
-          {mode === "signup" && "Create your Nexora account"}
+          {mode === "signin" && "Welcome back"}
+          {mode === "signup" && "Create your account"}
           {mode === "verify" && "Verify your email address"}
           {mode === "recover" && "Reset your password"}
           {mode === "reset" && "Set a new password"}
         </h2>
 
         <p id={subtitleId} className="auth-modal__subtitle">
-          Local AI inference and conversation history stay on your machine. Sign in is optional for local chat.
+          {mode === "signin" ? "Sign in to continue to Nexora." :
+            mode === "signup" ? "Create an account to continue to Nexora." :
+              "Continue securely with your Nexora account."}
         </p>
 
         {reason ? (
@@ -792,48 +803,10 @@ export function AuthModal({
         {authServiceConfigured === false ? (
           <div className="auth-modal__unconfigured" role="status" data-testid="auth-backend-note">
             <span>
-              Account authentication is not configured in this build. Close this dialog anytime to continue chatting locally.
+              Account sign-in isn't configured in this build. Local chat remains available.
             </span>
           </div>
         ) : null}
-
-        {(mode === "signin" || mode === "signup") && (
-          <div
-            className="auth-modal__tabs"
-            role="tablist"
-            aria-label="Authentication mode"
-            onKeyDown={onAuthTabKeyDown}
-          >
-            <button
-              id={signInTabId}
-              data-auth-tab="signin"
-              type="button"
-              role="tab"
-              aria-selected={mode === "signin"}
-              aria-controls={mode === "signin" ? signInPanelId : undefined}
-              tabIndex={mode === "signin" ? 0 : -1}
-              className={`auth-modal__tab${mode === "signin" ? " auth-modal__tab--active" : ""}`}
-              onClick={() => switchMode("signin")}
-              disabled={busy || googleBusy}
-            >
-              Sign in
-            </button>
-            <button
-              id={signUpTabId}
-              data-auth-tab="signup"
-              type="button"
-              role="tab"
-              aria-selected={mode === "signup"}
-              aria-controls={mode === "signup" ? signUpPanelId : undefined}
-              tabIndex={mode === "signup" ? 0 : -1}
-              className={`auth-modal__tab${mode === "signup" ? " auth-modal__tab--active" : ""}`}
-              onClick={() => switchMode("signup")}
-              disabled={busy || googleBusy}
-            >
-              Create account
-            </button>
-          </div>
-        )}
 
         {error ? (
           <div id={errorId} className="auth-modal__alert auth-modal__alert--error" role="alert">
@@ -849,36 +822,9 @@ export function AuthModal({
           </div>
         ) : null}
 
-        {(mode === "signin" || mode === "signup") && (
-          <>
-            <button
-              type="button"
-              className="auth-modal__google-btn"
-              onClick={() => void handleGoogle()}
-              disabled={googleDisabled}
-              aria-describedby={googleUnavailableReason ? googleHelpId : undefined}
-              title={googleUnavailableReason ?? undefined}
-            >
-              <GoogleMark size={16} />
-              <span>{googleBusy ? "Waiting for Google sign-in…" : "Continue with Google"}</span>
-            </button>
-            {googleUnavailableReason ? (
-              <p id={googleHelpId} className="auth-modal__unavailable" role={googleUnavailable ? "status" : "note"}>
-                {googleUnavailableReason}
-              </p>
-            ) : null}
-
-            <div className="auth-modal__divider" aria-hidden="true">
-              <span>or continue with email</span>
-            </div>
-          </>
-        )}
-
         {mode === "signin" ? (
           <form
-            id={signInPanelId}
-            role="tabpanel"
-            aria-labelledby={signInTabId}
+            aria-label="Sign in form"
             className="auth-modal__form"
             onSubmit={(event) => void handleSignIn(event)}
             noValidate
@@ -906,12 +852,14 @@ export function AuthModal({
               />
             </label>
 
-            <label className="auth-modal__field">
-              <span>Password</span>
-              <input
+            <div className="auth-modal__field">
+              <label htmlFor={passwordInputId}>Password</label>
+              <div className="auth-modal__password-row">
+                <input
+                id={passwordInputId}
                 ref={passwordRef}
                 className="field__input field__input--ui"
-                type="password"
+                type={passwordVisible ? "text" : "password"}
                 autoComplete="current-password"
                 value={password}
                 onChange={(event) => {
@@ -922,8 +870,16 @@ export function AuthModal({
                 disabled={busy || googleBusy}
                 required
                 {...errorProps("password")}
-              />
-            </label>
+                />
+                <button type="button" className="auth-modal__visibility"
+                aria-label={passwordVisible ? "Hide password" : "Show password"}
+                aria-pressed={passwordVisible}
+                disabled={busy || googleBusy}
+                onClick={() => setPasswordVisible((visible) => !visible)}>
+                <Icon name={passwordVisible ? "eye-off" : "eye"} size={18} />
+                </button>
+              </div>
+            </div>
 
             <button
               type="submit"
@@ -931,7 +887,7 @@ export function AuthModal({
               disabled={busy || googleBusy || authServiceConfigured === false}
               aria-busy={busy}
             >
-              {busy ? "Signing in…" : "Sign in"}
+              {busy && !googleBusy ? "Signing in…" : "Sign in"}
             </button>
 
             <div className="auth-modal__footer-links">
@@ -947,15 +903,13 @@ export function AuthModal({
 
         {mode === "signup" ? (
           <form
-            id={signUpPanelId}
-            role="tabpanel"
-            aria-labelledby={signUpTabId}
+            aria-label="Create account form"
             className="auth-modal__form"
             onSubmit={(event) => void handleSignUp(event)}
             noValidate
           >
             <label className="auth-modal__field">
-              <span>Name</span>
+              <span>Full name</span>
               <input
                 ref={nameRef}
                 className="field__input field__input--ui"
@@ -996,12 +950,14 @@ export function AuthModal({
               />
             </label>
 
-            <label className="auth-modal__field">
-              <span>Password</span>
-              <input
+            <div className="auth-modal__field">
+              <label htmlFor={passwordInputId}>Password</label>
+              <div className="auth-modal__password-row">
+                <input
+                id={passwordInputId}
                 ref={passwordRef}
                 className="field__input field__input--ui"
-                type="password"
+                type={passwordVisible ? "text" : "password"}
                 autoComplete="new-password"
                 value={password}
                 onChange={(event) => {
@@ -1012,8 +968,16 @@ export function AuthModal({
                 disabled={busy || googleBusy}
                 required
                 {...errorProps("password")}
-              />
-            </label>
+                />
+                <button type="button" className="auth-modal__visibility"
+                aria-label={passwordVisible ? "Hide password" : "Show password"}
+                aria-pressed={passwordVisible}
+                disabled={busy || googleBusy}
+                onClick={() => setPasswordVisible((visible) => !visible)}>
+                <Icon name={passwordVisible ? "eye-off" : "eye"} size={18} />
+                </button>
+              </div>
+            </div>
 
             <label className="auth-modal__field">
               <span>Confirm password</span>
@@ -1040,9 +1004,41 @@ export function AuthModal({
               disabled={busy || googleBusy || authServiceConfigured === false}
               aria-busy={busy}
             >
-              {busy ? "Creating account…" : "Create account"}
+              {busy && !googleBusy ? "Creating account…" : "Create account"}
             </button>
           </form>
+        ) : null}
+
+        {(mode === "signin" || mode === "signup") && googleOauthConfigured === true && authServiceConfigured !== false && (
+          <>
+            <div className="auth-modal__divider" aria-hidden="true"><span>or</span></div>
+            <button
+              type="button"
+              className="auth-modal__google-btn"
+              onClick={() => void handleGoogle()}
+              disabled={googleDisabled}
+              aria-describedby={googleUnavailableReason ? googleHelpId : undefined}
+              title={googleUnavailableReason ?? undefined}
+            >
+              <GoogleMark size={16} />
+              <span>{googleBusy ? "Waiting for Google sign-in…" : "Continue with Google"}</span>
+            </button>
+            {googleUnavailableReason ? (
+              <p id={googleHelpId} className="auth-modal__unavailable" role={googleUnavailable ? "status" : "note"}>
+                {googleUnavailableReason}
+              </p>
+            ) : null}
+          </>
+        )}
+
+        {(mode === "signin" || mode === "signup") ? (
+          <div className="auth-modal__switch">
+            <span>{mode === "signin" ? "New to Nexora?" : "Already have an account?"}</span>
+            <button type="button" className="auth-modal__link" disabled={busy || googleBusy}
+              onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}>
+              {mode === "signin" ? "Create an account" : "Sign in"}
+            </button>
+          </div>
         ) : null}
 
         {mode === "verify" ? (
@@ -1211,6 +1207,7 @@ export function AuthModal({
             </div>
           </form>
         ) : null}
+        </div>
       </div>
     </div>
   );

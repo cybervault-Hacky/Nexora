@@ -19,6 +19,7 @@ export type IconName =
   | "file"
   | "folder"
   | "home"
+  | "log-out"
   | "maximize"
   | "message"
   | "minimize"
@@ -68,6 +69,10 @@ const ICONS: Record<IconName, ReactElement> = {
       <path d="M6.2 8.3A6.5 6.5 0 0 0 6 18h9" />
     </>
   ),
+  "log-out": (<>
+    <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+    <path d="M12 12h9m-4-4 4 4-4 4" />
+  </>),
   maximize: <rect x="6.5" y="6.5" width="11" height="11" rx="1.2" />,
   minimize: <path d="M6.5 12h11" />,
   moon: (

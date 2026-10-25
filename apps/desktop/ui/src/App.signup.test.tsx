@@ -25,7 +25,7 @@ import App from "./App";
 import { fetchStatus } from "./lib/inference";
 import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
-describe("Floating Create Account & Email Verification Modal Flow", () => {
+describe("Create Account & Email Verification Bottom Sheet Flow", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -53,10 +53,10 @@ describe("Floating Create Account & Email Verification Modal Flow", () => {
 
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
     const modal = await screen.findByRole("dialog");
-    await user.click(within(modal).getByRole("tab", { name: "Create account" }));
+    await user.click(within(modal).getByRole("button", { name: "Create an account" }));
 
     // Mismatched confirmation password
-    await user.type(within(modal).getByLabelText("Name"), "Ada Lovelace");
+    await user.type(within(modal).getByLabelText("Full name"), "Ada Lovelace");
     await user.type(within(modal).getByLabelText("Email address"), "ada@example.com");
     await user.type(within(modal).getByLabelText("Password"), "strongpassword123");
     await user.type(within(modal).getByLabelText("Confirm password"), "mismatch123");
@@ -81,6 +81,6 @@ describe("Floating Create Account & Email Verification Modal Flow", () => {
       request: { token: verificationToken },
     });
     expect(await within(modal).findByText("Email verified.")).toBeTruthy();
-    expect(within(modal).getByRole("tab", { name: "Sign in" }).getAttribute("aria-selected")).toBe("true");
+    expect(modal.getAttribute("aria-modal")).toBe("true");
   });
 });

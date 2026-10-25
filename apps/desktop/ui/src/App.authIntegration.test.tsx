@@ -74,7 +74,7 @@ describe("Desktop Authentication IPC Integration (Email, Rate-Limit, Google PKCE
     await vi.waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(await screen.findByRole("link", { name: "Developer Account" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Open account menu" })).toBeTruthy();
   });
 
   it("rejects a malformed IPC user response without creating a signed-in client state", async () => {
@@ -95,7 +95,7 @@ describe("Desktop Authentication IPC Integration (Email, Rate-Limit, Google PKCE
 
     expect(await within(modal).findByText(/invalid user response/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "Developer Account" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open account menu" })).toBeNull();
   });
 
   it("surfaces invalid-credential and rate-limit errors accurately inside the modal", async () => {
@@ -123,6 +123,10 @@ describe("Desktop Authentication IPC Integration (Email, Rate-Limit, Google PKCE
   it("completes Google PKCE sign-in via auth_google_begin IPC", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "auth_get_session") return { user: null, authenticated: false };
+      if (cmd === "get_developer_diagnostics") return {
+        authServiceUrl: "https://accounts.example.test",
+        googleOauthConfigured: true,
+      };
       if (cmd === "auth_google_begin") {
         return { id: "g-1", name: "Grace Hopper", email: "grace@example.com", emailVerified: true };
       }
@@ -135,7 +139,7 @@ describe("Desktop Authentication IPC Integration (Email, Rate-Limit, Google PKCE
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
     const modal = await screen.findByRole("dialog");
 
-    await user.click(within(modal).getByRole("button", { name: /Continue with Google/i }));
+    await user.click(await within(modal).findByRole("button", { name: /Continue with Google/i }));
     expect(invokeMock).toHaveBeenCalledWith("auth_google_begin");
 
     await vi.waitFor(() => {

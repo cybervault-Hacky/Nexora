@@ -115,7 +115,7 @@ export function PlansPage({ isAuthenticated, accountId, onRequestSignIn }: Plans
     <div className="page page--plans" data-testid="plans-page">
       <PageHeader
         eyebrow="Plans"
-        title="Plans & Premium"
+        title="Nexora memberships"
         copy="Nexora is local-first. Local chat and the desktop workspace remain available while signed out. Premium is a planned concept: its capabilities and commercial terms are undecided, and no subscription actions are available here."
       />
 
@@ -196,11 +196,12 @@ export function PlansPage({ isAuthenticated, accountId, onRequestSignIn }: Plans
             <article className="plans-tier-card plans-tier-card--available">
               <div className="plans-tier-card__header">
                 <div>
-                  <p className="plans-tier-card__eyebrow">Available now</p>
-                  <h3 className="plans-tier-card__title">Local workspace</h3>
+                  <p className="plans-tier-card__eyebrow">Available now · No billing required</p>
+                  <h3 className="plans-tier-card__title">Free</h3>
                 </div>
-                <span className="badge badge--local">On this device</span>
+                <span className="badge badge--local">Local access</span>
               </div>
+              <p className="plans-tier-card__price">No charge <small>for local use</small></p>
               <p className="plans-tier-card__description">
                 The existing Nexora desktop experience on this device. Local chat remains available
                 while signed out.
@@ -238,8 +239,9 @@ export function PlansPage({ isAuthenticated, accountId, onRequestSignIn }: Plans
                   <p className="plans-tier-card__eyebrow">Planned concept</p>
                   <h3 className="plans-tier-card__title">Nexora Premium</h3>
                 </div>
-                <span className="badge">Not finalized</span>
+                <span className="badge">Coming soon</span>
               </div>
+              <p className="plans-tier-card__price">Coming soon <small>pricing and billing not finalized</small></p>
               <p className="plans-tier-card__description">
                 A future plan concept only. No Premium offer or included feature set is currently
                 available from this page.
@@ -269,7 +271,7 @@ export function PlansPage({ isAuthenticated, accountId, onRequestSignIn }: Plans
                   disabled
                   aria-describedby="plans-premium-unavailable-note"
                 >
-                  Unavailable in this phase
+                  Coming soon
                 </button>
                 <p id="plans-premium-unavailable-note" className="plans-action-note">
                   No checkout, payment, plan-change, or cancellation action is active here.

@@ -25,7 +25,7 @@ import App from "./App";
 import { fetchStatus } from "./lib/inference";
 import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
-describe("Floating Sign-In Modal over Chat", () => {
+describe("Sign-In Bottom Sheet over Chat", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -48,7 +48,7 @@ describe("Floating Sign-In Modal over Chat", () => {
 
     expect(within(modal).getByLabelText("Email address")).toBeTruthy();
     expect(within(modal).getByLabelText("Password")).toBeTruthy();
-    expect(within(modal).getByRole("button", { name: /Continue with Google/i })).toBeTruthy();
+    expect(within(modal).queryByRole("button", { name: /Continue with Google/i })).toBeNull();
 
     // Rejects invalid email without losing password input
     const pw = within(modal).getByLabelText("Password") as HTMLInputElement;
@@ -61,7 +61,7 @@ describe("Floating Sign-In Modal over Chat", () => {
     expect(JSON.stringify(window.localStorage)).not.toContain("super-secret-pass");
   });
 
-  it("supports Escape to dismiss the floating modal cleanly back to Chat", async () => {
+  it("supports Escape to dismiss the bottom sheet cleanly back to Chat", async () => {
     const user = userEvent.setup();
     render(<App />);
 
