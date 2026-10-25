@@ -472,4 +472,21 @@ Evidence checklist for a future authorized candidate (not a manifest):
 
 ### Repository state at the Step 5 final gate
 
-Pre-Step-5 snapshot: branch `arena/9ea88704-nexora`, HEAD `8b2e8415bc67ec31e343218364fa4a6ce3741dab`, **0 staged / 114 modified tracked / 21 untracked** paths. Final verification confirms the same branch and HEAD, still **0 staged / 114 modified tracked / 21 untracked**; all 114 baseline modified tracked paths and all 21 baseline untracked paths remain present. `git diff --check` and the staged-diff check passed; all 21 untracked UTF-8 text files were scanned with no trailing whitespace. Step 5 modified already-dirty `services/nexora-auth/src/billing.rs`, `services/nexora-auth/tests/plans_billing_quota_db.rs`, `README.md`, `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md`, and existing untracked reports, without replacing unrelated work. No commit, push, merge, tag, publish, release, or billing activation occurred.
+Pre-Step-5 snapshot: branch `arena/9ea88704-nexora`, HEAD `8b2e8415bc67ec31e343218364fa4a6ce3741dab`, **0 staged / 114 modified tracked / 21 untracked** paths. Final verification confirms the same branch and HEAD, still **0 staged / 114 modified tracked / 21 untracked**; all 114 baseline modified tracked paths and all 21 baseline untracked paths remain present. `git diff --check` and the staged-diff check passed; all 21 untracked UTF-8 text files were scanned with no trailing whitespace. Step 5 modified already-dirty `services/nexora-auth/src/billing.rs`, `services/nexora-auth/tests/plans_billing_quota_db.rs`, `README.md`, `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md`, and existing untracked reports, without replacing unrelated work. No commit, push, merge, tag, publish, release, or billing activation occurred at that Step 5 checkpoint.
+
+## Post-PR continuous-integration update (2026-10-25)
+
+This additive update records the first GitHub Actions run triggered by the requested draft PR #9: [`Public beta readiness and Windows packaging hardening`](https://github.com/cybervault-Hacky/Nexora/pull/9). It supersedes only the earlier Step 5 statement that no CI run existed for this worktree. It does not clear any release gate or change the NO-GO decision.
+
+Run `40177719356` for commit `f731ce9008d435c84a46be0105badecef2f17289` completed with an overall **failure**:
+
+| CI job | Result | Observed boundary |
+|---|---|---|
+| Frontend — typecheck, tests, production build | **PASS — VERIFIED** | Frozen install, pnpm audit, TypeScript, unit/contract tests, and production build all passed on the exact PR commit. |
+| Rust Desktop Core — fmt, check, Clippy, tests (Linux) | **BLOCKED — NOT VERIFIED** | `cargo --locked fmt --all -- --check` failed on formatting differences in `apps/desktop/src-tauri/src/auth/client.rs` and `apps/desktop/src-tauri/build.rs`; typecheck, Rust tests, and Clippy were skipped. |
+| Auth, Plans, Billing & Quota Service (PostgreSQL 16) | **BLOCKED — NOT VERIFIED** | `cargo --locked fmt --all -- --check` failed on formatting differences in `services/nexora-auth/src/account.rs`, `services/nexora-auth/src/app.rs`, and `services/nexora-auth/src/billing.rs`; Clippy and unit/HTTP/property/PostgreSQL tests were skipped. The PostgreSQL service container started, but test/migration steps did not run. |
+| Windows — compile, Rust tests & NSIS installer verification | **BLOCKED — NOT VERIFIED** | The hosted Windows runner reached the toolchain setup step but failed `Configure the hosted x64 MSVC and Windows SDK environment`; Windows typecheck/tests, NSIS build, checksum creation, and install smoke test were skipped. No installer was produced. |
+
+GitHub's check annotations establish the failing steps and affected formatting files. Retrieval of the detailed Actions log failed because its log-download host was outside the available network route; the underlying Windows bootstrap error is therefore not asserted. These CI results do not replace native/database/Windows acceptance: the relevant Rust tests were skipped, and the Windows job did not reach compilation or packaging.
+
+**Follow-up:** apply the pinned Rust formatter to the affected files and rerun both Rust CI jobs; inspect the Windows bootstrap log through an authorized GitHub Actions view, correct the specific environment failure, and rerun the Windows job. Keep the PR draft and Public Beta **NO-GO — BLOCKERS REMAIN** until all release criteria have their required evidence. No release, billing activation, or database migration was performed by this CI run.
