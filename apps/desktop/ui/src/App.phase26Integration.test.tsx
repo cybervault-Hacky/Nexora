@@ -129,10 +129,13 @@ describe("Phase 26 — Developer Licensing & Workspace Tiering Integration", () 
     render(<App />);
     goto("#/billing");
 
-    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Nexora memberships" })).toBeTruthy();
   });
 
   it("Settings page provides direct navigation link to Licensing page", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => cmd === "auth_get_session"
+      ? Promise.resolve({ authenticated: true, user: { id: "test-account", name: "Test User", email: "test@example.test", emailVerified: true } }) : original(cmd, args));
     const user = userEvent.setup();
     render(<App />);
     goto("#/settings");

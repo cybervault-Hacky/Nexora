@@ -15,6 +15,8 @@ describe("parseRoute", () => {
     expect(parseRoute("#/").id).toBe("chat");
     expect(parseRoute("#/chat").id).toBe("chat");
     expect(parseRoute("#/chat/").id).toBe("chat");
+    expect(parseRoute("#/search").id).toBe("chat");
+    expect(parseRoute("#/search-chats").id).toBe("chat");
   });
 
   it("maps every primary desktop workspace route and aliases cleanly", () => {

@@ -11,8 +11,6 @@ export interface SettingsPageProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   workspacePath: string | null;
-  theme?: "dark" | "light";
-  onToggleTheme?: () => void;
   founderModeEnabled?: boolean;
   onToggleFounderMode?: () => void;
   codeLigatures?: boolean;
@@ -40,8 +38,6 @@ export function SettingsPage({
   sidebarCollapsed,
   onToggleSidebar,
   workspacePath,
-  theme = "dark",
-  onToggleTheme,
   founderModeEnabled = false,
   onToggleFounderMode,
   codeLigatures = false,
@@ -141,23 +137,6 @@ export function SettingsPage({
 
         <section className="settings-group" aria-label="Interface">
           <h2 className="settings-group__title">Interface</h2>
-          {onToggleTheme && (
-            <div className="settings-row settings-row--static">
-              <span>
-                <span className="settings-row__label">Color theme</span>
-                <span className="settings-row__hint">
-                  Neutral {theme === "light" ? "Light" : "Dark"} desktop palette active.
-                </span>
-              </span>
-              <button
-                type="button"
-                className="button button--ghost button--sm"
-                onClick={onToggleTheme}
-              >
-                Switch to {theme === "dark" ? "Light" : "Dark"} theme
-              </button>
-            </div>
-          )}
           <label className="settings-row">
             <span>
               <span className="settings-row__label">Collapse sidebar</span>

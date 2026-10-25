@@ -94,8 +94,8 @@ describe("browser preview", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Desktop app required.")).toBeTruthy();
-    expect(screen.getByText(/browser preview of the Nexora interface/i)).toBeTruthy();
+    expect(await screen.findByText("Local inference requires the Nexora desktop app.")).toBeTruthy();
+    expect(screen.getByText(/Local inference requires the Nexora desktop app/i)).toBeTruthy();
     expect(screen.queryByText("Engine ready")).toBeNull();
     expect(
       (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement)
@@ -107,7 +107,7 @@ describe("browser preview", () => {
     statusMock.mockResolvedValue(previewStatus());
 
     render(<App />);
-    await screen.findByText("Desktop app required.");
+    await screen.findByText("Local inference requires the Nexora desktop app.");
 
     expect(screen.getAllByText(/Nexora/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
@@ -125,11 +125,11 @@ describe("desktop status routing", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Bring your own model.")).toBeTruthy();
+    expect(await screen.findByText("What's New Today?")).toBeTruthy();
     // Model setup moved to the Local Models page in Phase 19; the chat empty
     // state links there with a real navigation target.
     await userEvent.setup().click(
-      screen.getByRole("link", { name: /Open local model manager/i }),
+      screen.getByRole("link", { name: "Open Local Models" }),
     );
     expect(
       await screen.findByRole("textbox", { name: "Runtime executable" }),
@@ -137,7 +137,7 @@ describe("desktop status routing", () => {
     expect(
       screen.getByRole("textbox", { name: "Model file (.gguf)" }),
     ).toBeTruthy();
-    expect(screen.queryByText("Build something real.")).toBeNull();
+    expect(screen.queryByText("What's New Today?")).toBeNull();
   });
 
   it("shows the ready conversation surface when a model is loaded", async () => {
@@ -147,8 +147,7 @@ describe("desktop status routing", () => {
     render(<App />);
 
     expect(await screen.findByText("Engine ready")).toBeTruthy();
-    expect(screen.getByText("Build something real.")).toBeTruthy();
-    expect(screen.queryByText("Bring your own model.")).toBeNull();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
     expect(screen.getByText(/qwen2\.5-coder-7b/)).toBeTruthy();
   });
 
@@ -163,7 +162,7 @@ describe("desktop status routing", () => {
     expect(await screen.findByText("Loading model")).toBeTruthy();
     expect(screen.getByText("Loading weights into memory.")).toBeTruthy();
     expect(screen.queryByText("Engine ready")).toBeNull();
-    expect(screen.queryByText("Build something real.")).toBeNull();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
   });
 
   it("reports an engine failure with the core's own words", async () => {
@@ -182,7 +181,7 @@ describe("desktop status routing", () => {
       screen.getByTitle(/stopped unexpectedly \(exit status: 1\)/),
     ).toBeTruthy();
     expect(screen.queryByText("Engine ready")).toBeNull();
-    expect(screen.queryByText("Build something real.")).toBeNull();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
   });
 
   it("never confuses an IPC failure with a healthy but model-less engine", async () => {
@@ -198,9 +197,8 @@ describe("desktop status routing", () => {
       await screen.findByText(/Could not read the engine status/),
     ).toBeTruthy();
     expect(screen.getByText("Engine status unknown")).toBeTruthy();
-    expect(await screen.findByText("Engine state unavailable.")).toBeTruthy();
-    expect(screen.queryByText("Bring your own model.")).toBeNull();
-    expect(screen.queryByText("Build something real.")).toBeNull();
+    expect(await screen.findByText(/Engine status unavailable\. Retry/)).toBeTruthy();
+    expect(screen.getByText("What's New Today?")).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement)
         .disabled,

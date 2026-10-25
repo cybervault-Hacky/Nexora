@@ -252,8 +252,7 @@ describe("Phase 25 — AI Chat Integration", () => {
 
     const input = await screen.findByRole("textbox", { name: "Message Nexora" });
 
-    expect(screen.getByText("50 recorded today")).toBeTruthy();
-    expect(screen.getByText(/no local daily limit is configured/i)).toBeTruthy();
+    expect(screen.queryByText("Your today's limit is over.")).toBeNull();
     expect(screen.queryByText(/50 of 50 used|daily free allowance reached/i)).toBeNull();
 
     await user.type(input, "hello");
@@ -329,8 +328,9 @@ describe("Phase 25 — AI Chat Integration", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Initial empty state has "New conversation"
-    expect(await screen.findByRole("heading", { name: "New conversation" })).toBeTruthy();
+    // The intro is the only heading until a draft starts.
+    expect(await screen.findByRole("heading", { name: "What's New Today?" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "New conversation" })).toBeNull();
 
     // Start a new chat via the header button or shortcut
     const input = screen.getByRole("textbox", { name: "Message Nexora" });

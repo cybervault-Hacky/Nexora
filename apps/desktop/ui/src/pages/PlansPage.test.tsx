@@ -49,8 +49,8 @@ describe("Phase 14 — Plans and Premium overview", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Local workspace" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Nexora memberships" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Free" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Nexora Premium" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open AI Chat" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("No account is signed in");
@@ -63,7 +63,7 @@ describe("Phase 14 — Plans and Premium overview", () => {
     expect(pageText).not.toMatch(/payment successful|subscription activated|purchase complete/i);
 
     const unavailableAction = screen.getByRole("button", {
-      name: "Unavailable in this phase",
+      name: "Coming soon",
     }) as HTMLButtonElement;
     expect(unavailableAction.disabled).toBe(true);
     await user.click(unavailableAction);
@@ -136,7 +136,7 @@ describe("Phase 14 — Plans and Premium overview", () => {
       await screen.findByText(/Plan status is unavailable\. No Free plan or subscription state is assumed\./),
     ).toBeTruthy();
     expect(screen.queryByTestId("account-plan-record")).toBeNull();
-    expect(screen.queryByText(/^Free$/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Free" })).toBeTruthy(); // comparison is not an account entitlement
   });
 
   it("reports an unconfigured status as unavailable without inventing an account plan", async () => {
@@ -264,7 +264,7 @@ describe("Phase 14 — Plans and Premium overview", () => {
     expect(plansCss).toContain("grid-template-columns: minmax(0, 1fr);");
     expect(plansCss).toContain("min-width: 0;");
     expect(plansCss).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(tokensCss).toContain(':root[data-theme="dark"]');
-    expect(tokensCss).toContain(':root[data-theme="light"]');
+    expect(tokensCss).toContain("--bg-base: #000000;");
+    expect(tokensCss).not.toContain(':root[data-theme="light"]');
   });
 });

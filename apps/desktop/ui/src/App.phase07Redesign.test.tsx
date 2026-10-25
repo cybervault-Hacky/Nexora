@@ -193,51 +193,21 @@ describe("Phase 07 — Complete ChatGPT-Inspired UI Redesign Acceptance Suite", 
     markDesktop(false);
   });
 
-  it("defines exact ChatGPT neutral Dark & Light tokens with WCAG AA/AAA contrast and zero-flash boot script", () => {
+  it("uses a black-only accessible palette without a light-theme bootstrap", () => {
     const tokensCss = fs.readFileSync(path.resolve(__dirname, "styles/tokens.css"), "utf-8");
     const indexHtml = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
-    const themeInitJs = fs.readFileSync(path.resolve(__dirname, "../public/theme-init.js"), "utf-8");
-
-    // Dark reference palette
-    expect(tokensCss).toContain("--bg-base: #212121;");
-    expect(tokensCss).toContain("--bg-sidebar: #171717;");
-    expect(tokensCss).toContain("--bg-panel: #2f2f2f;");
-    expect(tokensCss).toContain("--border-default: #424242;");
-    expect(tokensCss).toContain("--text-primary: #f3f3f3;");
-    expect(tokensCss).toContain("--text-secondary: #afafaf;");
-
-    // Light reference palette
-    expect(tokensCss).toContain("--bg-base: #ffffff;");
-    expect(tokensCss).toContain("--bg-sidebar: #f9f9f9;");
-    expect(tokensCss).toContain("--bg-panel: #f4f4f4;");
-    expect(tokensCss).toContain("--border-default: #e5e5e5;");
-    expect(tokensCss).toContain("--text-primary: #202123;");
-    expect(tokensCss).toContain("--text-secondary: #6b6b6b;");
-
-    // WCAG contrast checks across both themes
-    expect(contrastRatio("#212121", "#f3f3f3")).toBeGreaterThan(13);
-    expect(contrastRatio("#212121", "#afafaf")).toBeGreaterThan(7);
-    expect(contrastRatio("#ffffff", "#202123")).toBeGreaterThan(15);
-    expect(contrastRatio("#ffffff", "#6b6b6b")).toBeGreaterThan(5);
-
-    // Pre-hydration external script preserves strict `script-src 'self'` CSP with zero flash
-    expect(indexHtml).toContain('<script src="./theme-init.js"></script>');
-    expect(themeInitJs).toContain("document.documentElement.dataset.theme");
+    expect(tokensCss).toContain("--bg-base: #000000;");
+    expect(tokensCss).toContain("color-scheme: dark;");
+    expect(tokensCss).not.toContain(':root[data-theme="light"]');
+    expect(contrastRatio("#000000", "#f3f3f3")).toBeGreaterThan(13);
+    expect(indexHtml).not.toContain("theme-init.js");
   });
 
-  it("persists Light/Dark theme selection across app remounts without flashing", async () => {
-    const user = userEvent.setup();
-    const first = render(<App />);
-
-    await user.click(await screen.findByRole("button", { name: "Switch to light theme" }));
-    expect(document.documentElement.dataset.theme).toBe("light");
-    expect(window.localStorage.getItem("nexora.theme")).toBe("light");
-
-    first.unmount();
-
+  it("does not offer light mode even when a legacy preference is stored", async () => {
+    window.localStorage.setItem("nexora.theme", "light");
     render(<App />);
-    expect(await screen.findByRole("button", { name: "Switch to dark theme" })).toBeTruthy();
-    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(await screen.findByRole("main")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Switch to light theme/i })).toBeNull();
   });
 
   it("searches local titles and message contents via Sidebar trigger and Ctrl+K with keyboard navigation and draft preservation", async () => {
@@ -249,8 +219,9 @@ describe("Phase 07 — Complete ChatGPT-Inspired UI Redesign Acceptance Suite", 
     })) as HTMLTextAreaElement;
     await user.type(composer, "Keep this unsent draft safe");
 
-    // Open search via Sidebar trigger
-    await user.click(screen.getByTestId("sidebar-search-button"));
+    // Search remains keyboard-accessible without a public Search Chats navigation entry.
+    expect(screen.queryByTestId("sidebar-search-button")).toBeNull();
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })));
     const modal = await screen.findByTestId("conversation-search-modal");
     const searchInput = within(modal).getByRole("combobox", { name: "Search conversations" });
 
@@ -390,10 +361,11 @@ describe("Phase 07 — Complete ChatGPT-Inspired UI Redesign Acceptance Suite", 
     render(<App />);
 
     const nav = await screen.findByRole("navigation", { name: "Primary" });
-    await user.click(within(nav).getByRole("link", { name: /Plans/ }));
+    expect(within(nav).queryByRole("link", { name: /Plans/ })).toBeNull();
+    act(() => { window.location.hash = "#/plans"; window.dispatchEvent(new Event("hashchange")); });
 
-    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Local workspace" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Nexora memberships" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Free" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open AI Chat" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("No account is signed in");
     expect(invokeMock.mock.calls.some(([command]) => command === "billing_get_status")).toBe(false);

@@ -25,7 +25,7 @@ import App from "./App";
 import { fetchStatus } from "./lib/inference";
 import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
-describe("Floating Password Recovery & Reset Modal Flow", () => {
+describe("Password Recovery & Reset Bottom Sheet Flow", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -44,7 +44,7 @@ describe("Floating Password Recovery & Reset Modal Flow", () => {
     window.location.hash = "";
   });
 
-  it("handles forgot-password request and password reset cleanly inside the floating modal", async () => {
+  it("handles forgot-password request and password reset cleanly inside the bottom sheet", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -70,6 +70,6 @@ describe("Floating Password Recovery & Reset Modal Flow", () => {
       request: { token: resetToken, password: "brandnewpassword99" },
     });
     expect(await within(modal).findByText("Password updated.")).toBeTruthy();
-    expect(within(modal).getByRole("tab", { name: "Sign in" }).getAttribute("aria-selected")).toBe("true");
+    expect(modal.getAttribute("aria-modal")).toBe("true");
   });
 });

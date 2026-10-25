@@ -153,6 +153,14 @@ describe("ModelSelector", () => {
     expect(options).toEqual(["Nexora Mini — Loaded", "Nexora Sonnet — Not enough memory"]);
   });
 
+  it("does not imply paid access from a model name or local readiness", async () => {
+    const user = userEvent.setup();
+    render(<ModelSelector catalog={catalog()} />);
+    await user.click(screen.getByTestId("model-selector-trigger"));
+    expect(screen.getByTestId("model-selector-popover").textContent).toContain("Nexora Sonnet");
+    expect(screen.queryByRole("link", { name: /Upgrade/ })).toBeNull();
+  });
+
   it("never presents an unapproved model as ready", () => {
     render(<ModelSelector catalog={catalog()} />);
 

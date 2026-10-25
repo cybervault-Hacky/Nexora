@@ -1,6 +1,5 @@
 import { memo } from "react";
 import type { ChatMessage } from "../features/chat/chat";
-import { ApertureMark } from "./ApertureMark";
 import { AssistantContent, UserContent } from "./MessageContent";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -35,10 +34,6 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <article className="message message--assistant">
-      <span className="message__mark" aria-hidden="true">
-        <ApertureMark size={22} />
-      </span>
-
       <div className="message__body">
         <div className="message__head">
           <span className="message__author">Nexora</span>

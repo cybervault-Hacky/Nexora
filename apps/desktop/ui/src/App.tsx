@@ -43,6 +43,7 @@ import { LicensingPage } from "./pages/LicensingPage";
 import { ModelManagerPage } from "./pages/ModelManagerPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PlansPage } from "./pages/PlansPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -148,7 +149,7 @@ export default function App() {
   const workspace = useWorkspace();
   const patch = usePatch(workspace.workspacePath);
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600);
   const [founderModeEnabled, setFounderModeEnabled] = useState(false);
   const [codeLigatures, setCodeLigatures] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -567,6 +568,8 @@ export default function App() {
   }, [startNewChat, authOpen]);
 
   const desktop = isDesktopShell();
+  const accountRoute = route.id === "settings" || route.id === "account" || route.id === "profile" || route.id === "founder";
+  const protectedRoute = accountRoute && (!auth.isAuthenticated || (route.id === "founder" && !founderModeEnabled));
   const pageLabel =
     route.id === "notFound"
       ? "Page not found"
@@ -579,20 +582,16 @@ export default function App() {
         aria-hidden={authOpen ? true : undefined}
         inert={authOpen ? true : undefined}
       >
-        <TitleBar
-          pageLabel={pageLabel}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-        />
+        <TitleBar pageLabel={pageLabel} />
 
         <Sidebar
           currentRoute={route.id as AnyRouteId}
           status={engineStatus}
           statusFailed={statusError !== null}
           collapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
           founderModeEnabled={founderModeEnabled}
           onNewChat={startNewChat}
-          onOpenSearch={() => setSearchOpen(true)}
           onUnload={desktop ? handleUnload : undefined}
           unloading={unloading}
           conversations={conversation.conversations}
@@ -604,6 +603,7 @@ export default function App() {
           onDeleteConversation={conversation.deleteConversationById}
           onRetryHistory={conversation.refreshList}
           user={auth.user}
+          onLogout={auth.logout}
           onOpenAuthModal={(mode = "signin") => openAuthModal(mode, null)}
         />
 
@@ -640,7 +640,15 @@ export default function App() {
             </div>
           ) : null}
 
-          {route.id === "home" ? (
+          {accountRoute && auth.loading ? (
+            <div className="protected-route" role="status">Checking account…</div>
+          ) : protectedRoute ? (
+            <div className="protected-route" role="region" aria-label="Sign in required">
+              <h1>{route.id === "founder" && auth.isAuthenticated ? "Page unavailable" : "Sign in required"}</h1>
+              <p>{route.id === "founder" && auth.isAuthenticated ? "Founder Control is not enabled for this session." : "Sign in to access this account page. Local chat and projects remain available."}</p>
+              {route.id !== "founder" || !auth.isAuthenticated ? <button type="button" className="button button--primary" onClick={() => openAuthModal("signin")}>Sign in</button> : null}
+            </div>
+          ) : route.id === "home" ? (
             <HomePage
               status={engineStatus}
               statusError={statusError}
@@ -743,6 +751,8 @@ export default function App() {
               reducedMotion={reducedMotion}
               onToggleReducedMotion={() => setReducedMotion((current) => !current)}
             />
+          ) : route.id === "profile" ? (
+            <ProfilePage user={auth.user} onRequestSignIn={() => openAuthModal("signin")} onProfileSaved={() => void auth.refreshSession()} />
           ) : route.id === "account" ? (
             <AccountPage auth={auth} onOpenAuthModal={(mode) => openAuthModal(mode, null)} />
           ) : route.id === "founder" ? (

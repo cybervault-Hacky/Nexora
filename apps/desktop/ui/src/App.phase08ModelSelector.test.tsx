@@ -143,7 +143,7 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
     markDesktop(false);
   });
 
-  it("switches from Nexora Mini to Nexora Sonnet inside the shared Chat header while preserving active conversation, unsent draft, and per-turn profileId", async () => {
+  it("switches from Nexora Mini to Nexora Sonnet inside the shared composer while preserving active conversation, unsent draft, and per-turn profileId", async () => {
     let selectedId = NEXORA_MINI_ID;
     let loadedId = NEXORA_MINI_ID;
 
@@ -203,9 +203,9 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
     const user = userEvent.setup();
     render(<App />);
 
-    // Selector renders inside `.conversation-header` showing Nexora Mini
+    // Selector renders inside the existing composer showing Nexora Mini
     const trigger = await screen.findByTestId("model-selector-trigger");
-    expect(trigger.closest(".conversation-header")).toBeTruthy();
+    expect(trigger.closest(".composer")).toBeTruthy();
     expect(within(trigger).getByText("Nexora Mini")).toBeTruthy();
 
     // Send first prompt on Nexora Mini
@@ -257,13 +257,14 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
     // Opening and closing auth must leave the selected model, active transcript, and composer draft untouched.
     await user.type(composer, "Keep this draft while I review account options");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("dialog", { name: "Sign in to Nexora" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Welcome back" })).toBeTruthy();
     expect(composer.value).toBe("Keep this draft while I review account options");
     expect(within(trigger).getByText("Nexora Sonnet")).toBeTruthy();
     expect(document.querySelector(".workspace")?.textContent).toContain("Mini fast helper answer.");
     expect(document.querySelector(".app")?.hasAttribute("inert")).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Close authentication dialog" }));
+    await vi.waitFor(() => expect(screen.queryByTestId("auth-modal-backdrop")).toBeNull());
     expect(composer.value).toBe("Keep this draft while I review account options");
     expect(within(trigger).getByText("Nexora Sonnet")).toBeTruthy();
     expect(
@@ -276,7 +277,7 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
       window.location.hash = "#/plans";
       window.dispatchEvent(new Event("hashchange"));
     });
-    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Nexora memberships" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("No account is signed in");
     expect(invokeMock.mock.calls.some(([command]) => command === "billing_get_status")).toBe(false);
 
@@ -299,8 +300,7 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
       window.location.hash = "#/account";
       window.dispatchEvent(new Event("hashchange"));
     });
-    expect(await screen.findByRole("region", { name: "Account profile" })).toBeTruthy();
-    expect(screen.getByText(/Local Guest Mode/i)).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Sign in required" })).toBeTruthy();
 
     act(() => {
       window.location.hash = "#/chat";

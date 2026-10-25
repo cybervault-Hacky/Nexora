@@ -111,10 +111,9 @@ describe("Phase 25 — Developer Account & Founder Control Centre Integration", 
     render(<App />);
     goto("#/account");
 
-    expect(await screen.findByRole("heading", { name: "Developer Account" })).toBeTruthy();
-    expect(screen.getByText(/Local Guest Mode \(Unauthenticated\)/i)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Sign in" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Create account" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Sign in required" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Developer Account" })).toBeNull();
+    expect(within(screen.getByRole("region", { name: "Sign in required" })).getByRole("button", { name: "Sign in" })).toBeTruthy();
   });
 
   it("renders authenticated profile and allows password change", async () => {
@@ -157,7 +156,7 @@ describe("Phase 25 — Developer Account & Founder Control Centre Integration", 
     goto("#/account");
 
     expect(await screen.findByText("Hacky Founder")).toBeTruthy();
-    expect(screen.getByText("founder@nexora.dev")).toBeTruthy();
+    expect(await screen.findByText("founder@nexora.dev")).toBeTruthy();
     expect(screen.getByText("usr_founder_01")).toBeTruthy();
     expect(screen.getByText("Active Session")).toBeTruthy();
 
@@ -186,6 +185,9 @@ describe("Phase 25 — Developer Account & Founder Control Centre Integration", 
   });
 
   it("Settings page displays Account and Founder Control toggle", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => cmd === "auth_get_session"
+      ? Promise.resolve({ authenticated: true, user: { id: "test-account", name: "Test User", email: "test@example.test", emailVerified: true } }) : original(cmd, args));
     const user = userEvent.setup();
     render(<App />);
     goto("#/settings");
@@ -212,6 +214,12 @@ describe("Phase 25 — Developer Account & Founder Control Centre Integration", 
   });
 
   it("renders Founder Control Centre with system metrics and live IPC telemetry", async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "auth_get_session") return Promise.resolve({ authenticated: true, user: { id: "test-account", name: "Test User", email: "test@example.test", emailVerified: true } });
+      if (cmd === "get_workspace_settings") return Promise.resolve({ version: 1, lastWorkspacePath: null, preferences: { explorerCollapsed: false, founderModeEnabled: true, codeLigatures: false, reducedMotion: false } });
+      return original(cmd, args);
+    });
     render(<App />);
     goto("#/founder");
 
