@@ -3,26 +3,27 @@ use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::redirect::Policy;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 
 use super::{AuthError, AuthResult, AuthStatusResponse, AuthUser, SessionCredentials};
 
 const COMPILE_TIME_AUTH_API_URL: Option<&'static str> = option_env!("NEXORA_AUTH_API_URL");
+const COMPILE_TIME_ENVIRONMENT: Option<&'static str> = option_env!("NEXORA_BUILD_ENV");
 const DEFAULT_LOOPBACK_AUTH_URL: &str = "http://127.0.0.1:8787";
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct ErrorDetail {
     code: String,
     message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct ErrorEnvelope {
     error: ErrorDetail,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionTokenDto {
     token: String,
@@ -30,23 +31,23 @@ struct SessionTokenDto {
     expires_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct LoginResponseBody {
     user: AuthUser,
     session: SessionTokenDto,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RefreshResponseBody {
     session: SessionTokenDto,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct MeResponseBody {
     user: AuthUser,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EmailFlowResponseBody {
     #[serde(default)]
@@ -65,18 +66,37 @@ enum EndpointState {
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    matches!(
-        host.to_ascii_lowercase().as_str(),
-        "127.0.0.1" | "localhost" | "[::1]"
-    )
+    let address = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    address.eq_ignore_ascii_case("localhost")
+        || address
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
 }
 
 fn contains_release_placeholder(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    lower.contains("replace_with")
-        || lower.contains("change_me")
-        || lower.contains("nexora.local")
-        || lower.contains("example.invalid")
+    [
+        "replace_with",
+        "change_me",
+        "changeme",
+        "placeholder",
+        "nexora.local",
+        "example.invalid",
+        "example.test",
+        "example.com",
+        "example.org",
+        ".example",
+        ".invalid",
+        ".test",
+        "your_",
+        "your-",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 /// Validates and normalizes a desktop backend base URL without ever echoing raw
@@ -96,7 +116,11 @@ pub(crate) fn validate_backend_base_url(
 
     if trimmed
         .chars()
-        .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+        .any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '"' | '\'' | '\\')
+        })
     {
         return Err(AuthError::new(
             "invalid_backend_url",
@@ -104,29 +128,35 @@ pub(crate) fn validate_backend_base_url(
         ));
     }
 
-    let Some((scheme_raw, rest)) = trimmed.split_once("://") else {
-        return Err(AuthError::new(
+    let parsed = Url::parse(trimmed).map_err(|_| {
+        AuthError::new(
             "invalid_backend_url",
-            "Backend service URL must declare an explicit https:// scheme.",
-        ));
-    };
-
-    if rest.contains('?') || rest.contains('#') {
+            "Backend service URL must be a valid absolute HTTP(S) URL.",
+        )
+    })?;
+    if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(AuthError::new(
             "invalid_backend_url",
             "Backend service URL must not contain query parameters or fragments.",
         ));
     }
 
-    let (authority, path_tail) = match rest.split_once('/') {
-        Some((auth, tail)) => (auth, tail.trim_end_matches('/')),
-        None => (rest, ""),
-    };
-
-    if authority.is_empty() || authority.contains('@') {
+    let raw_authority = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(""))
+        .unwrap_or("");
+    if raw_authority.contains('@') || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(AuthError::new(
             "invalid_backend_url",
-            "Backend service URL authority is invalid or embeds credentials.",
+            "Backend service URL must not embed credentials.",
+        ));
+    }
+
+    let host = parsed.host_str().unwrap_or("");
+    if host.is_empty() {
+        return Err(AuthError::new(
+            "invalid_backend_url",
+            "Backend service URL must include a host.",
         ));
     }
 
@@ -137,83 +167,15 @@ pub(crate) fn validate_backend_base_url(
         ));
     }
 
-    let (host, port_str) = if authority.starts_with('[') {
-        let Some(close_idx) = authority.find(']') else {
-            return Err(AuthError::new(
-                "invalid_backend_url",
-                "Backend service URL contains a malformed IPv6 host.",
-            ));
-        };
-        let ipv6_host = &authority[..=close_idx];
-        let inner = &ipv6_host[1..ipv6_host.len() - 1];
-        if inner.is_empty()
-            || !inner.contains(':')
-            || !inner
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
-        {
-            return Err(AuthError::new(
-                "invalid_backend_url",
-                "Backend service URL contains an invalid IPv6 address.",
-            ));
-        }
-        let remainder = &authority[close_idx + 1..];
-        if remainder.is_empty() {
-            (ipv6_host, None)
-        } else if let Some(p) = remainder.strip_prefix(':') {
-            (ipv6_host, Some(p))
-        } else {
-            return Err(AuthError::new(
-                "invalid_backend_url",
-                "Backend service URL authority is malformed.",
-            ));
-        }
-    } else {
-        let mut parts = authority.split(':');
-        let host_part = parts.next().unwrap_or("");
-        let port_part = parts.next();
-        if parts.next().is_some() {
-            return Err(AuthError::new(
-                "invalid_backend_url",
-                "Backend service URL host or port is malformed.",
-            ));
-        }
-        if host_part.is_empty()
-            || host_part.starts_with('.')
-            || host_part.ends_with('.')
-            || host_part.contains("..")
-            || !host_part
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
-        {
-            return Err(AuthError::new(
-                "invalid_backend_url",
-                "Backend service URL hostname is invalid.",
-            ));
-        }
-        (host_part, port_part)
-    };
-
-    if let Some(p) = port_str {
-        match p.parse::<u16>() {
-            Ok(port) if port > 0 => {}
-            _ => {
-                return Err(AuthError::new(
-                    "invalid_backend_url",
-                    "Backend service URL port must be between 1 and 65535.",
-                ));
-            }
-        }
-    }
-
-    if !path_tail.is_empty()
-        && path_tail.split('/').any(|seg| {
-            seg.is_empty()
-                || seg == "."
-                || seg == ".."
-                || !seg
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    let path = parsed.path().trim_matches('/');
+    if !path.is_empty()
+        && path.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment == ".."
+                || !segment.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                })
         })
     {
         return Err(AuthError::new(
@@ -222,16 +184,14 @@ pub(crate) fn validate_backend_base_url(
         ));
     }
 
-    let scheme = scheme_raw.to_ascii_lowercase();
-    match scheme.as_str() {
+    match parsed.scheme() {
         "https" => {}
+        "http" if is_loopback_host(host) && allow_loopback_http => {}
         "http" if is_loopback_host(host) => {
-            if !allow_loopback_http {
-                return Err(AuthError::new(
-                    "insecure_backend_url",
-                    "Plaintext HTTP loopback backend URLs are disabled in release builds.",
-                ));
-            }
+            return Err(AuthError::new(
+                "insecure_backend_url",
+                "Plaintext HTTP loopback backend URLs are disabled outside development/test.",
+            ));
         }
         "http" => {
             return Err(AuthError::new(
@@ -247,13 +207,70 @@ pub(crate) fn validate_backend_base_url(
         }
     }
 
-    let normalized = if path_tail.is_empty() {
-        format!("{scheme}://{authority}")
-    } else {
-        format!("{scheme}://{authority}/{path_tail}")
-    };
+    Ok(parsed.as_str().trim_end_matches('/').to_string())
+}
 
-    Ok(normalized)
+fn resolve_desktop_environment(
+    raw: Option<&str>,
+    is_debug_build: bool,
+) -> AuthResult<&'static str> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("development") => Ok("development"),
+        Some("test") => Ok("test"),
+        Some("production") => Ok("production"),
+        Some(_) => Err(AuthError::new(
+            "invalid_environment",
+            "NEXORA_ENV must be development, test, or production. (Value withheld.)",
+        )),
+        None if is_debug_build => Ok("development"),
+        None => Ok("production"),
+    }
+}
+
+fn resolve_runtime_environment(
+    build_environment_raw: Option<&str>,
+    runtime_environment_raw: Option<&str>,
+    is_debug_build: bool,
+) -> AuthResult<&'static str> {
+    let build_environment = resolve_desktop_environment(build_environment_raw, is_debug_build)?;
+    if let Some(runtime_environment_raw) = runtime_environment_raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let runtime_environment =
+            resolve_desktop_environment(Some(runtime_environment_raw), is_debug_build)?;
+        if runtime_environment != build_environment {
+            return Err(AuthError::new(
+                "environment_override_disabled",
+                "Desktop deployment mode is fixed at trusted build time; runtime overrides are disabled.",
+            ));
+        }
+    }
+
+    Ok(build_environment)
+}
+
+fn parse_loopback_opt_in(raw: Option<&str>) -> AuthResult<bool> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(AuthError::new(
+            "invalid_environment",
+            "NEXORA_ALLOW_LOOPBACK_HTTP must be exactly true or false. (Value withheld.)",
+        )),
+    }
+}
+
+fn read_runtime_environment(name: &str) -> AuthResult<Option<String>> {
+    match std::env::var_os(name) {
+        None => Ok(None),
+        Some(value) => value.into_string().map(Some).map_err(|_| {
+            AuthError::new(
+                "invalid_environment",
+                format!("{name} must contain valid UTF-8 text. (Value withheld.)"),
+            )
+        }),
+    }
 }
 
 fn resolve_backend_endpoint_with(
@@ -262,22 +279,46 @@ fn resolve_backend_endpoint_with(
     runtime_legacy: Option<&str>,
     is_debug_build: bool,
     allow_loopback_flag: bool,
+    environment_raw: Option<&str>,
 ) -> EndpointState {
-    let allow_loopback_http = is_debug_build || allow_loopback_flag;
+    let environment = match resolve_desktop_environment(environment_raw, is_debug_build) {
+        Ok(environment) => environment,
+        Err(error) => return EndpointState::Invalid(error),
+    };
+    let allow_loopback_http = environment != "production" && (is_debug_build || allow_loopback_flag);
+    let reject_placeholders = environment == "production";
 
-    let selected = [runtime_primary, compile_url, runtime_legacy]
+    let runtime_override = [runtime_primary, runtime_legacy]
         .into_iter()
         .flatten()
         .map(str::trim)
         .find(|value| !value.is_empty());
+    if environment == "production" && runtime_override.is_some() {
+        return EndpointState::Invalid(AuthError::new(
+            "runtime_endpoint_override_disabled",
+            "Production account endpoints are fixed at trusted build time; runtime overrides are disabled.",
+        ));
+    }
+
+    let selected = if environment == "production" {
+        compile_url.map(str::trim).filter(|value| !value.is_empty())
+    } else {
+        [runtime_primary, compile_url, runtime_legacy]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+    };
 
     match selected {
-        Some(candidate) => {
-            match validate_backend_base_url(candidate, !allow_loopback_http, allow_loopback_http) {
-                Ok(valid) => EndpointState::Configured(valid),
-                Err(err) => EndpointState::Invalid(err),
-            }
-        }
+        Some(candidate) => match validate_backend_base_url(
+            candidate,
+            reject_placeholders,
+            allow_loopback_http,
+        ) {
+            Ok(valid) => EndpointState::Configured(valid),
+            Err(error) => EndpointState::Invalid(error),
+        },
         None if allow_loopback_http => {
             EndpointState::Configured(DEFAULT_LOOPBACK_AUTH_URL.to_string())
         }
@@ -285,18 +326,23 @@ fn resolve_backend_endpoint_with(
     }
 }
 
-fn build_http_client() -> Client {
+fn build_http_client() -> Result<Client, AuthError> {
     Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .redirect(Policy::none())
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .map_err(|_| {
+            AuthError::new(
+                "http_client_unavailable",
+                "The online account HTTP client could not be initialized; local chat remains available.",
+            )
+        })
 }
 
 pub struct AuthApiClient {
     endpoint: EndpointState,
-    client: Client,
+    client: Result<Client, AuthError>,
 }
 
 impl fmt::Debug for AuthApiClient {
@@ -315,19 +361,27 @@ impl Default for AuthApiClient {
 
 impl AuthApiClient {
     pub fn new() -> Self {
-        let runtime_primary = std::env::var("NEXORA_AUTH_API_URL").ok();
-        let runtime_legacy = std::env::var("AUTH_API_BASE_URL").ok();
-        let allow_loopback_flag = std::env::var("NEXORA_ALLOW_LOOPBACK_HTTP")
-            .map(|v| v.trim() == "true")
-            .unwrap_or(false);
-
-        let endpoint = resolve_backend_endpoint_with(
-            COMPILE_TIME_AUTH_API_URL,
-            runtime_primary.as_deref(),
-            runtime_legacy.as_deref(),
-            cfg!(debug_assertions),
-            allow_loopback_flag,
-        );
+        let endpoint = (|| -> AuthResult<EndpointState> {
+            let runtime_primary = read_runtime_environment("NEXORA_AUTH_API_URL")?;
+            let runtime_legacy = read_runtime_environment("AUTH_API_BASE_URL")?;
+            let runtime_mode = read_runtime_environment("NEXORA_ENV")?;
+            let build_mode = resolve_runtime_environment(
+                COMPILE_TIME_ENVIRONMENT,
+                runtime_mode.as_deref(),
+                cfg!(debug_assertions),
+            )?;
+            let allow_loopback = read_runtime_environment("NEXORA_ALLOW_LOOPBACK_HTTP")?;
+            let allow_loopback_flag = parse_loopback_opt_in(allow_loopback.as_deref())?;
+            Ok(resolve_backend_endpoint_with(
+                COMPILE_TIME_AUTH_API_URL,
+                runtime_primary.as_deref(),
+                runtime_legacy.as_deref(),
+                cfg!(debug_assertions),
+                allow_loopback_flag,
+                Some(build_mode),
+            ))
+        })()
+        .unwrap_or_else(EndpointState::Invalid);
 
         Self {
             endpoint,
@@ -361,7 +415,12 @@ impl AuthApiClient {
             .connect_timeout(timeout)
             .redirect(Policy::none())
             .build()
-            .unwrap_or_else(|_| Client::new());
+            .map_err(|_| {
+                AuthError::new(
+                    "http_client_unavailable",
+                    "The online account HTTP client could not be initialized; local chat remains available.",
+                )
+            });
         Self { endpoint, client }
     }
 
@@ -374,7 +433,11 @@ impl AuthApiClient {
     }
 
     pub fn is_configured(&self) -> bool {
-        matches!(self.endpoint, EndpointState::Configured(_))
+        matches!(self.endpoint, EndpointState::Configured(_)) && self.client.is_ok()
+    }
+
+    fn http_client(&self) -> AuthResult<&Client> {
+        self.client.as_ref().map_err(Clone::clone)
     }
 
     fn require_base_url(&self) -> AuthResult<&str> {
@@ -404,7 +467,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/login")?)
             .json(&Body { email, password })
             .send()
@@ -472,7 +535,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/register")?)
             .json(&Body {
                 name,
@@ -492,7 +555,7 @@ impl AuthApiClient {
                 .as_ref()
                 .and_then(|b| b.message.clone())
                 .unwrap_or_else(|| {
-                    "Account created. Please check your email to verify your address.".to_string()
+                    "Registration was accepted, but the service did not confirm whether a verification email was sent.".to_string()
                 });
             let delivery = parsed.and_then(|b| b.email_delivery);
             return Ok(AuthStatusResponse::with_delivery(
@@ -537,7 +600,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/verify-email")?)
             .json(&Body { token })
             .send()
@@ -558,7 +621,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/resend-verification")?)
             .json(&Body { email })
             .send()
@@ -570,12 +633,12 @@ impl AuthApiClient {
             let status_label = parsed
                 .as_ref()
                 .and_then(|b| b.status.clone())
-                .unwrap_or_else(|| "sent".to_string());
+                .unwrap_or_else(|| "accepted".to_string());
             let message = parsed
                 .as_ref()
                 .and_then(|b| b.message.clone())
                 .unwrap_or_else(|| {
-                    "If an account exists for that email, a verification link has been sent."
+                    "If an account exists and email delivery succeeds, verification instructions will be sent."
                         .to_string()
                 });
             let delivery = parsed.and_then(|b| b.email_delivery);
@@ -596,7 +659,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/recovery-request")?)
             .json(&Body { email })
             .send()
@@ -608,12 +671,12 @@ impl AuthApiClient {
             let status_label = parsed
                 .as_ref()
                 .and_then(|b| b.status.clone())
-                .unwrap_or_else(|| "sent".to_string());
+                .unwrap_or_else(|| "accepted".to_string());
             let message = parsed
                 .as_ref()
                 .and_then(|b| b.message.clone())
                 .unwrap_or_else(|| {
-                    "If an account exists for that email, password reset instructions have been sent."
+                    "If an account exists and email delivery succeeds, password-reset instructions will be sent."
                         .to_string()
                 });
             let delivery = parsed.and_then(|b| b.email_delivery);
@@ -635,7 +698,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/reset-password")?)
             .json(&Body { token, password })
             .send()
@@ -651,7 +714,7 @@ impl AuthApiClient {
 
     pub async fn get_me(&self, session_token: &str) -> AuthResult<AuthUser> {
         let resp = self
-            .client
+            .http_client()?
             .get(self.url("/me")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -673,7 +736,7 @@ impl AuthApiClient {
     /// newly issued token and optional server expiry timestamp.
     pub async fn refresh(&self, session_token: &str) -> AuthResult<SessionCredentials> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/refresh")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -703,7 +766,7 @@ impl AuthApiClient {
     pub async fn logout(&self, session_token: &str) -> AuthResult<()> {
         if let Ok(target) = self.url("/logout") {
             let _ = self
-                .client
+                .http_client()?
                 .post(target)
                 .header(AUTHORIZATION, format!("Bearer {session_token}"))
                 .send()
@@ -727,7 +790,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/password-change")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(&Body {
@@ -765,7 +828,7 @@ impl AuthApiClient {
         }
 
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/google/exchange")?)
             .json(&Body {
                 code,
@@ -791,7 +854,7 @@ impl AuthApiClient {
         if status.as_u16() == 409 {
             return Err(AuthError::new(
                 "email_conflict",
-                "An account with this email already exists. Sign in with your password to link Google.",
+                "A Nexora account with this email already exists. Sign in to that account before linking Google.",
             ));
         }
 
@@ -826,7 +889,7 @@ impl AuthApiClient {
             profile: super::AccountProfile,
         }
         let resp = self
-            .client
+            .http_client()?
             .get(self.v1_url("/account/profile")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -852,7 +915,7 @@ impl AuthApiClient {
             profile: super::AccountProfile,
         }
         let resp = self
-            .client
+            .http_client()?
             .patch(self.v1_url("/account/profile")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -893,7 +956,7 @@ impl AuthApiClient {
             profile: super::AccountProfile,
         }
         let resp = self
-            .client
+            .http_client()?
             .post(self.url("/google/link")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(&Body {
@@ -918,7 +981,7 @@ impl AuthApiClient {
 
     pub async fn export_account_data(&self, session_token: &str) -> AuthResult<serde_json::Value> {
         let resp = self
-            .client
+            .http_client()?
             .get(self.v1_url("/account/export")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -939,7 +1002,7 @@ impl AuthApiClient {
         payload: &super::DeleteAccountPayload,
     ) -> AuthResult<()> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/account/delete")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -954,7 +1017,7 @@ impl AuthApiClient {
 
     pub async fn list_plans(&self) -> AuthResult<super::PlanCatalogDto> {
         let resp = self
-            .client
+            .http_client()?
             .get(self.v1_url("/plans")?)
             .send()
             .await
@@ -973,7 +1036,7 @@ impl AuthApiClient {
         session_token: &str,
     ) -> AuthResult<super::BillingStatusDto> {
         let resp = self
-            .client
+            .http_client()?
             .get(self.v1_url("/billing/subscription")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -994,7 +1057,7 @@ impl AuthApiClient {
         payload: &super::CheckoutPayload,
     ) -> AuthResult<super::CheckoutSessionDto> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/billing/checkout")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -1016,7 +1079,7 @@ impl AuthApiClient {
         payload: &super::VerifyOrderPayload,
     ) -> AuthResult<super::BillingStatusDto> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/billing/verify")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -1038,7 +1101,7 @@ impl AuthApiClient {
         payload: &super::CancelSubscriptionPayload,
     ) -> AuthResult<super::BillingStatusDto> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/billing/cancel")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -1059,7 +1122,7 @@ impl AuthApiClient {
         payload: &super::ChangePlanPayload,
     ) -> AuthResult<super::BillingStatusDto> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/billing/change-plan")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(payload)
@@ -1077,7 +1140,7 @@ impl AuthApiClient {
 
     pub async fn create_portal(&self, session_token: &str) -> AuthResult<super::PortalSessionDto> {
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/billing/portal")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -1097,7 +1160,7 @@ impl AuthApiClient {
         session_token: &str,
     ) -> AuthResult<super::ServerUsageSummaryDto> {
         let resp = self
-            .client
+            .http_client()?
             .get(self.v1_url("/usage")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .send()
@@ -1125,7 +1188,7 @@ impl AuthApiClient {
             request_id: &'a str,
         }
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url("/usage/reserve")?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(&Body {
@@ -1161,7 +1224,7 @@ impl AuthApiClient {
             "/usage/release"
         };
         let resp = self
-            .client
+            .http_client()?
             .post(self.v1_url(endpoint)?)
             .header(AUTHORIZATION, format!("Bearer {session_token}"))
             .json(&Body { reservation_id })
@@ -1204,10 +1267,6 @@ async fn handle_api_error<T>(
     let status = resp.status();
     let headers = resp.headers().clone();
 
-    if authenticated_request && status.as_u16() == 401 {
-        return Err(AuthError::session_expired());
-    }
-
     let retry_after = parse_retry_after(&headers);
     let error_body = resp.json::<ErrorEnvelope>().await.ok();
 
@@ -1241,7 +1300,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        resolve_backend_endpoint_with, validate_backend_base_url, AuthApiClient, EndpointState,
+        parse_loopback_opt_in, resolve_backend_endpoint_with, resolve_desktop_environment,
+        resolve_runtime_environment, validate_backend_base_url, AuthApiClient, EndpointState,
     };
     use crate::auth::SessionCredentials;
 
@@ -1269,22 +1329,29 @@ mod tests {
     #[test]
     fn release_mode_uses_compile_time_https_url_and_blocks_http() {
         let resolved = resolve_backend_endpoint_with(
-            Some("https://auth.nexora-example.org/"),
+            Some("https://auth.nexora-example.net/"),
             None,
             None,
             false,
             false,
+            None,
         );
         assert_eq!(
             resolved,
-            EndpointState::Configured("https://auth.nexora-example.org".to_string())
+            EndpointState::Configured("https://auth.nexora-example.net".to_string())
         );
 
-        let unconfigured = resolve_backend_endpoint_with(None, None, None, false, false);
+        let unconfigured = resolve_backend_endpoint_with(None, None, None, false, false, None);
         assert_eq!(unconfigured, EndpointState::Unconfigured);
 
-        let loopback_in_release =
-            resolve_backend_endpoint_with(Some("http://127.0.0.1:8787"), None, None, false, false);
+        let loopback_in_release = resolve_backend_endpoint_with(
+            Some("http://127.0.0.1:8787"),
+            None,
+            None,
+            false,
+            false,
+            None,
+        );
         assert!(
             matches!(loopback_in_release, EndpointState::Invalid(err) if err.code == "insecure_backend_url")
         );
@@ -1301,6 +1368,7 @@ mod tests {
                 None,
                 is_debug,
                 allow_loopback,
+                None,
             );
             assert!(
                 matches!(res, EndpointState::Invalid(ref err) if err.code == "insecure_backend_url"),
@@ -1314,14 +1382,20 @@ mod tests {
 
     #[test]
     fn allows_loopback_http_only_in_debug_or_explicit_opt_in() {
-        let debug_default = resolve_backend_endpoint_with(None, None, None, true, false);
+        let debug_default = resolve_backend_endpoint_with(None, None, None, true, false, None);
         assert_eq!(
             debug_default,
             EndpointState::Configured("http://127.0.0.1:8787".to_string())
         );
 
-        let release_opt_in =
-            resolve_backend_endpoint_with(None, Some("http://localhost:9898/"), None, false, true);
+        let release_opt_in = resolve_backend_endpoint_with(
+            None,
+            Some("http://localhost:9898/"),
+            None,
+            false,
+            true,
+            Some("test"),
+        );
         assert_eq!(
             release_opt_in,
             EndpointState::Configured("http://localhost:9898".to_string())
@@ -1329,6 +1403,101 @@ mod tests {
 
         let ipv6_loopback = validate_backend_base_url("http://[::1]:8787/", false, true).unwrap();
         assert_eq!(ipv6_loopback, "http://[::1]:8787");
+    }
+
+    #[test]
+    fn desktop_environment_cannot_be_changed_after_build() {
+        let downgrade = resolve_runtime_environment(
+            Some("production"),
+            Some("development"),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(downgrade.code, "environment_override_disabled");
+
+        let mismatch = resolve_runtime_environment(Some("test"), Some("production"), false)
+            .unwrap_err();
+        assert_eq!(mismatch.code, "environment_override_disabled");
+
+        assert_eq!(
+            resolve_runtime_environment(Some("development"), Some("development"), false)
+                .unwrap(),
+            "development"
+        );
+        assert_eq!(
+            resolve_runtime_environment(Some("production"), None, false).unwrap(),
+            "production"
+        );
+    }
+
+    #[test]
+    fn production_endpoint_is_pinned_to_build_configuration() {
+        let runtime_override = resolve_backend_endpoint_with(
+            Some("https://auth.nexora-example.net"),
+            Some("https://attacker.nexora-example.net"),
+            None,
+            false,
+            false,
+            Some("production"),
+        );
+        assert!(matches!(
+            runtime_override,
+            EndpointState::Invalid(err) if err.code == "runtime_endpoint_override_disabled"
+        ));
+
+        let production_endpoint = resolve_backend_endpoint_with(
+            Some("https://auth.nexora-example.net"),
+            None,
+            None,
+            false,
+            false,
+            Some("production"),
+        );
+        assert!(matches!(
+            production_endpoint,
+            EndpointState::Configured(url) if url == "https://auth.nexora-example.net"
+        ));
+    }
+
+    #[test]
+    fn production_mode_cannot_be_overridden_into_plaintext_loopback() {
+        let production_loopback = resolve_backend_endpoint_with(
+            Some("http://127.0.0.1:8787"),
+            None,
+            None,
+            true,
+            true,
+            Some("production"),
+        );
+        assert!(matches!(
+            production_loopback,
+            EndpointState::Invalid(err) if err.code == "insecure_backend_url"
+        ));
+
+        let release_development_without_opt_in = resolve_backend_endpoint_with(
+            Some("http://127.0.0.1:8787"),
+            None,
+            None,
+            false,
+            false,
+            Some("development"),
+        );
+        assert!(matches!(
+            release_development_without_opt_in,
+            EndpointState::Invalid(err) if err.code == "insecure_backend_url"
+        ));
+
+        let release_test_opt_in = resolve_backend_endpoint_with(
+            Some("http://127.0.0.1:8787"),
+            None,
+            None,
+            false,
+            true,
+            Some("test"),
+        );
+        assert!(matches!(release_test_opt_in, EndpointState::Configured(_)));
+        assert!(parse_loopback_opt_in(Some("yes")).is_err());
+        assert!(resolve_desktop_environment(Some("staging"), false).is_err());
     }
 
     #[test]
@@ -1382,6 +1551,22 @@ mod tests {
         let err_401 = client_401.get_account_profile("tok-1").await.unwrap_err();
         assert_eq!(err_401.code, "session_expired");
 
+        // An authenticated password change can also return HTTP 401 for a
+        // wrong current password; that must not be mistaken for an expired
+        // bearer session or trigger local sign-out.
+        let wrong_password_url = spawn_single_response_server(
+            "401 Unauthorized",
+            "",
+            r#"{"error":{"code":"invalid_credentials","message":"Current password is incorrect."}}"#,
+        );
+        let wrong_password_client = AuthApiClient::with_base_url(wrong_password_url);
+        let wrong_password = wrong_password_client
+            .password_change("tok-1", "wrong-current-password", "new-password-value")
+            .await
+            .unwrap_err();
+        assert_eq!(wrong_password.code, "invalid_credentials");
+        assert!(!wrong_password.is_session_invalid());
+
         let url_429 = spawn_single_response_server(
             "429 Too Many Requests",
             "Retry-After: 42\r\n",
@@ -1405,6 +1590,47 @@ mod tests {
         assert_eq!(status.status, "verification_pending");
         assert_eq!(status.email_delivery.as_deref(), Some("unconfigured"));
         assert!(status.message.contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn email_flow_fallbacks_never_claim_a_message_was_sent() {
+        let registration = AuthApiClient::with_base_url(spawn_single_response_server(
+            "202 Accepted",
+            "",
+            "not-json",
+        ));
+        let status = registration
+            .register("Ada", "ada@example.test", "long enough password")
+            .await
+            .unwrap();
+        assert!(status.message.contains("did not confirm"));
+        assert!(!status.message.to_lowercase().contains("has been sent"));
+
+        let resend = AuthApiClient::with_base_url(spawn_single_response_server(
+            "202 Accepted",
+            "",
+            "not-json",
+        ));
+        let status = resend
+            .resend_verification("ada@example.test")
+            .await
+            .unwrap();
+        assert_eq!(status.status, "accepted");
+        assert!(status.message.contains("delivery succeeds"));
+        assert!(!status.message.to_lowercase().contains("has been sent"));
+
+        let recovery = AuthApiClient::with_base_url(spawn_single_response_server(
+            "202 Accepted",
+            "",
+            "not-json",
+        ));
+        let status = recovery
+            .recovery_request("ada@example.test")
+            .await
+            .unwrap();
+        assert_eq!(status.status, "accepted");
+        assert!(status.message.contains("delivery succeeds"));
+        assert!(!status.message.to_lowercase().contains("has been sent"));
     }
 
     #[tokio::test]

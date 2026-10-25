@@ -4,15 +4,15 @@
 //! ```bash
 //! createdb nexora_auth_test
 //! NEXORA_AUTH_TEST_DATABASE_URL='postgres://user@127.0.0.1:5432/nexora_auth_test?sslmode=disable' \
-//!   cargo test --test oauth_db -- --ignored
+//!   cargo test --test oauth_db -- --ignored --test-threads=1
 //! ```
 //!
 //! Every test is `#[ignore]`d. NEVER point this at production. The URL is read
 //! from `NEXORA_AUTH_TEST_DATABASE_URL` only and is never printed.
 //!
 //! The tests exercise THIS service's state one-time-ness, redirect/nonce
-//! enforcement, and account-linking rules with an injected `GoogleIdentity`
-//! (the same seam pattern as the email `CaptureProvider`) — they are real
+//! enforcement, subject mapping, concurrency, and no-email-auto-link rules with
+//! an injected `GoogleIdentity` (the same seam as email `CaptureProvider`) — real
 //! database tests of real logic; the Google network hop itself is the one
 //! injected edge (and is unexercised here: no network, no credentials).
 
@@ -24,9 +24,12 @@ use nexora_auth::registration::{self, RegisterRequest};
 use nexora_auth::session;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
+
+mod support;
+
 const REDIRECT: &str = "http://127.0.0.1:49152/callback";
 
 #[derive(Default)]
@@ -103,7 +106,7 @@ fn identity(email: &str, verified: bool, subject: &str) -> GoogleIdentity {
         subject: subject.to_string(),
         email: email.to_string(),
         email_verified: verified,
-        nonce: None,
+        nonce: Some("n".repeat(22)),
         name: Some("Ada Lovelace".to_string()),
     }
 }
@@ -114,7 +117,7 @@ fn request(state: &str) -> GoogleExchangeRequest {
         code_verifier: "v".repeat(43),
         state: state.to_string(),
         redirect_uri: REDIRECT.to_string(),
-        nonce: None,
+        nonce: Some("n".repeat(22)),
     }
 }
 
@@ -139,6 +142,7 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");
@@ -240,34 +244,83 @@ async fn redirect_uri_mismatch_is_refused_before_any_exchange() {
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
-async fn verified_match_auto_links_and_creates_a_session() {
+async fn verified_existing_account_is_not_auto_linked_by_matching_email() {
     let pool = test_pool().await;
-    let email = create_verified_user(&pool, "link").await;
-    let google = FakeGoogle::identity(identity(&email, true, "sub-link"));
+    let email = create_verified_user(&pool, "no-auto-link").await;
+    let google = FakeGoogle::identity(identity(&email, true, "sub-no-auto-link"));
 
-    let outcome = oauth::google_exchange(
+    let error = oauth::google_exchange(
         Some(&pool),
         &google,
         REDIRECT,
-        &request(&unique_state("ln")),
+        &request(&unique_state("na")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "email_conflict");
+    assert_eq!(error.status_code(), 409);
+
+    let (links,): (i64,) = sqlx::query_as("SELECT count(*) FROM oauth_accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(links, 0, "email equality must not create an OAuth link");
+    let (sessions,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0, "no authenticated session is issued on conflict");
+    let (users,): (i64,) = sqlx::query_as("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1, "the existing password account remains unchanged");
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn different_google_subjects_are_not_merged_by_matching_email() {
+    let pool = test_pool().await;
+    let email = unique_email("different-subject");
+    let first_google = FakeGoogle::identity(identity(&email, true, "sub-first"));
+    let first = oauth::google_exchange(
+        Some(&pool),
+        &first_google,
+        REDIRECT,
+        &request(&unique_state("ds1")),
     )
     .await
     .unwrap();
-    assert_eq!(outcome.email, email);
-    // A real session exists and authenticates.
-    assert!(
-        session::authenticate(&pool, &outcome.session.raw_token, 604_800)
-            .await
-            .is_ok()
-    );
-    // Exactly one link row, keyed by the immutable subject.
-    let (links,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM oauth_accounts WHERE provider = 'google' AND provider_subject = 'sub-link'",
+
+    let second_google = FakeGoogle::identity(identity(&email, true, "sub-second"));
+    let error = oauth::google_exchange(
+        Some(&pool),
+        &second_google,
+        REDIRECT,
+        &request(&unique_state("ds2")),
     )
-    .fetch_one(&pool)
     .await
-    .unwrap();
+    .unwrap_err();
+    assert_eq!(error.code(), "email_conflict");
+
+    let (users,): (i64,) = sqlx::query_as("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (links,): (i64,) = sqlx::query_as("SELECT count(*) FROM oauth_accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (sessions,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1);
     assert_eq!(links, 1);
+    assert_eq!(sessions, 1, "only the first verified subject receives a session");
+    assert!(session::authenticate(&pool, &first.session.raw_token, 604_800)
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
@@ -380,6 +433,40 @@ async fn new_subject_creates_an_oauth_only_account_and_signs_in() {
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn concurrent_first_signins_for_same_subject_share_one_account() {
+    let pool = test_pool().await;
+    let email = unique_email("parallel-first-login");
+    let google = Arc::new(FakeGoogle::identity(identity(&email, true, "sub-parallel")));
+    let first_request = request(&unique_state("pf1"));
+    let second_request = request(&unique_state("pf2"));
+
+    let (first, second) = tokio::join!(
+        oauth::google_exchange(Some(&pool), google.as_ref(), REDIRECT, &first_request),
+        oauth::google_exchange(Some(&pool), google.as_ref(), REDIRECT, &second_request),
+    );
+    let first = first.expect("first concurrent sign-in");
+    let second = second.expect("second concurrent sign-in");
+    assert_eq!(first.user_id, second.user_id);
+
+    let (users,): (i64,) = sqlx::query_as("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (links,): (i64,) = sqlx::query_as("SELECT count(*) FROM oauth_accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (sessions,): (i64,) = sqlx::query_as("SELECT count(*) FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1);
+    assert_eq!(links, 1, "the Google subject is mapped exactly once");
+    assert_eq!(sessions, 2, "each verified sign-in receives its own session");
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn same_subject_signs_in_regardless_of_email_claim() {
     let pool = test_pool().await;
     let google = FakeGoogle::identity(identity("first@example.test", true, "sub-key"));
@@ -452,21 +539,25 @@ async fn locked_linked_accounts_are_refused_generically() {
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn nonce_mismatches_fail_generically_and_matches_pass() {
     let pool = test_pool().await;
+    let good_nonce = "g".repeat(22);
+    let other_nonce = "o".repeat(22);
     let mut identified = identity("nonce@example.test", true, "sub-nonce");
-    identified.nonce = Some("n-good".to_string());
+    identified.nonce = Some(good_nonce.clone());
     let google = FakeGoogle::identity(identified);
 
     let mut r = request(&unique_state("nc"));
-    r.nonce = Some("n-other".to_string());
+    r.nonce = Some(other_nonce);
     let error = oauth::google_exchange(Some(&pool), &google, REDIRECT, &r)
         .await
         .unwrap_err();
     assert_eq!(error.code(), "invalid_or_expired_token");
 
     // Missing nonce claim with a supplied expectation is also a hard failure.
-    let plain = FakeGoogle::identity(identity("nonce2@example.test", true, "sub-n2"));
+    let mut missing_nonce = identity("nonce2@example.test", true, "sub-n2");
+    missing_nonce.nonce = None;
+    let plain = FakeGoogle::identity(missing_nonce);
     let mut r2 = request(&unique_state("nc"));
-    r2.nonce = Some("n-good".to_string());
+    r2.nonce = Some(good_nonce.clone());
     let error = oauth::google_exchange(Some(&pool), &plain, REDIRECT, &r2)
         .await
         .unwrap_err();
@@ -474,7 +565,7 @@ async fn nonce_mismatches_fail_generically_and_matches_pass() {
 
     // Matching nonce passes.
     let mut r3 = request(&unique_state("nc"));
-    r3.nonce = Some("n-good".to_string());
+    r3.nonce = Some(good_nonce);
     assert!(oauth::google_exchange(Some(&pool), &google, REDIRECT, &r3)
         .await
         .is_ok());
@@ -534,12 +625,15 @@ async fn google_rate_window_blocks_excess_attempts() {
         rate_limit::check(&pool, "google", &key, rule, CountMode::AllAttempts)
             .await
             .unwrap();
-        rate_limit::record(&pool, "google", &key, "failure").await;
+        rate_limit::record(&pool, "google", &key, "failure")
+            .await
+            .expect("record rate-limit event");
     }
     let retry_after = rate_limit::check(&pool, "google", &key, rule, CountMode::AllAttempts)
         .await
-        .unwrap_err();
-    assert_eq!(retry_after, 900);
+        .unwrap_err()
+        .retry_after_secs();
+    assert_eq!(retry_after, Some(900));
 }
 
 #[tokio::test]

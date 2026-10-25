@@ -1,10 +1,85 @@
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use super::error::{InferenceError, InferenceResult};
+
+/// A read-only handle to the exact file that was opened for validation.
+///
+/// Windows opens use a read-only share mode: while this handle is alive, no
+/// other process can write, replace, or delete the file. The runtime keeps this
+/// guard for the entire child-process lifetime, closing the verify-to-open race
+/// on the supported Windows desktop path. Other platforms retain the open file
+/// handle but do not provide the same mandatory share-mode guarantee.
+pub struct LockedFile {
+    file: File,
+    path: PathBuf,
+}
+
+impl LockedFile {
+    pub fn open(path: &Path) -> std::io::Result<Self> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the model path is not a regular non-symlink file",
+            ));
+        }
+
+        // Resolve relative paths and parent-directory links once, then open the
+        // resolved regular file. The runtime receives this same canonical path.
+        let resolved = std::fs::canonicalize(path)?;
+        let resolved_metadata = std::fs::symlink_metadata(&resolved)?;
+        if resolved_metadata.file_type().is_symlink() || !resolved_metadata.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the resolved model path is not a regular non-symlink file",
+            ));
+        }
+
+        let mut options = OpenOptions::new();
+        options.read(true);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+            // Do not allow write or delete sharing while the file is verified
+            // and passed to llama-server. A compatible read handle remains
+            // available to the runtime itself.
+            options.share_mode(FILE_SHARE_READ);
+        }
+
+        let file = options.open(&resolved)?;
+        let opened_metadata = file.metadata()?;
+        if !opened_metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the opened model path is not a regular file",
+            ));
+        }
+
+        Ok(Self {
+            file,
+            path: resolved,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+}
 
 const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 const MIN_PLAUSIBLE_BYTES: u64 = 16 * 1024 * 1024;
@@ -48,13 +123,6 @@ pub fn inspect(
     }
 
     let file_path = Path::new(trimmed);
-
-    if !file_path.is_file() {
-        return Err(InferenceError::invalid_model(format!(
-            "No file exists at {trimmed}."
-        )));
-    }
-
     let extension_is_gguf = file_path
         .extension()
         .and_then(|value| value.to_str())
@@ -67,9 +135,41 @@ pub fn inspect(
         ));
     }
 
-    let mut file = File::open(file_path).map_err(|error| {
+    let mut locked = LockedFile::open(file_path).map_err(|error| {
         InferenceError::invalid_model(format!("The model file could not be opened: {error}"))
     })?;
+
+    inspect_open_file(trimmed, locked.file_mut(), context_size, available_ram_gib)
+}
+
+/// Inspects an already-open file handle. Load-time verification and header
+/// inspection use the same handle that is retained for the runtime process.
+pub fn inspect_open_file(
+    path: &str,
+    file: &mut File,
+    context_size: u32,
+    available_ram_gib: Option<f64>,
+) -> InferenceResult<ModelInfo> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(InferenceError::not_configured("Choose a model file first."));
+    }
+
+    let file_path = Path::new(trimmed);
+    let extension_is_gguf = file_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false);
+
+    if !extension_is_gguf {
+        return Err(InferenceError::invalid_model(
+            "Nexora loads GGUF model files only. Choose a file ending in .gguf.",
+        ));
+    }
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| InferenceError::invalid_model(format!("The model file could not be read: {error}")))?;
 
     let size_bytes = file
         .metadata()
@@ -114,7 +214,7 @@ pub fn inspect(
     // Reading it is best-effort: a file that cannot be parsed is still a file
     // the engine may load, so this warns instead of rejecting. The context
     // check below only fires when the value is actually known.
-    let metadata = match read_metadata(&mut file, metadata_entries) {
+    let metadata = match read_metadata(file, metadata_entries) {
         Ok(metadata) => metadata,
         Err(reason) => {
             warnings.push(format!(
@@ -583,6 +683,26 @@ mod tests {
         bytes.extend_from_slice(&metadata_block(entries));
         bytes.resize((MIN_PLAUSIBLE_BYTES + 1) as usize, 0);
         bytes
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_guard_denies_write_and_delete_until_released() {
+        let path = temp_file("locked-model.gguf", b"guarded model bytes");
+        let locked = LockedFile::open(&path).expect("open write/delete-denying guard");
+
+        assert!(
+            OpenOptions::new().write(true).open(&path).is_err(),
+            "Windows share mode must deny a writer while the runtime guard is alive"
+        );
+        assert!(
+            std::fs::remove_file(&path).is_err(),
+            "Windows share mode must deny deletion while the runtime guard is alive"
+        );
+
+        drop(locked);
+        assert!(OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

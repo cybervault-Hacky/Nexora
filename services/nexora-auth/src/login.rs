@@ -33,7 +33,7 @@ pub struct LoginRequest {
 impl std::fmt::Debug for LoginRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoginRequest")
-            .field("email", &self.email)
+            .field("email", &crate::scrub::REDACTED)
             .field("password", &crate::scrub::REDACTED)
             .finish()
     }
@@ -90,12 +90,23 @@ impl LoginError {
 
 /// Authenticated login result: user identity + a fresh session (raw token
 /// returned exactly once, to the trusted client over the approved transport).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LoginOutcome {
     pub user_id: String,
     pub name: String,
     pub email: String,
     pub session: CreatedSession,
+}
+
+impl std::fmt::Debug for LoginOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginOutcome")
+            .field("user_id", &crate::scrub::REDACTED)
+            .field("name", &crate::scrub::REDACTED)
+            .field("email", &crate::scrub::REDACTED)
+            .field("session", &self.session)
+            .finish()
+    }
 }
 
 /// A dummy PHC hash used to equalize timing for unknown accounts (the
@@ -263,6 +274,29 @@ mod tests {
         assert!(dummy_hash().starts_with("$argon2id$"));
         // Verifying against it behaves like a real (mismatching) verify.
         assert!(password::verify_password("anything", dummy_hash()).is_err());
+    }
+
+    #[test]
+    fn debug_output_redacts_login_pii_and_session_credentials() {
+        let request = LoginRequest {
+            email: "SENTINEL_email@example.test".to_string(),
+            password: "SENTINEL_password".to_string(),
+        };
+        let rendered = format!("{request:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains("SENTINEL"));
+
+        let outcome = LoginOutcome {
+            user_id: "SENTINEL_user_id".to_string(),
+            name: "SENTINEL_person".to_string(),
+            email: "SENTINEL_email@example.test".to_string(),
+            session: CreatedSession {
+                raw_token: "SENTINEL_session_token".to_string(),
+                expires_at_rfc3339: "2026-11-01T00:00:00Z".to_string(),
+            },
+        };
+        let rendered = format!("{outcome:?}");
+        assert!(!rendered.contains("SENTINEL"));
     }
 
     #[test]

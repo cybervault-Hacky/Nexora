@@ -6,7 +6,8 @@
   "description": "Nexora desktop shell (Tauri 2 + React)",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node ../../scripts/check-config-security.mjs && node ../../scripts/check-installer-contract.mjs",
+    "security:config": "node ../../scripts/check-config-security.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -15,7 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
-    "diff": "5.2.0",
+    "diff": "5.2.2",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -33,6 +34,6 @@
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
     "vite": "7.3.7",
-    "vitest": "3.2.7"
+    "vitest": "4.1.12"
   }
 }

@@ -34,9 +34,15 @@ import {
   validatePatchBatch,
   applyPatchBatch,
 } from "../../lib/patch";
-import { usePatchGeneration } from "./usePatchGeneration";
+import { usePatchGeneration as usePatchGenerationImpl } from "./usePatchGeneration";
 
+const MINI_ID = "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m";
 const SONNET_ID = "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m";
+const usePatchGeneration = (options: Parameters<typeof usePatchGenerationImpl>[0]) =>
+  usePatchGenerationImpl({
+    ...options,
+    profileId: options.profileId === undefined ? MINI_ID : options.profileId,
+  });
 
 const generateMock = vi.mocked(generate);
 
@@ -140,7 +146,7 @@ describe("usePatchGeneration — inference integration", () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       // Simulate streaming deltas
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {
@@ -157,7 +163,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("names the selected profile on the patch request", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() =>
       usePatchGeneration({
@@ -175,19 +181,23 @@ describe("usePatchGeneration — inference integration", () => {
     expect(sentRequest(0).profileId).toBe(SONNET_ID);
   });
 
-  it("does not name a profile when the caller has none", async () => {
-    generateMock.mockImplementation(async (req, onEvent) => {
-      onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
-    });
+  it("refuses to generate when the caller has no approved profile", async () => {
     const { result } = renderHook(() =>
-      usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }),
+      usePatchGeneration({
+        workspacePath: "/tmp/proj",
+        engineStatus: appStatus("ready"),
+        profileId: null,
+      }),
     );
     await act(async () => {
       await result.current.generatePatch({ targetPath: "a.txt", originalContent: "old", instruction: "change it", filteredContextBlock: null });
     });
 
-    expect(sentRequest(0).profileId).toBeNull();
+    expect(result.current.generationState).toMatchObject({
+      status: "error",
+      message: "Select an approved local model before generating a patch.",
+    });
+    expect(generateMock).not.toHaveBeenCalled();
   });
 
   it("handles runtime error during generation", async () => {
@@ -205,7 +215,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("handles malformed response during streaming", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: "not json at all" });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {
@@ -220,7 +230,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("supports cancellation", async () => {
     generateMock.mockImplementation(async (req) => {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      return { requestId: req.requestId, finishReason: null, cancelled: true };
+      return { requestId: req.requestId, finishReason: null, cancelled: true, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     let genPromise: Promise<void> | null = null;
@@ -240,7 +250,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("prevents duplicate submission while generating", async () => {
     generateMock.mockImplementation(async (req) => {
       await new Promise((r) => setTimeout(r, 50));
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     let firstPromise: Promise<void> | null = null;
@@ -272,7 +282,7 @@ describe("usePatchGeneration — inference integration", () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       capturedMessages = (req as { messages: unknown }).messages;
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const filtered = "File: a.txt\n```ts\ncontent\n```\n"; // budgeted
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
@@ -306,7 +316,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("invalidates on workspace switch", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result, rerender } = renderHook(({ ws }) => usePatchGeneration({ workspacePath: ws, engineStatus: appStatus("ready") }), { initialProps: { ws: "/tmp/a" } });
     await act(async () => {
@@ -321,7 +331,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("validation failure does not reach apply", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     validateMock.mockResolvedValue({ ok: false, errors: ["Sensitive file"], warnings: [], diffSummary: { added: 0, removed: 0, unchanged: 0, originalLines: 1, proposedLines: 1, truncated: false } });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
@@ -335,7 +345,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("dismissal never writes", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {
@@ -352,7 +362,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("requires explicit confirmation — no auto-apply", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {
@@ -365,7 +375,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("apply success after preview", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {
@@ -382,7 +392,7 @@ describe("usePatchGeneration — inference integration", () => {
   it("failed validation or apply never reports false success", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     applyMock.mockRejectedValue({ code: "stale", message: "File changed" });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
@@ -423,7 +433,7 @@ describe("usePatchGeneration — multi-file batches (contract v2)", () => {
         requestId: req.requestId,
         text: JSON.stringify({ version: 2, explanation: "multi", files }),
       });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
   }
 
@@ -498,7 +508,7 @@ describe("usePatchGeneration — multi-file batches (contract v2)", () => {
   it("keeps v1 single-file output on the unchanged single path", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"a.txt","proposedContent":"new"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
     const { result } = renderHook(() => usePatchGeneration({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready") }));
     await act(async () => {

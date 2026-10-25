@@ -24,8 +24,15 @@ vi.mock("../../lib/patch", async (importOriginal) => {
 
 import { generate, cancelGeneration } from "../../lib/inference";
 import { createPatchProposal, validatePatchProposal } from "../../lib/patch";
-import { usePatchRepair } from "./usePatchRepair";
+import { usePatchRepair as usePatchRepairImpl } from "./usePatchRepair";
 import type { PatchProposal } from "../../lib/patch";
+
+const MINI_ID = "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m";
+const usePatchRepair = (options: Parameters<typeof usePatchRepairImpl>[0]) =>
+  usePatchRepairImpl({
+    ...options,
+    profileId: options.profileId === undefined ? MINI_ID : options.profileId,
+  });
 import type { ValidationReport } from "../../lib/validation";
 
 const generateMock = vi.mocked(generate);
@@ -83,7 +90,7 @@ describe("usePatchRepair", () => {
   it("repairs successfully and shows revised proposal with correct association", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"src/app.ts","proposedContent":"fixed","explanation":"fixed bracket"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() =>
       usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }),
@@ -104,10 +111,31 @@ describe("usePatchRepair", () => {
     expect(createMock).toHaveBeenCalledWith("/tmp/proj", "src/app.ts", "fixed");
   });
 
+  it("refuses repair when no approved profile is available", async () => {
+    const { result } = renderHook(() =>
+      usePatchRepair({
+        workspacePath: "/tmp/proj",
+        engineStatus: appStatus("ready"),
+        symbolIndex: null,
+        contextFiles: [],
+        profileId: null,
+      }),
+    );
+    await act(async () => {
+      await result.current.repair(proposal(), validationReport());
+    });
+
+    expect(result.current.repairState).toMatchObject({
+      status: "error",
+      message: "Select an approved local model before repairing a patch.",
+    });
+    expect(generateMock).not.toHaveBeenCalled();
+  });
+
   it("fails when AI returns malformed JSON (schema validation)", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: "not json" });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();
@@ -122,7 +150,7 @@ describe("usePatchRepair", () => {
   it("enforces repair limit (3 attempts)", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: "not json" });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();
@@ -143,7 +171,7 @@ describe("usePatchRepair", () => {
   it("supports cancellation and timeout", async () => {
     generateMock.mockImplementation(async (req) => {
       await new Promise((res) => setTimeout(res, 100));
-      return { requestId: req.requestId, finishReason: null, cancelled: true } as any;
+      return { requestId: req.requestId, finishReason: null, cancelled: true, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();
@@ -167,7 +195,7 @@ describe("usePatchRepair", () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"src/app.ts","proposedContent":"fixed"}' });
       await new Promise((res) => setTimeout(res, 50));
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result, rerender } = renderHook(({ ws }) => usePatchRepair({ workspacePath: ws, engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }), {
       initialProps: { ws: "/tmp/a" as string | null },
@@ -189,7 +217,7 @@ describe("usePatchRepair", () => {
   it("does not auto-apply revised patch", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"src/app.ts","proposedContent":"fixed"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();
@@ -207,7 +235,7 @@ describe("usePatchRepair", () => {
   it("explains diagnostics via local model", async () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       onEvent({ type: "delta", requestId: req.requestId, text: "The bracket mismatch at line 2 causes syntax error." });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();
@@ -229,7 +257,7 @@ describe("usePatchRepair", () => {
     generateMock.mockImplementation(async (req, onEvent) => {
       captured = req;
       onEvent({ type: "delta", requestId: req.requestId, text: '{"version":1,"targetPath":"src/app.ts","proposedContent":"fixed"}' });
-      return { requestId: req.requestId, finishReason: "stop", cancelled: false } as any;
+      return { requestId: req.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] } as any;
     });
     const { result } = renderHook(() => usePatchRepair({ workspacePath: "/tmp/proj", engineStatus: appStatus("ready"), symbolIndex: null, contextFiles: [] }));
     const prop = proposal();

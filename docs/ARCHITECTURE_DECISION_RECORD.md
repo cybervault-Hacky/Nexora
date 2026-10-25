@@ -1,16 +1,21 @@
 # Nexora Backend & Cross-Layer Architecture Decision Record (ADR)
 
-**Status:** Approved Phase 02 Architecture Baseline (Implementation changes deferred to Phases 03–20)
-**Date:** `2026-10-22`
-**Branch:** `arena/c01ae5dd-nexora` (`HEAD`: `631a59e379281ae581fde401aace5ae913460e84`)
+**Status:** Historical Phase 02 architecture baseline; current corrections and Phase 16 status are recorded below.
+**Baseline date:** `2026-10-22`
+**Baseline branch/HEAD:** `arena/c01ae5dd-nexora` (`631a59e379281ae581fde401aace5ae913460e84`)
+**Phase 16 scope:** Usage-accounting and entitlement-boundary corrections only; no approved commercial policy or Razorpay implementation is introduced.
 **Scope:** Canonical architecture specification across `apps/desktop/ui`, `apps/desktop/src-tauri`, local `llama-server`, `services/nexora-auth`, and PostgreSQL 16+.
-**Relationship to Existing Docs:** Supersedes the early pre-implementation sketch in `docs/phase-1/03-application-architecture.md` (which proposed hypothetical `crates/nexora-*` and SQLite layers never adopted by the codebase) and governs updates to `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md` in Phase 17 / Phase 20 without deleting historical records.
+**Relationship to Existing Docs:** Supersedes the early pre-implementation sketch in `docs/phase-1/03-application-architecture.md` (which proposed hypothetical `crates/nexora-*` and SQLite layers never adopted by the codebase) and governs updates to `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md` without deleting historical records.
+
+> **Phase 16 correction (2026-10-24):** Local chat does not require a signed-in session. Session-vault, auth-backend, or unconfigured account-policy failures do not block local inference; valid sessions are used only for best-effort server accounting, with failures surfaced as warnings. The production quota policy remains unconfigured. The Phase 15 Razorpay work is blocked and not implemented; Stripe-oriented billing remains under audit, including an unverified client-selected subscription-plan change path. The historical statements below are updated where they conflict with these facts; no payment, price, quota, or entitlement policy is approved here.
+
+> **Subsequent G-01 status (2026-10-24):** The Windows Public Beta preparation review changed client-selected plan changes and cancellation to fail closed and tightened checkout activation to require a completed, paid subscription checkout plus a pending order. Focused Rust/PostgreSQL regression tests were added but could not be executed in the available environment. The Phase 16 G-01 rows below are historical; this source-only mitigation is not a release approval. See [the current Public Beta preparation report](PUBLIC_BETA_PREPARATION_WINDOWS.md).
 
 ---
 
 ## 1. System Architecture Overview
 
-Nexora enforces a strict **two-plane architecture** that separates **on-device AI inference and workspace code operations** from **online account, authentication, billing, and daily quota accounting**:
+Nexora separates **on-device AI inference and workspace code operations** from **online account, authentication, billing, and optional daily-usage accounting**. Account services are not a prerequisite for local chat; no production quota entitlement is enabled by default:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
@@ -26,7 +31,7 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
 │  │ Native Desktop Core (`apps/desktop/src-tauri`, crate `nexora` / `nexora_lib`)       │ │
 │  │  • `inference/*`: registry, SHA-256 verify, hardware check, SSE stream, budget      │ │
 │  │  • `history/*`, `workspace/*`, `export/*`: atomic local JSON/files & path guards    │ │
-│  │  • `usage/*`: tamper-evident UTC offline daily allowance (`daily-usage.txt`)        │ │
+│  │  • `usage/*`: device-local UTC generation record; no approved local cap             │ │
 │  │  • `auth/*`: OS `keyring` vault, RFC 8252 PKCE listener, `AuthApiClient` (`reqwest`)│ │
 │  │  • `licensing/*`: offline Community/key inspection (non-authoritative for quotas)   │ │
 │  └──────────────┬───────────────────────────────────────────────────┬──────────────────┘ │
@@ -51,13 +56,13 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
 │  │  • `email`: `EmailProvider` trait (currently `UnconfiguredEmailProvider` only)      │ │
 │  │  • `account`: profile, safe Google linking, GDPR JSON export, cascade deletion      │ │
 │  │  • `billing`: server plan sync, `PaymentProvider` (Stripe), HMAC-SHA256 webhooks    │ │
-│  │  • `quota` & `audit`: UTC daily `FOR UPDATE` reservations + scrubbed audit events   │ │
+│  │  • `quota` & `audit`: UTC reservation accounting; quota policy defaults unconfigured│ │
 │  └──────────────┬──────────────────────────────────┬────────────────┬──────────────────┘ │
 │                 │ `sqlx` (`sslmode=require` prod)  │ HTTPS          │ HTTPS              │
 │                 ▼                                  ▼                ▼                    │
 │  ┌──────────────────────────────┐   ┌───────────────────┐  ┌───────────────────────────┐ │
-│  │ PostgreSQL 16+ (16 tables,   │   │ Google OAuth/OIDC │  │ Stripe Checkout, Billing  │ │
-│  │ 7 forward-only migrations)   │   │ + SMTP/Mail API   │  │ Portal & Signed Webhooks  │ │
+│  │ PostgreSQL 16+ (16 tables,   │   │ Google OAuth/OIDC │  │ Existing Stripe-oriented   │ │
+│  │ 8 forward-only migrations)   │   │ + SMTP/Mail API   │  │ billing code (not verified)│ │
 │  └──────────────────────────────┘   └───────────────────┘  └───────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -75,33 +80,30 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
 | UI rendering, theme, draft & route state | **Owns (`ui/`)** | None | None | None | UI must **never** call `fetch`/`XMLHttpRequest`, spawn processes, or compute authoritative quota math. |
 | Typed IPC validation, filesystem containment, atomic patches & ZIP export | **Owns (`src-tauri/src/{workspace,export,history}`)** | None | None | None | Symlinks, `..` traversal, secrets (`.env`, `.pem`, `.key`), and stale file hashes must **never** bypass `src-tauri` guards. |
 | OS credential storage (`keyring` DPAPI on Windows; memory fallback elsewhere) | **Owns (`src-tauri/src/auth/storage.rs`)** | None | Issues opaque raw token once on login/exchange/refresh | Stores `sha256(token)` only (`sessions.token_hash`) | Raw session tokens must **never** enter `WebView2` (`localStorage`, React state, IPC return types) or SQL plaintext columns. |
-| Approved model metadata, `.part` downloads, GGUF SHA-256 verification & RAM/disk checks | **Owns (`src-tauri/src/inference/{registry,acquisition,models,readiness}.rs`)** | Loads verified `.gguf` file path passed on CLI | Maps profile IDs to quota buckets (`quota::canonical_model_id`) | Stores per-plan daily limits (`plan_model_quotas`) | Unverified `.gguf` files must **never** be loaded under an approved profile; prompts/files must **never** be sent to `nexora-auth`. |
-| Token generation, SSE streaming & mid-stream stop | Orchestrates (`src-tauri/src/inference/{process,client,sse,commands}.rs`) | **Owns (`127.0.0.1:<port>`, `--api-key-file`)** | Reserves/settles 1 message count only (zero prompt payload) | Records count only (`daily_usage_counters`) | `llama-server` must **never** bind `0.0.0.0`, enable web UI, or outlive desktop shutdown (`lib.rs:42-49`). |
+| Approved model metadata, `.part` downloads, GGUF SHA-256 verification & RAM/disk checks | **Owns (`src-tauri/src/inference/{registry,acquisition,models,readiness}.rs`)** | Loads verified `.gguf` file path passed on CLI | Canonicalizes profile IDs for server accounting (`quota::canonical_model_id`) | Stores plan/model quota rows, which are not active entitlements while policy is unconfigured | Unverified `.gguf` files must **never** be loaded under an approved profile; prompts/files must **never** be sent to `nexora-auth`. |
+| Token generation, SSE streaming & mid-stream stop | Orchestrates (`src-tauri/src/inference/{process,client,sse,commands}.rs`); local inference is not auth-gated | **Owns (`127.0.0.1:<port>`, `--api-key-file`)** | Best-effort reservation/settlement only with a verified session and configured policy (zero prompt payload) | Records counts only when account policy is configured | `llama-server` must **never** bind `0.0.0.0`, enable web UI, or outlive desktop shutdown (`lib.rs:42-49`). |
 | Password hashing (Argon2id), email verification, password reset & sliding-window rate limits | Collects form inputs via `AuthModal` / `AccountPage` | None | **Owns (`registration`, `login`, `recovery`, `rate_limit`)** | **Persists** PHC hashes & `sha256` token digests | Plaintext passwords and raw verification/reset tokens must **never** be stored in PostgreSQL or written to logs. |
 | Google OAuth 2.0 + OIDC PKCE sign-in & linking | Generates S256 PKCE + `state` + `nonce`, binds `127.0.0.1:0` (`auth/pkce.rs`) | None | **Owns (`oauth.rs`, `account.rs`)**: consumes single-use `state_hash`, exchanges code with secret, validates RS256 JWKS + claims | **Persists** `oauth_accounts` (`provider`, `provider_subject`) & `google_oauth_states` | `NEXORA_AUTH_GOOGLE_CLIENT_SECRET` must **never** exist in `VITE_*`, `src-tauri`, or installer artifacts; unverified emails are never auto-linked. |
-| Plan catalogue, Stripe Checkout/Portal & signed webhooks | Renders server DTOs (`PlansPage.tsx`), opens validated `https://` URLs | None | **Owns (`billing.rs`)**: syncs env prices/quotas, signs/verifies Stripe calls & `HMAC-SHA256` webhooks | **Persists** `plans`, `plan_versions`, `subscriptions`, `payment_orders`, `webhook_events` | Server must **never** trust client-submitted prices, intervals, order statuses, or entitlement tiers. |
-| Daily message quota accounting (`00:00 UTC` boundary) | Preflights via `AuthApiClient`; enforces conservative local `UsageState` **only** on `network_error` | None | **Owns (`quota.rs`)**: authoritative plan lookup + `FOR UPDATE` reservation/commit/release | **Persists** `daily_usage_counters` & `quota_reservations` | Offline local `UsageState` must **never** overwrite server counters or grant paid `Pro`/`Team` limits without server verification. |
+| Plan catalogue, Stripe-oriented billing & signed webhooks | Shows informational account status; no checkout or plan-change action is active in `PlansPage.tsx` | None | Existing Stripe-oriented `billing.rs` code remains under audit; client-selected plan changes are not provider-verified | **Persists** plan, subscription, order, and webhook rows | Server must **never** trust client-submitted prices, intervals, order statuses, or plan/account/quota/Premium claims as verified entitlements. |
+| Daily usage accounting (`00:00 UTC` boundary when configured) | Device-local `UsageState` records accepted generations without an approved local cap; it never gates chat on account availability | None | **Owns (`quota.rs`)**: `FOR UPDATE` reservation/commit/release only when explicit quota policy is configured; default is unconfigured | **Persists** counters/reservations, not proof of paid access | Local usage must **never** overwrite server counters or grant Free/Premium/paid entitlements; missing policy is neither unlimited nor a zero-valued Free quota. |
 
-> **Note on Legacy Local `licensing/*` Module (`apps/desktop/src-tauri/src/licensing/`):** Preserved for backward UI/test compatibility (`#/licensing`), `licensing/*` validates local offline key shapes only and **does not grant server subscription entitlements or raise `start_generation` daily quotas**. Online plan entitlements flow exclusively through `services/nexora-auth` (`billing.rs` + `quota.rs`).
+> **Note on Legacy Local `licensing/*` Module (`apps/desktop/src-tauri/src/licensing/`):** Preserved for backward UI/test compatibility (`#/licensing`), `licensing/*` validates local offline key shapes only and **does not grant server subscription entitlements or raise `start_generation` daily quotas**. The backend policy currently defaults to unconfigured, and the Stripe-oriented client-selected plan-change path is not provider-verified; neither local licence state nor subscription rows are presently sufficient evidence of paid/Premium access.
 
 ---
 
 ## 3. Traced Request & Data Flows
 
-### 3.1 Local Chat Generation + Quota Reservation Lifecycle
-1. **UI (`apps/desktop/ui/src/pages/ChatPage.tsx` -> `usePersistentConversation.ts`)**: Invokes `start_generation` (`GenerateRequest { requestId, messages, maxTokens, temperature, profileId }`) with a Tauri `Channel<GenerationEvent>`. If unauthenticated, UI opens floating `AuthModal` without clearing the draft prompt.
-2. **Rust Gate (`apps/desktop/src-tauri/src/inference/commands.rs:716-820`)**:
-   - Reads bearer token from OS `storage::get_session_token()` (returns `unauthenticated` before touching `llama-server` if missing).
-   - Validates prompt roles/lengths, verifies `request.profile_id == selected.id` and `selected.id == state.loaded_profile_id()`, checks token budget (`budget::overflow`), and probes `process::health_ok(port)`.
-   - Calls `POST /v1/usage/reserve` with `{ modelId: selected.id, requestId }`:
-     - **`200 OK`**: Holds server `reservationId`.
-     - **`401`**: Clears local session token and returns `unauthenticated`.
-     - **`429 quota_exceeded`**: Returns server quota error immediately; `llama-server` never runs.
-     - **Transport `network_error`**: Falls back to local `UsageState::reserve(SystemTime::now())` (`50`/day UTC provisional local cap).
-3. **Streaming & Settlement (`commands.rs:822-960`)**:
-   - Streams tokens over loopback `POST http://127.0.0.1:<port>/v1/chat/completions` (`Authorization: Bearer <ephemeral_key>`).
-   - If `llama-server` rejects or fails **before** streaming starts: releases server reservation (`POST /v1/usage/release`) or drops uncommitted local `UsageReservation`.
-   - Once token streaming starts: commits server reservation (`POST /v1/usage/commit`) or commits local `UsageReservation`, and streams `Token` / `Done` / `Cancelled` / `Error` events over the Tauri `Channel`.
+### 3.1 Local Chat Generation + Optional Usage Accounting
+1. **UI (`apps/desktop/ui/src/pages/ChatPage.tsx` -> `usePersistentConversation.ts`)**: Invokes `start_generation` (`GenerateRequest { requestId, messages, maxTokens, temperature, profileId }`) with a Tauri `Channel<GenerationEvent>`. Sign-in is optional; local chat remains available when signed out.
+2. **Local inference path (`apps/desktop/src-tauri/src/inference/commands.rs`)**:
+   - Validates prompt roles/lengths, preserves the selected Mini/Sonnet profile, verifies the running profile, checks token budget, and probes the local engine. These local checks are independent of account/payment connectivity.
+   - Attempts to read a session token only for optional server accounting. A missing session, keychain read error, unconfigured backend/policy, reservation failure, quota response, or invalid session does not gate local inference; invalid sessions are purged and accounting problems are surfaced as typed usage warnings. No token or account is fabricated.
+   - If a valid token is available, calls `POST /v1/usage/reserve` with `{ modelId, requestId }`. The verified server session determines identity. The production quota policy defaults to unconfigured; its summary omits plan/limit/reset claims and reserve returns a typed `quota_policy_unconfigured` response.
+   - Device-local `UsageState` records accepted generations but has no approved local limit. It does not claim a Free/Premium allowance or act as an offline account entitlement.
+3. **Streaming & Settlement**:
+   - Streams tokens over loopback `POST http://127.0.0.1:<port>/v1/chat/completions` (`Authorization: Bearer <ephemeral_key>`); prompts and files are not sent to `nexora-auth`.
+   - If the local engine fails before streaming starts, any server reservation is released; an uncommitted local accounting reservation is dropped.
+   - When the engine accepts the request, the server reservation is committed (or released if no stream began) and local usage is recorded. Settlement is idempotent; transient server settlement errors are retried once. Remaining reservation, settlement, or local-recording failures are surfaced as warnings without turning a successful local reply into a failure. Conversation history and Mini/Sonnet routing are preserved.
 
 ### 3.2 Desktop Google OAuth 2.0 + OIDC PKCE Sign-In & Account Linking
 1. **Desktop PKCE Setup (`auth/pkce.rs`, `auth/commands.rs:255-315`)**: Generates CSPRNG 256-bit `code_verifier` (`S256` challenge), 128-bit `state`, and 128-bit `nonce` (`getrandom`); binds `127.0.0.1:0` -> `http://127.0.0.1:<port>/callback`; validates `https://` URL and opens the system browser via `rundll32.exe url.dll,FileProtocolHandler` on Windows (preventing `cmd.exe` `&` injection).
@@ -112,13 +114,10 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
    - Exchanges `code` + `code_verifier` at `https://oauth2.googleapis.com/token` using server-held `NEXORA_AUTH_GOOGLE_CLIENT_SECRET`, fetches/caches Google JWKS (`1h` TTL + unknown-`kid` refresh), and verifies RS256 signature + `iss` + `aud` + `exp` + `nonce` + `email_verified == true`.
    - Keys identity strictly by immutable `(provider, provider_subject)`; auto-links only when Google-verified email matches an already-verified active account (`unverified` local account -> `409 email_conflict`).
 
-### 3.3 Checkout, Order Reconciliation & Signed Payment Webhooks
-> **Owner-Approved Phase 15 Decision**: **Razorpay** replaces **Stripe** as Nexora's selected payment provider in **Phase 15** (`PaymentProvider` trait implementation, signed Razorpay webhooks, and subscription lifecycle management). Existing Stripe scaffolding in `services/nexora-auth/src/billing.rs` and `migrations/` remains preserved untouched until **Phase 15**.
+### 3.3 Existing Stripe-Oriented Billing (Audit Only)
+> **Phase 15 status:** Razorpay work is blocked and was not implemented. The existing Stripe-oriented `billing.rs`, migrations, and records were not changed by Phase 16. No live Stripe or Razorpay behavior was validated. Client-selected changes to active/trialing subscription plans without provider verification remain a blocker; those subscription rows must not be treated as verified Premium or quota evidence.
 
-1. **Current Baseline Checkout (`PlansPage.tsx` -> `billing_create_checkout` -> `POST /v1/billing/checkout`)**: Server looks up active `plan_versions` row (`currency`, `amount_minor`, `provider_price_id`) strictly by `(plan_id, interval)`, inserts pending `payment_orders` row keyed by `UNIQUE (user_id, idempotency_key)`, creates provider checkout session carrying `order_id`, and returns an `https://` `checkoutUrl` (re-validated in `src-tauri` before launching browser).
-2. **Dual Activation Path (`billing.rs:1335-1522, 1675-1865`, transitioning to Razorpay in Phase 15)**:
-   - **Asynchronous Signed Webhook (`POST /v1/billing/webhooks/...`)**: Verifies provider `HMAC-SHA256` signature over raw bytes, claims `(provider, provider_event_id)` in `webhook_events`, and calls `activate_order_in_tx` inside the same SQL transaction.
-   - **Synchronous Return Check (`POST /v1/billing/verify`)**: Queries `provider.verify_checkout(...)`; **only if `verified.paid == true`** runs `activate_order_in_tx` (`payment_orders.status = 'completed'`, supersedes prior subscriptions, upserts active `subscriptions` row). Unpaid sessions leave user on `free`.
+The repository contains Stripe-oriented catalogue, checkout, order-verification, portal, webhook, and subscription code. This is a source-level description, not a claim that payment is enabled or the commercial terms are approved. `PlansPage.tsx` presents no active checkout or plan-change action. Order verification/webhook handling does not close the separate client-selected subscription-plan change gap. Do not infer paid entitlements from a client request, a local profile/licence, a subscription row, or a backend/payment failure. No Razorpay API, table, migration, refund flow, or checkout behavior is present.
 
 ---
 
@@ -138,11 +137,11 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
   - Isolated signed webhook router: `POST /v1/billing/webhooks/stripe` with `DefaultBodyLimit::max(65_536)` (`64 KiB`) over raw `Bytes`.
   - **CORS Posture (`app.rs`)**: Intentionally emits **no `Access-Control-Allow-Origin` header**. Native Rust (`reqwest`) is unaffected by browser CORS, while omitting CORS prevents cross-origin browser scripts from probing local/remote `nexora-auth` endpoints.
 - **Authentication Requirements**:
-  - Public endpoints: `GET /health`, `GET /v1/plans`, `POST /v1/auth/{register,verify-email,resend-verification,login,recovery-request,reset-password,google/exchange}`, and HMAC-authenticated `POST /v1/billing/webhooks/stripe`.
+  - Public endpoints: `GET /health`, `GET /v1/plans` (returns no plan catalogue while quota policy is unconfigured), `POST /v1/auth/{register,verify-email,resend-verification,login,recovery-request,reset-password,google/exchange}`, and HMAC-authenticated `POST /v1/billing/webhooks/stripe`.
   - Protected endpoints: Require `Authorization: Bearer <64-hex-token>` validated by `session::authenticate` (verifies SHA-256 hash lookup, `revoked_at IS NULL`, `expires_at > now()`, `last_used_at + idle_ttl > now()`, and active `users.status = 'active'`).
 - **Common Error Envelope & Stable Error Codes**:
   - Envelope: `{"error": {"code": "<machine_code>", "message": "<generic_safe_message>"}}` (plus `"quota": {...}` on `429 quota_exceeded`, and `Retry-After: <seconds>` header on `429 rate_limited`).
-  - Canonical codes: `validation_failed` (`400`), `unknown_model` (`400`), `invalid_webhook_signature` (`400`), `invalid_credentials` (`401`), `invalid_or_expired_token` (`401`), `email_unverified` (`403`), `not_found` (`404`), `method_not_allowed` (`405`), `email_conflict` / `identity_already_linked` / `billing_conflict` (`409`), `rate_limited` (`429`), `quota_exceeded` (`429`), `internal_error` (`500`), `payment_provider_error` (`502`), `dependency_unavailable` / `payment_provider_unconfigured` (`503`).
+  - Canonical codes: `validation_failed` (`400`), `unknown_model` (`400`), `invalid_webhook_signature` (`400`), `invalid_credentials` (`401`), `invalid_or_expired_token` (`401`), `email_unverified` (`403`), `not_found` (`404`), `method_not_allowed` (`405`), `email_conflict` / `identity_already_linked` / `billing_conflict` (`409`), `rate_limited` (`429`), `quota_exceeded` (`429`), `internal_error` (`500`), `payment_provider_error` (`502`), `dependency_unavailable` / `payment_provider_unconfigured` / `quota_policy_unconfigured` (`503`).
 - **Timeouts, Idempotency & Account Privacy**:
   - Timeouts: `AuthApiClient` `10s` per request; `StripeHttpProvider` `15s`; Google loopback listener `120s`; `llama-server` health/load `180s`.
   - Idempotency: `POST /v1/billing/checkout` keyed by `(user_id, idempotency_key)`; `POST /v1/usage/reserve` keyed by `(user_id, request_id)` returning `replayed: true`; webhooks keyed by `(provider, provider_event_id)` returning `deduplicated: true`.
@@ -167,19 +166,18 @@ Nexora enforces a strict **two-plane architecture** that separates **on-device A
      - `smtp` (STARTTLS/SMTPS via `NEXORA_AUTH_SMTP_HOST`, `PORT`, `USERNAME`, `PASSWORD`, `NEXORA_AUTH_EMAIL_FROM`) **or** `resend`/`postmark` HTTPS API via `reqwest` (reusing existing `rustls-tls` dependency without heavy native deps), failing fast at startup in `NEXORA_ENV=production` if unconfigured.
 5. **`ADR-05` — Local AI Inference Independence from Account/Payment Connectivity**:
    - Model files (`.gguf`), `llama-server`, prompt assembly, workspace scanning, diff patching, and conversation history live 100% locally. Zero prompt or file content ever traverses `AuthApiClient`. Browsing conversations, editing code, managing models, and switching themes require zero network connectivity.
-6. **`ADR-06` — Online Quotas vs Temporary Offline Fallback & Reconnection**:
-   - When online, PostgreSQL (`quota.rs`) is authoritative for the user's active tier (`Free` / `Pro` / `Team`) and per-model daily allowance (`00:00:00 UTC`).
-   - When an already-signed-in user has no route to `nexora-auth` (`err.code == "network_error"`), `src-tauri` falls back to tamper-evident local `UsageState` (`daily-usage.txt`, UTC day index, clock-rollback guard) with `offlineFallback: true`, and automatically resumes authoritative server accounting as soon as connectivity returns.
-7. **`ADR-07` — Transactional Payment Webhooks & Subscription Lifecycle (`Razorpay` Approved for Phase 15)**:
-   - **Approved Provider Decision**: **Razorpay** replaces **Stripe** as the payment and subscription provider in **Phase 15** (no Razorpay code, SDKs, or schema changes are introduced prior to Phase 15).
-   - Webhooks verify provider `HMAC-SHA256` signatures over raw bytes first, then execute `INSERT INTO webhook_events ... ON CONFLICT DO NOTHING` + order/subscription updates inside a **single PostgreSQL transaction**.
-   - **Critical Architecture Rule Locked for Phase 15 (`G-01`)**: `PaymentProvider` MUST own provider-side `cancel_subscription` and `change_subscription_plan` — `billing.rs` must **never** flip `subscriptions.plan_id` to a higher paid tier in PostgreSQL alone without verified Razorpay payment confirmation!
+6. **`ADR-06` — Local Inference Independence & Optional Account Accounting**:
+   - Local generation is available while signed out and when the account backend, session vault, or quota policy is unavailable. Local device usage is informational and has no approved hard limit.
+   - A valid server session may be used for optional account reservation/settlement. The production quota policy defaults unconfigured; accounting errors are surfaced as warnings and never grant a Free/Premium entitlement or deny local inference. Policy-dependent UTC reset periods are not activated until approved configuration exists.
+7. **`ADR-07` — Payment Provider & Subscription Lifecycle (Phase 15 Blocked)**:
+   - The Phase 15 Razorpay work is blocked and was not implemented. Existing Stripe-oriented code remains; this ADR does not claim Razorpay support or make a provider switch.
+   - Existing webhook/order operations do not verify client-selected active/trialing plan changes. `G-01` remains open; subscription records are not trusted paid/quota evidence until provider verification is addressed. No billing records or Stripe code were modified in Phase 16.
 8. **`ADR-08` — Environment Configuration Across `development`, `test`, and `production`**:
    - `development`: Loopback bind (`127.0.0.1:8787`), optional DB/providers (`503` honest responses when unconfigured), local `.env`.
    - `test`: Isolated `NEXORA_AUTH_TEST_DATABASE_URL` + deterministic trait doubles (`StubGoogleProvider`, `StubPaymentProvider`, `CaptureEmail`).
    - `production` (`NEXORA_ENV=production`): Enforces non-placeholder `NEXORA_AUTH_DATABASE_URL`, rejects `sk_test_*`, `REPLACE_WITH*`, `CHANGE_ME*`, `nexora.local`, requires paired secrets, and withholds secret values from all startup/runtime logs (`exit(2)`).
 9. **`ADR-09` — Database Migrations & Startup Coordination**:
-   - Forward-only SQLx migrations in `services/nexora-auth/migrations/` run automatically in `main.rs` (`SELECT 1` -> `run_migrations(&pool)` -> `billing::sync_plan_catalog(&pool, &catalog)`) **before** `TcpListener::bind`, guaranteeing `/health` never serves traffic against an unmigrated schema. Multi-replica deployments remain safe because SQLx uses PostgreSQL advisory locks during `migrate!`.
+   - Forward-only SQLx migrations in `services/nexora-auth/migrations/` are embedded in the service binary and run automatically in `main.rs` (`SELECT 1` -> `run_migrations(&pool)` -> `billing::sync_plan_catalog(&pool, &catalog)`) **before** `TcpListener::bind`, so traffic is not served against an unmigrated schema. SQLx tracks versions/checksums in `_sqlx_migrations` and coordinates concurrent migrators with PostgreSQL advisory locks.
 10. **`ADR-10` — Cross-Layer DTO Consistency Strategy**:
     - Maintain `camelCase` JSON across TS <-> Tauri IPC <-> `nexora-auth` HTTP, `deny_unknown_fields` on HTTP inputs, canonical model ID mapping (`quota::canonical_model_id`), and extend `apps/desktop/ui/src/lib/rustContract.test.ts` + live TCP wire test (`live_desktop_client_roundtrip_over_tcp`) to cover all `auth`, `account`, `billing`, and `quota` DTOs.
 
@@ -191,27 +189,37 @@ Every item below was verified directly from source code during Phase 01–02 ins
 
 | ID | Severity | Verified Evidence (Exact File & Lines) | Architectural Defect / Gap | Assigned Roadmap Phase |
 | --- | --- | --- | --- | --- |
-| **`G-01`** | **CRITICAL** | `services/nexora-auth/src/billing.rs:1525-1635` | `cancel_subscription` and `change_subscription_plan` mutate PostgreSQL `subscriptions` rows directly without calling `PaymentProvider` (`Pro -> Team` `$0` upgrade bug + uncancelled provider recurring billing). Will be resolved cleanly as part of the **approved Razorpay replacement** in Phase 15. | **Phase 15** (Razorpay billing backend) |
+| **`G-01`** | **CRITICAL / OPEN** | `services/nexora-auth/src/billing.rs` subscription plan-change path | Client-selected plan changes can mutate active/trialing subscription records without provider verification. Phase 15 Razorpay was blocked and not implemented; Stripe-oriented billing was audited only in Phase 16. These records are not trusted Premium/quota evidence. | **Unresolved blocker; no Phase16 billing change** |
 | **`G-02`** | **HIGH** | `apps/desktop/src-tauri/src/auth/pkce.rs:148-156` | Loopback query parser `param.split_once('=')` does not URL-percent-decode `code` (`4%2F0A...` -> `4/0A...`). Forwarding raw `4%2F...` causes `reqwest` form encoding to double-encode `%` as `%25`, breaking live Google OAuth token exchange with `invalid_grant`. | **Phase 11** (Google OAuth) |
 | **`G-03`** | **HIGH** | `apps/desktop/src-tauri/{build.rs,src/auth/client.rs}` & `commands.rs` | **Auth API URL resolved in Phase 03**: `option_env!("NEXORA_AUTH_API_URL")` build-time config + strict non-loopback `https://` enforcement + safe `backend_unconfigured` release state landed. Remaining `GOOGLE_OAUTH_CLIENT_ID` compile-time wiring assigned to **Phase 11 / Phase 17**. | **Phase 03 (Done)** & **Phase 11/17** |
 | **`G-04`** | **HIGH** | `services/nexora-auth/src/app.rs:176-186,475-492` & `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md:51` | `nexora-auth` keys IP rate limits strictly on peer TCP `ConnectInfo`. Behind a loopback reverse proxy (`127.0.0.1:8787`), **all global users share key `127.0.0.1`**, throttling global sign-ups after `5/1h`. Must add explicit opt-in `NEXORA_AUTH_TRUSTED_PROXY_IPS` (default empty). | **Phase 10** & **Phase 17** |
 | **`G-05`** | **HIGH** | `services/nexora-auth/src/email.rs:1-106` & `apps/desktop/src-tauri/src/auth/{client,commands}.rs` | **Desktop response pass-through resolved in Phase 03**: `AuthApiClient` and IPC commands now forward honest server `message` + `emailDelivery`. Server SMTP/HTTPS `EmailProvider` implementation remains assigned to **Phase 10**. | **Phase 03 (Desktop Done)** & **Phase 10** |
 | **`G-06`** | **MEDIUM** | `services/nexora-auth/src/oauth.rs:733` & `apps/desktop/src-tauri/src/auth/{client,commands}.rs` | **Desktop half resolved in Phase 03**: Single-flight `auth_refresh_session` (`POST /v1/auth/refresh`), unified `401 -> session_expired` credential purge, and `429 Retry-After` parsing landed. Backend `oauth::google_exchange` TTL & `/ready` assigned to **Phase 10**. | **Phase 03 (Desktop Done)** & **Phase 10** |
-| **`G-07`** | **MEDIUM** | `services/nexora-auth/src/quota.rs:21,425-470` | `RESERVATION_TTL_SECS = 900` (`15m`): if a slow CPU `Sonnet 14B` generation streams past 15 minutes, sweeping marks the reservation `'expired'`, and `settle_reservation(..., true)` ignores `'expired'` rows rather than transitioning `'expired' -> 'committed'`. | **Phase 16** (Daily limits & entitlements) |
+| **`G-07`** | **MEDIUM / MITIGATED IN CODE, UNVALIDATED** | `services/nexora-auth/src/quota.rs` reservation sweep/settlement | Phase 16 code now sweeps stale reservations before settlement, persists expiry bookkeeping before rejecting an expired commit, makes same-outcome settlement idempotent, rejects opposite/replayed outcomes, and checks counter updates. Rust/DB validation is blocked, so this is not runtime-verified. | **Phase 16; validation pending** |
 | **`G-08`** | **MEDIUM** | `apps/desktop/ui/src/lib/rustContract.test.ts` | **Auth/session/diagnostics DTO parity added in Phase 03** (`15` Rust <-> TS DTOs + whole-surface IPC handler check); remaining `billing`, server `usage`, `workspace`, and `history` struct shapes scheduled for **Phase 18**. | **Phase 03 (Partial)** & **Phase 18** |
-| **`G-09`** | **HIGH** | `scripts/windows/smoke-verify.ps1:31,67` | Checks Electron-style `%LOCALAPPDATA%\Programs\Nexora\nexora.exe` instead of Tauri `2.12.5` `currentUser` NSIS path `%LOCALAPPDATA%\Nexora\nexora.exe`, and omits `_?=$InstallRoot` on silent `uninstall.exe /S`. | **Phase 19** (Windows packaging) |
-| **`G-10`** | **LOW** | `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md:54,67,80` | References stale `plan_prices`, `Rust 1.92.0`, and `NEXORA_PLAN_*`/`NEXORA_QUOTA_*` names instead of `plan_versions` / `plan_model_quotas`, `rust-toolchain.toml` (`1.93.0`), and `NEXORA_{FREE,PRO,TEAM}_*`. | **Phase 17** & **Phase 20** |
-| **`B-01..04`** | **EXTERNAL** | Sandbox OS/network (`3.8 GiB` RAM, `HTTP 000` egress, no external keys) | Real 7B/14B GGUF execution (`Phase 04/05/18`), live Google OAuth (`Phase 11/18`), live Razorpay sandbox (`Phase 15/18`), native Windows + signing (`Phase 19/20/21`). | **Phases 04, 05, 11, 15, 18–21** |
+| **`G-09`** | **HIGH / CODE CORRECTED, WINDOWS UNVERIFIED** | `scripts/windows/smoke-verify.ps1` | Smoke script now targets Tauri `2.12.5` `currentUser` NSIS path `%LOCALAPPDATA%\Nexora\nexora.exe` and passes the quoted `_?=$InstallRoot` argument to silent uninstallation; it has not been executed on Windows. | **Phase 19** (code correction; native validation pending) |
+| **`G-10`** | **LOW / DOCUMENTATION CORRECTED (Phase 20)** | `docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md`; `README.md` | The current deployment guide no longer contains the previously reported `plan_prices` or `NEXORA_PLAN_*`/`NEXORA_QUOTA_*` names. Phase 20 corrected its stale Rust pin (`1.92.0` → pinned `1.93.0`) and obsolete PFX-signing instructions; the root README now labels commercial defaults as unapproved and removes active-offer wording. Historical audit documents are explicitly marked superseded. | **Phase 17** & **Phase 20** |
+| **`B-01..04`** | **EXTERNAL** | Sandbox OS/network, unavailable toolchains, no external provider credentials | Real 7B/14B GGUF execution, live Google OAuth, isolated PostgreSQL verification, and native Windows/signing remain unverified. Razorpay sandbox work was blocked and not implemented. | **Deferred to the relevant authorized phase** |
 
 ---
 
 ## 7. Approved & Open Product Decisions
 
-### Approved Owner Decisions
-- **Payment Provider Selection (Approved for Phase 15)**: **Razorpay** replaces **Stripe** for paid plans, checkout orders, subscriptions, and signed webhooks in **Phase 15** (`G-01` will be eliminated inside the Razorpay `PaymentProvider` implementation so paid tier changes require verified Razorpay payment confirmation).
+### Recorded Provider Decision and Implementation Status
+- The Phase 15 plan recorded Razorpay as the intended replacement provider. That work was blocked and no Razorpay API, schema, checkout, or subscription implementation was delivered. Existing Stripe-oriented code remains and is under audit; no provider switch is claimed here.
 
 ### Remaining Open Product & Operational Decisions
 1. **Transactional Email Transport Choice (for Phase 10)**: Standard **HTTPS transactional email API** (e.g., Resend / Postmark / SendGrid over existing `reqwest` + `rustls-tls`) vs **SMTP STARTTLS**, behind `NEXORA_AUTH_EMAIL_PROVIDER`?
-2. **Razorpay Plan Change & Upgrade Flow (for Phase 15)**: Razorpay Subscriptions plan update with immediate charge confirmation vs new Razorpay Order/Subscription checkout for tier upgrades?
-3. **Final Commercial Plan Pricing & Daily Per-Model Quotas (for Phase 14–16 / 20)**: Confirm final currency (`INR` / `USD` / multi-currency), amounts, and daily per-model allowances (`Free`, `Pro`, `Team`, and offline fallback cap).
+2. **Razorpay Implementation Scope (Phase 15 blocker)**: Provider-specific order/subscription lifecycle, event verification, refunds, and lifecycle mapping remain unimplemented; no Razorpay behavior is assumed.
+3. **Commercial terms and quota policy**: Currency, prices, Free/Premium plan structure, per-model limits, token allowances, trials, feature access, and reset/billing periods remain unapproved. No local offline cap exists, and an absent quota is not unlimited paid access or zero Free access.
 4. **Production Auth Origin & Trusted Proxy Topology (for Phase 17 / 20)**: Production HTTPS domain (`https://auth.<your-domain>`) for `NEXORA_AUTH_API_URL` build injection and reverse-proxy IP CIDR (`NEXORA_AUTH_TRUSTED_PROXY_IPS`).
+
+---
+
+## 8. Phase 16 Implementation & Validation Status
+
+- Phase 16 changes cover quota-policy defaults, UTC counter/reservation expiry and settlement checks, local usage accounting without a configured allowance, best-effort server accounting, and warning propagation. Sign-in/session-vault/account-policy failures do not gate local chat; Mini/Sonnet profile IDs and conversation behavior remain intact.
+- No commercial terms are approved by this work; production `QuotaPolicy` defaults to unconfigured, the browser fallback is empty, and the public plan-list endpoint hides stored catalogue rows while policy is unconfigured. Draft plan defaults and Stripe checkout/subscription handlers remain in `billing.rs` under audit; keep provider/payment configuration disabled and do not treat those records as entitlements. Stripe code was not modified; G-01 remains open. Razorpay remains blocked and unimplemented.
+- **UI validation passed:** `corepack pnpm --filter @nexora/desktop typecheck`; `corepack pnpm --filter @nexora/desktop test` (88 files, 870 tests); and `corepack pnpm --filter @nexora/desktop build` (successful, with non-fatal Vite warnings).
+- **Rust/PostgreSQL validation is blocked:** Native Rust formatter/compiler/Clippy and PostgreSQL/container tools are unavailable. An auxiliary `@scalar/rust-fmt` WASM pass checked 34 modified/untracked Rust files and reported formatting differences in 17; broad formatting was not applied to preserved Phases 09–15 work. Rust unit/integration tests, migration checks, and isolated-PostgreSQL tests have not run; no database was contacted. Phase 10–13 backend validation remains open, and the Phase 16 server changes are not runtime-validated.
+- Work stops at Phase 16. No Phase 17+ changes, commits, pushes, merges, releases, or publication actions are included.

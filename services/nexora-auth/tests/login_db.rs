@@ -26,6 +26,8 @@ use sqlx::PgPool;
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
+mod support;
+
 const GOOD_PASSWORD: &str = "correct horse battery";
 
 #[derive(Default)]
@@ -65,6 +67,7 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");
@@ -330,6 +333,67 @@ async fn logout_revokes_the_whole_family_including_rotated_siblings() {
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn repeated_rotation_keeps_the_family_absolute_expiry() {
+    let pool = test_pool().await;
+    let email = create_verified_user(&pool, "absolute-family").await;
+    let outcome = login::login(
+        Some(&pool),
+        86_400,
+        &login_request(&email, GOOD_PASSWORD),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let initial_digest = session::hash_session_token(&outcome.session.raw_token);
+    let initial_expiry: f64 = sqlx::query_scalar(
+        "SELECT extract(epoch FROM expires_at)::float8 FROM sessions WHERE token_hash = $1",
+    )
+    .bind(&initial_digest)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let (rotated_once, _) = session::rotate_session(
+        &pool,
+        &outcome.session.raw_token,
+        86_400,
+        604_800,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (rotated_twice, _) = session::rotate_session(
+        &pool,
+        &rotated_once.raw_token,
+        86_400,
+        604_800,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    for token in [&rotated_once.raw_token, &rotated_twice.raw_token] {
+        let digest = session::hash_session_token(token);
+        let expiry: f64 = sqlx::query_scalar(
+            "SELECT extract(epoch FROM expires_at)::float8 FROM sessions WHERE token_hash = $1",
+        )
+        .bind(digest)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            (expiry - initial_expiry).abs() < 0.001,
+            "rotation extended the family expiry: initial={initial_expiry}, rotated={expiry}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn rotation_is_single_use_and_family_reuse_revokes_everything() {
     let pool = test_pool().await;
     let email = create_verified_user(&pool, "rotate").await;
@@ -420,16 +484,17 @@ async fn rate_limiting_windows_block_excess_failures_without_lockout() {
         rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly)
             .await
             .unwrap();
-        rate_limit::record(&pool, "login", &key, "failure").await;
+        rate_limit::record(&pool, "login", &key, "failure").await.expect("record rate-limit event");
     }
     let retry_after = rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly)
         .await
-        .unwrap_err();
-    assert_eq!(retry_after, 900, "Retry-After reports the window");
+        .unwrap_err()
+        .retry_after_secs();
+    assert_eq!(retry_after, Some(900), "Retry-After reports the window");
 
     // Successes do not consume the failure window (no lockout for real users
     // with a correct password).
-    rate_limit::record(&pool, "login", &key, "success").await;
+    rate_limit::record(&pool, "login", &key, "success").await.expect("record rate-limit event");
     let still_blocked =
         rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly).await;
     assert!(still_blocked.is_err());

@@ -1,19 +1,21 @@
-# Phase 32 — Windows Build & Runtime Verification Report
+# Historical Phase 32 — Windows Build & Runtime Verification Report (Superseded)
 
-**Authoritative Roadmap Phase:** Phase 32 (Final Phase of the original 32-phase Nexora Roadmap)  
+> **Historical only — not current release evidence (2026-10-24).** This report was written on October 19, 2026 against `arena/5f3bff15-nexora`; its "Phase 32" roadmap and completion/readiness claims are not part of the current authorization or verified state. The current Phase 18/19 reports record a partially verified integration and a blocked, Windows-unverified package: no real Windows installer or approved-model inference was produced or tested, and G-01 remains open. Do not use the old PASS claims, offline-completeness statements, or runbook as public product claims or release approval. See [Phase 18](../PHASE_18_INTEGRATION_VERIFICATION.md), [Phase 19](../PHASE_19_WINDOWS_PACKAGING.md), and [Phase 20](../PHASE_20_PUBLISHING_PREPARATION.md).
+
+**Historical phase label in this report:** Phase 32 (not current authorization)
 **Date of Audit:** October 19, 2026  
 **Repository Branch:** `arena/5f3bff15-nexora`  
-**Evaluation Scope:** Complete verification of Windows build configuration, Tauri desktop integration, security posture, IPC contracts, offline sovereignty, environment constraints, and native Windows deployment readiness.
+**Claimed Evaluation Scope (not verified for this checkout):** Windows build configuration, Tauri desktop integration, security posture, IPC contracts, offline behavior, environment constraints, and native Windows deployment readiness.
 
 ---
 
-## 1. Authoritative Phase 32 Specification
+## 1. Historical Phase 32 Specification (Not Current Authorization)
 
 Phase 32 represents the final milestone of the original 32-phase Nexora roadmap. Its scope and acceptance criteria are derived from the foundational planning documents in `docs/phase-1/` and the accumulated architectural records across the repository:
 
 1. **Build & Release Strategy (`docs/phase-1/09-build-installer-and-release.md`):**
    - Single-target focus: Windows desktop application (x86_64).
-   - Per-user NSIS installer (`installMode: "currentUser"`), installing into `%LOCALAPPDATA%\Programs\Nexora` with zero administrative elevation required for standard use.
+   - Per-user NSIS installer (`installMode: "currentUser"`), expected by the pinned Tauri 2.12.5 template to install under `%LOCALAPPDATA%\Nexora`; this path and elevation behavior have not been validated by a Windows installer run in the current evidence.
    - Pinned dependencies, locked toolchains, and reproducible compilation.
    - Strict Content Security Policy (CSP) blocking raw external HTTP/HTTPS connections from the WebView.
    - Code signing and update integrity principles.
@@ -132,7 +134,7 @@ Phase 32 represents the final milestone of the original 32-phase Nexora roadmap.
 | Architectural Component | Configuration File | Verified Specification | Audit Result |
 | :--- | :--- | :--- | :--- |
 | **Packaging Target** | `apps/desktop/src-tauri/tauri.conf.json` | `"targets": ["nsis"]` | **PASS**: NSIS per-user installer is the designated distribution format. |
-| **Installer Elevation** | `apps/desktop/src-tauri/tauri.conf.json` | `"windows": { "nsis": { "installMode": "currentUser" } }` | **PASS**: Configured for `%LOCALAPPDATA%\Programs\Nexora`; no UAC or administrator rights needed. |
+| **Installer Elevation** | `apps/desktop/src-tauri/tauri.conf.json` | `"windows": { "nsis": { "installMode": "currentUser" } }` | **Static config only; Windows-unverified.** The pinned Tauri 2.12.5 template maps `currentUser` to `%LOCALAPPDATA%\Nexora`; installer path/elevation behavior has not been exercised in the current evidence. |
 | **Window Dimensions** | `apps/desktop/src-tauri/tauri.conf.json` | `width: 1280, height: 840, minWidth: 960, minHeight: 640` | **PASS**: Desktop window initial geometry adheres to §03/§09 specifications. |
 | **Custom Window Chrome** | `apps/desktop/src-tauri/tauri.conf.json` | `"decorations": false, "shadow": true` | **PASS**: Native OS title bar disabled in favor of custom Nexora glass TitleBar. |
 | **Window Capabilities** | `apps/desktop/src-tauri/capabilities/main.json` | `["core:default", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-close", "core:window:allow-start-dragging"]` | **PASS**: Least-privilege capability boundaries strictly maintained. |
@@ -213,9 +215,9 @@ To complete native Windows verification on a physical workstation or authorized 
 - **Operating System:** Windows 10 (22H2+) or Windows 11 (64-bit x86_64).
 - **Prerequisites:**
   - Visual Studio 2022 C++ Build Tools (including "Desktop development with C++" and Windows SDK).
-  - Rust 1.77.2+ (installed via `rustup-init.exe` targeting `x86_64-pc-windows-msvc`).
-  - Node.js 22 LTS & pnpm 10+.
-  - Microsoft Edge WebView2 Evergreen Runtime.
+  - Rust `1.93.0` from the repository `rust-toolchain.toml` (`Cargo.toml` separately declares MSRV `1.77.2`), targeting `x86_64-pc-windows-msvc`.
+  - Node.js 22 LTS and pnpm `9.15.4` (the build script rejects other pinned-tool versions).
+  - WebView2 Evergreen may be downloaded by the configured silent bootstrapper when absent; internet access may be required. This installer path is not Windows-verified.
 
 ### Step 2: Build the Frontend & Typecheck
 ```powershell
@@ -238,29 +240,28 @@ cargo build --release
 ```
 
 ### Step 4: Package the NSIS Installer
+
+For a later authorized Windows run, use the guarded repository scripts rather than a bare Tauri build. The build writes a SHA-256 manifest; signing is optional and requires an approved certificate-store thumbprint. PFX path/password inputs are rejected.
+
 ```powershell
-cd ..\..\
-pnpm tauri build
-# The resulting installer will be located at:
-# apps\desktop\src-tauri\target\release\bundle\nsis\Nexora_0.1.0_x64-setup.exe
+.\scripts\windows\build-installer.ps1
+.\scripts\windows\smoke-verify.ps1
 ```
 
+No installer or manifest was produced for this current Phase 18–20 evidence.
+
 ### Step 5: Native Runtime Acceptance Testing
-1. Execute `Nexora_0.1.0_x64-setup.exe` without admin elevation (verifies non-UAC currentUser setup).
-2. Launch Nexora from Start Menu; confirm window opens at 1280×840 with custom glass TitleBar.
-3. Test titlebar drag, minimize, maximize/restore, and close buttons.
-4. Navigate to **Local Models** (`#/models`); provide path to local `llama-server.exe` and a GGUF model (e.g. Qwen 2.5 Coder 7B).
-5. Verify engine state transitions to `ready`.
-6. Open **AI Chat** (`#/chat`); prompt the model and verify token streaming, stop button responsiveness, and session persistence in `%LOCALAPPDATA%\Nexora\`.
-7. Verify that disabling Wi-Fi/Ethernet maintains 100% full application functionality.
+
+> The following are future acceptance checks, not results. No installer, Windows GUI session, compatible runtime, or genuine approved model has been exercised in the current evidence.
+
+1. Install the generated package on a clean Windows profile and record the actual install path and elevation prompts.
+2. Launch the app and check the configured window dimensions, rendering, title-bar controls, and accessibility behavior.
+3. Test the separately supplied `llama-server.exe` runtime and a genuine approved GGUF artifact only after independent artifact-integrity and license checks.
+4. If inference succeeds, record model artifact digest, runtime build identity, hardware/OS, settings, and reproducible test evidence; keep `locally_verified: false` until the approved verification gate is met.
+5. Test signed-out local chat/history separately from network-dependent account and model-acquisition features. Do not claim that the entire application works offline without scoped evidence.
 
 ---
 
-## 9. Final Phase 32 & Roadmap Conclusion
+## 9. Superseding Status
 
-Phase 32 completes the 32-phase Nexora engineering roadmap:
-- All 32 roadmap milestones have been methodically specified, developed, hardened, and regression-tested.
-- The desktop codebase demonstrates 100% test passing across **75 test files and 724 automated tests**.
-- The frontend build compiles cleanly with zero TypeScript errors.
-- Architectural integrity, security boundaries, offline independence, and user data safety remain fully intact.
-- The project is now stopped in a pristine, uncommitted state, awaiting user instruction before any commit, push, merge, or public release.
+The previous conclusion claiming completion of a 32-phase roadmap, fully verified security/offline behavior, and release readiness is withdrawn as current evidence. This historical report does not define the authorized roadmap or current release status. The authoritative current records are [Phase 18](../PHASE_18_INTEGRATION_VERIFICATION.md) (**PARTIALLY VERIFIED**) and [Phase 19](../PHASE_19_WINDOWS_PACKAGING.md) (**PARTIALLY VERIFIED / BLOCKED**): native Windows packaging, installation, signing, and genuine model inference remain unverified. No release, distribution, or Phase 21 work is authorized by this document.

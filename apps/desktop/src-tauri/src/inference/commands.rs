@@ -23,12 +23,75 @@ use super::registry::{self, ModelProfile};
 use super::settings::{Settings, DEFAULT_CONTEXT_SIZE};
 use super::{
     client, ActiveGeneration, AppStatus, GenerateRequest, GenerationEvent, GenerationOutcome,
-    InferenceState, LoadedModel,
+    InferenceState, LoadedModel, UsageWarning,
 };
 use crate::usage::{UsageError, UsageState};
 
 fn lock_error() -> InferenceError {
     InferenceError::internal("The engine state is unavailable. Restart Nexora.")
+}
+
+fn account_usage_warning(code: &str, action: &str, error: &crate::auth::AuthError) -> UsageWarning {
+    UsageWarning {
+        code: code.to_string(),
+        message: format!(
+            "Account usage could not be {action} ({}): {}. Local inference and conversation history are unaffected.",
+            error.code, error.message
+        ),
+    }
+}
+
+fn local_usage_warning(error: UsageError) -> UsageWarning {
+    UsageWarning {
+        code: "local_usage_record_failed".to_string(),
+        message: format!(
+            "The local reply completed, but its device-local usage record could not be updated: {}. The conversation remains available.",
+            error.message
+        ),
+    }
+}
+
+fn append_usage_warnings(error: &mut InferenceError, warnings: &[UsageWarning]) {
+    for warning in warnings {
+        error.message.push(' ');
+        error.message.push_str(&warning.message);
+    }
+}
+
+fn is_retryable_usage_settlement_error(error: &crate::auth::AuthError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "network_error"
+            | "dependency_unavailable"
+            | "http_500"
+            | "http_502"
+            | "http_503"
+            | "http_504"
+    )
+}
+
+/// Settlement endpoints are idempotent on the same outcome. Retry only a
+/// transient transport/service failure once; callers report any remaining error
+/// without turning the independent local inference result into a failure.
+async fn settle_account_usage(
+    auth: &crate::auth::commands::AuthState,
+    token: &str,
+    reservation_id: &str,
+    commit: bool,
+) -> crate::auth::AuthResult<()> {
+    match auth
+        .client
+        .settle_usage(token, reservation_id, commit)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) if is_retryable_usage_settlement_error(&error) => auth
+            .client
+            .settle_usage(token, reservation_id, commit)
+            .await
+            .map(|_| ()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Refuses a profile change while the engine is answering or loading.
@@ -40,9 +103,79 @@ fn ensure_switch_allowed(state: &InferenceState, target: &ModelProfile) -> Infer
         .active
         .lock()
         .map(|slot| slot.is_some())
-        .unwrap_or(false);
+        .map_err(|_| lock_error())?;
+    let loading = state
+        .loading
+        .lock()
+        .map(|slot| slot.is_some())
+        .map_err(|_| lock_error())?;
 
-    registry::check_switch(target, generating, state.load_in_flight())
+    registry::check_switch(target, generating, loading)
+}
+
+/// Releases the single-load marker on every return path, including errors from
+/// blocking file verification or process startup.
+struct LoadingClaim<'a> {
+    state: &'a InferenceState,
+    active: bool,
+}
+
+impl<'a> LoadingClaim<'a> {
+    fn begin(state: &'a InferenceState, profile_id: Option<&'static str>) -> InferenceResult<Self> {
+        if !state.begin_loading(profile_id) {
+            return Err(InferenceError::busy());
+        }
+
+        Ok(Self {
+            state,
+            active: true,
+        })
+    }
+
+    fn finish(&mut self) {
+        if self.active {
+            self.state.finish_loading();
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for LoadingClaim<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+/// Keeps profile changes and loads blocked until generation has settled, even
+/// on health, quota-accounting, cancellation, or stream errors.
+struct GenerationClaim<'a> {
+    state: &'a InferenceState,
+    request_id: &'a str,
+}
+
+impl Drop for GenerationClaim<'_> {
+    fn drop(&mut self) {
+        self.state.finish_generation(self.request_id);
+    }
+}
+
+/// Stops a newly started child after a failed readiness handshake while
+/// preserving both runtime diagnostics and any failure to confirm shutdown.
+fn stop_started_runtime(state: &InferenceState, primary: &str) -> String {
+    let mut supervisor = match state.supervisor.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let diagnostics = supervisor.diagnostics();
+    let stop_error = supervisor.stop().err().map(|error| error.message);
+    let message = match stop_error {
+        Some(stop_error) => {
+            format!("{primary}{diagnostics} Shutdown was not confirmed: {stop_error}")
+        }
+        None => format!("{primary}{diagnostics}"),
+    };
+    supervisor.last_error = Some(message.clone());
+    message
 }
 
 impl From<UsageError> for InferenceError {
@@ -356,6 +489,7 @@ pub async fn get_model_catalog(
     app: AppHandle,
     state: State<'_, InferenceState>,
 ) -> InferenceResult<ModelCatalog> {
+    state.reconcile_engine();
     let settings = state.settings_snapshot();
     let chosen = registry::APPROVED.selected(settings.selected_id())?;
 
@@ -389,9 +523,14 @@ pub async fn get_model_catalog(
         .map(|mut supervisor| supervisor.is_running())
         .unwrap_or(false);
 
-    let selection_error = registry::check_selection(chosen, state.loaded_profile_id())
-        .err()
-        .map(|error| error.message);
+    let loaded_model = state.loaded_model();
+    let selection_error = registry::check_selection(
+        chosen,
+        loaded_model.as_ref().and_then(|model| model.profile_id),
+        loaded_model.is_some(),
+    )
+    .err()
+    .map(|error| error.message);
 
     Ok(ModelCatalog {
         entries,
@@ -425,6 +564,7 @@ pub async fn check_model_readiness(
 #[tauri::command]
 pub fn select_model(state: State<'_, InferenceState>, id: String) -> InferenceResult<Settings> {
     let profile = registry::APPROVED.resolve(&id)?;
+    let _profile_gate = state.profile_gate.lock().map_err(|_| lock_error())?;
 
     ensure_switch_allowed(&state, profile)?;
 
@@ -451,14 +591,11 @@ pub fn save_settings(
     // never be silently rewritten to the default profile.
     let profile = registry::APPROVED.selected(settings.selected_id())?;
 
-    // The settings form can also carry `model_id`. A change made there is the
-    // same switch as the chat selector's, so it obeys the same rule; editing
-    // paths or the context window for the profile already selected is allowed.
-    let stored = registry::APPROVED.selected(state.settings_snapshot().selected_id())?;
-
-    if stored.id != profile.id {
-        ensure_switch_allowed(&state, profile)?;
-    }
+    // Settings edits can change the next runtime path, context, or profile.
+    // Serialize the write against request/load capture and refuse edits while a
+    // generation or load is active, even when the profile id itself is unchanged.
+    let _profile_gate = state.profile_gate.lock().map_err(|_| lock_error())?;
+    ensure_switch_allowed(&state, profile)?;
 
     if let Some(runtime) = settings.runtime_path.as_deref() {
         models::looks_like_executable(runtime)?;
@@ -514,14 +651,23 @@ pub async fn load_model_with_timeout(
     dirs: &process::RuntimeSearchDirs,
     load_timeout: Duration,
 ) -> InferenceResult<AppStatus> {
-    let settings = state.settings_snapshot();
-
-    // The stored choice must resolve before anything is inspected. An unknown
-    // id is refused here, never rewritten to the default profile.
+    // Capture one settings/profile snapshot and atomically claim the load slot
+    // while selection and generation are excluded by the same gate.
+    let profile_gate = state.profile_gate.lock().map_err(|_| lock_error())?;
+    let settings = state
+        .settings
+        .lock()
+        .map(|store| store.settings.clone())
+        .map_err(|_| lock_error())?;
     let selected = registry::APPROVED.selected(settings.selected_id())?;
 
-    // Trim once, here. Everything below — the ledger key, the profile lookup,
-    // the argv — must agree on the same string.
+    let generating = state
+        .active
+        .lock()
+        .map(|slot| slot.is_some())
+        .map_err(|_| lock_error())?;
+    registry::check_load_allowed(generating)?;
+
     let model = settings
         .model_path
         .as_deref()
@@ -531,57 +677,131 @@ pub async fn load_model_with_timeout(
         .ok_or_else(|| {
             InferenceError::not_configured("Choose a GGUF model file before loading the engine.")
         })?;
-
     let owner = acquisition::profile_for_path(Path::new(&model));
 
     let runtime = match process::resolve_runtime_path(settings.runtime_path.as_deref(), dirs) {
         Ok(resolved) => resolved,
         Err(error) => {
             if error.code != "not_configured" {
-                state.record_failure(owner.map(|p| p.id), error.message.clone());
+                state.record_failure(owner.map(|profile| profile.id), error.message.clone());
             }
             return Err(error);
         }
     };
 
-    // Read the file's own header first: it is cheap, and it tells us the
-    // context window this GGUF actually declares. A model whose metadata allows
-    // less than the request is refused before a process exists, instead of
-    // spending the full load timeout failing inside the runtime.
-    let info = match models::inspect(&model, settings.context_size, None) {
-        Ok(inspected) => inspected,
-        Err(error) => {
-            state.record_failure(owner.map(|p| p.id), error.message.clone());
-            return Err(error);
-        }
-    };
+    let mut loading_claim = LoadingClaim::begin(state, owner.map(|profile| profile.id))?;
+    drop(profile_gate);
 
-    // Was this exact file confirmed against its published digest in this
-    // session? Nothing here hashes, so a click never blocks for minutes
-    // without progress; `verify_model` records the result.
-    let verified = owner
+    // A verified flag is only a path-keyed hint. The fresh check below reads
+    // through a write/delete-denying Windows handle and retains that exact
+    // handle through the runtime's lifetime.
+    let cached_verified = owner
         .map(|profile| {
             state
                 .verification_status(profile.id, Some(Path::new(&model)))
                 .0
         })
         .unwrap_or(false);
+    if cached_verified {
+        if let (Some(profile), Ok(mut ledger)) = (owner, state.verified.lock()) {
+            ledger.begin_verifying(profile.id);
+        }
+    }
 
-    // One decision for everything that must be true before a spawn: the
-    // selection may only load its own verified artefact (Nexora Mini may also
-    // load an unregistered GGUF), and the context window must be supported by
-    // both the app and the file.
+    let model_for_task = model.clone();
+    let context_size = settings.context_size;
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        let mut locked = models::LockedFile::open(Path::new(&model_for_task)).map_err(|error| {
+            InferenceError::invalid_model(format!(
+                "The model file could not be opened safely: {error}"
+            ))
+        })?;
+        let actual_model = locked.path().to_string_lossy().into_owned();
+
+        let integrity_report = if cached_verified {
+            let profile = owner.ok_or_else(|| {
+                InferenceError::internal("A cached verification had no registered profile.")
+            })?;
+            let source = profile.artifact.source().ok_or_else(|| {
+                InferenceError::new(
+                    "artifact_pending",
+                    format!("{} has no approved artefact.", profile.display_name),
+                )
+            })?;
+            Some(acquisition::verify_locked_file(
+                &model_for_task,
+                Path::new(&model_for_task),
+                &mut locked,
+                profile,
+                source.size_bytes,
+                source.sha256,
+            )?)
+        } else {
+            None
+        };
+
+        // Header parsing uses the same open file as the digest and the child
+        // process. It seeks to the beginning after the streaming hash.
+        let info = models::inspect_open_file(&actual_model, locked.file_mut(), context_size, None);
+        Ok::<_, InferenceError>((locked, actual_model, info, integrity_report))
+    })
+    .await;
+
+    let (locked_model, actual_model, info_result, integrity_report) = match prepared {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => {
+            if cached_verified {
+                if let (Some(profile), Ok(mut ledger)) = (owner, state.verified.lock()) {
+                    ledger.mark_failed(profile.id);
+                }
+            }
+            return Err(error);
+        }
+        Err(error) => {
+            if cached_verified {
+                if let (Some(profile), Ok(mut ledger)) = (owner, state.verified.lock()) {
+                    ledger.mark_failed(profile.id);
+                }
+            }
+            return Err(InferenceError::internal(error.to_string()));
+        }
+    };
+
+    let verified = if let Some(report) = integrity_report {
+        if report.size_matches && report.digest_matches {
+            if let (Some(profile), Ok(mut ledger)) = (owner, state.verified.lock()) {
+                ledger.mark_verified(profile.id, Path::new(&model));
+            }
+            true
+        } else {
+            if let (Some(profile), Ok(mut ledger)) = (owner, state.verified.lock()) {
+                ledger.mark_failed(profile.id);
+            }
+            return Err(InferenceError::integrity_failed(format!(
+                "{} changed since it was verified. Expected {} bytes and SHA-256 {}, but found {} bytes and SHA-256 {}. Re-verify or download the approved file before loading.",
+                profile_display_name(owner),
+                report.expected_size_bytes,
+                report.expected_sha256,
+                report.size_bytes,
+                report.sha256
+            )));
+        }
+    } else {
+        false
+    };
+
+    let info = info_result?;
     let plan = loading::plan(
         selected,
-        &model,
+        &actual_model,
         settings.context_size,
         info.context_length,
         verified,
     )?;
 
-    // Refuse to start a load the machine cannot hold, before a process exists.
-    // Only applies when the file is a published artefact, because that is the
-    // only case with verified size and cache metadata.
+    // Refuse a load the machine cannot hold before disturbing the current
+    // process. This estimate is for approved profiles; unknown/custom models
+    // retain the file inspector's non-authoritative warning instead.
     if let Some(profile) = plan.gates_for() {
         let estimate = readiness::estimate(profile, settings.context_size);
 
@@ -610,53 +830,33 @@ pub async fn load_model_with_timeout(
         }
     }
 
-    // Claim the single load slot before anything is spawned. A second click
-    // while the first load is still waiting for the engine is refused instead
-    // of racing it — and must not disturb the engine that is already loaded,
-    // which is why the mark is cleared only after the claim succeeds.
-    if !state.begin_loading(plan.profile_id) {
-        return Err(InferenceError::busy());
-    }
-
-    // Starting the new engine stops the running one. Refuse while a reply is
-    // streaming rather than cutting it off. The loading marker is already set,
-    // so `start_generation` cannot begin a reply between this check and the
-    // spawn. An unreadable slot is treated as busy: fail closed.
-    let generating = state
-        .active
-        .lock()
-        .map(|slot| slot.is_some())
-        .unwrap_or(true);
-
-    if let Err(error) = registry::check_load_allowed(generating) {
-        state.finish_loading();
-        return Err(error);
-    }
-
-    // The previous attribution stops being true the moment this load starts.
-    // The recorded failure is replaced only if this attempt actually fails.
-    state.clear_loaded();
-
-    // Loading is an explicit user action: always start from a clean process so
-    // a changed model or context size actually takes effect.
-    let started = (|| -> InferenceResult<(u16, String)> {
+    // Stopping is checked, not best-effort: on failure the supervisor retains
+    // the child and its file guard, and this load does not spawn a replacement.
+    let started = {
         let mut supervisor = state.supervisor.lock().map_err(|_| lock_error())?;
-
-        supervisor.start(&runtime, &model, settings.context_size, &state.config_dir)?;
-
-        supervisor
-            .endpoint()
-            .ok_or_else(|| InferenceError::spawn_failed("The engine did not expose a port."))
-    })();
+        match supervisor.stop() {
+            Err(error) => Err(error),
+            Ok(()) => {
+                state.clear_loaded();
+                match supervisor.start_stopped(
+                    &runtime,
+                    locked_model,
+                    settings.context_size,
+                    &state.config_dir,
+                ) {
+                    Ok(()) => supervisor.endpoint().ok_or_else(|| {
+                        InferenceError::spawn_failed("The engine did not expose a port.")
+                    }),
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    };
 
     let (port, key) = match started {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            // A spawn that never produced a process still needs a recorded
-            // reason, attributed to this profile. Otherwise the engine panel
-            // reports whatever older failure happened to be stored.
             state.record_failure(plan.profile_id, error.message.clone());
-            state.finish_loading();
             return Err(error);
         }
     };
@@ -666,114 +866,60 @@ pub async fn load_model_with_timeout(
     loop {
         match process::probe_health(port, Some(&key)).await {
             process::HealthProbe::Ready => {
-                // Record which registered profile the engine is running. This is
-                // what lets `start_generation` refuse a Sonnet request while Mini
-                // is loaded, instead of answering with the wrong model. A file no
-                // profile publishes is deliberately not attributed.
                 state.set_loaded(LoadedModel {
                     profile_id: plan.profile_id,
-                    path: model.clone(),
+                    path: actual_model.clone(),
                     context_size: settings.context_size,
                 });
                 state.clear_failure();
-                state.finish_loading();
+                loading_claim.finish();
 
                 return Ok(state.status_with_dirs(version, dirs).await);
             }
             process::HealthProbe::AuthFailed => {
-                let diagnostics = {
-                    let mut supervisor = match state.supervisor.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-
-                    let diagnostics = supervisor.diagnostics();
-                    supervisor.stop();
-                    supervisor.last_error = Some(
-                        "The local engine rejected Nexora's per-launch session credential."
-                            .to_string(),
-                    );
-                    diagnostics
-                };
-
-                let message = format!(
-                    "The local engine rejected Nexora's per-launch session credential.{diagnostics}"
+                let message = stop_started_runtime(
+                    state,
+                    "The local engine rejected Nexora's per-launch session credential.",
                 );
                 state.clear_loaded();
                 state.record_failure(plan.profile_id, message.clone());
-                state.finish_loading();
-
                 return Err(InferenceError::auth_failed(message));
             }
             process::HealthProbe::Loading | process::HealthProbe::Unhealthy(_) => {}
         }
 
-        // A runtime that exits during startup must fail at once with its own
-        // message. Without this check a missing or unsupported model looked
-        // like a three-minute load and then a generic timeout.
         let failure = {
             let mut supervisor = match state.supervisor.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
-
             supervisor.poll_failure()
         };
 
         if let Some(reason) = failure {
-            let message = format!("The local engine could not load the model. {reason}");
-
-            let mut supervisor = match state.supervisor.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-
-            supervisor.stop();
-            // Remember the human-readable reason so the sidebar reports a real
-            // failure until the next successful load.
-            supervisor.last_error = Some(message.clone());
-
-            drop(supervisor);
+            let primary = format!("The local engine could not load the model. {reason}");
+            let message = stop_started_runtime(state, &primary);
             state.clear_loaded();
             state.record_failure(plan.profile_id, message.clone());
-            state.finish_loading();
-
             return Err(InferenceError::load_failed(message));
         }
 
         if Instant::now() >= deadline {
-            let diagnostics = {
-                let mut supervisor = match state.supervisor.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-
-                let diagnostics = supervisor.diagnostics();
-                supervisor.stop();
-
-                supervisor.last_error = Some(
-                    "The engine did not finish loading the model in time. The model may be too large for this machine."
-                        .to_string(),
-                );
-
-                diagnostics
-            };
-
-            let message = format!(
-                "The engine did not finish loading the model in time. The model may be too large for this machine. {diagnostics}"
-            )
-            .trim()
-            .to_string();
-
+            let message = stop_started_runtime(
+                state,
+                "The engine did not finish loading the model in time. The model may be too large for this machine.",
+            );
             state.clear_loaded();
             state.record_failure(plan.profile_id, message.clone());
-            state.finish_loading();
-
             return Err(InferenceError::timeout(message));
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+fn profile_display_name(profile: Option<&'static ModelProfile>) -> &'static str {
+    profile.map_or("The model file", |profile| profile.display_name)
 }
 
 /// Stops the engine and cancels any active generation.
@@ -791,13 +937,21 @@ pub async fn unload_model_with_dirs(
     version: String,
     dirs: &process::RuntimeSearchDirs,
 ) -> InferenceResult<AppStatus> {
-    // Stopping the child while a load is still polling would leave that load
-    // to report a failure the user did not cause. Refuse instead.
-    if state.load_in_flight() {
+    // Serialize unload against generation/load selection capture. A failed
+    // termination leaves the child, loaded attribution, session key, and model
+    // guard intact and is returned to the caller.
+    let profile_gate = state.profile_gate.lock().map_err(|_| lock_error())?;
+    let loading = state
+        .loading
+        .lock()
+        .map(|slot| slot.is_some())
+        .map_err(|_| lock_error())?;
+    if loading {
         return Err(InferenceError::busy());
     }
 
-    if let Ok(slot) = state.active.lock() {
+    {
+        let slot = state.active.lock().map_err(|_| lock_error())?;
         if let Some(active) = slot.as_ref() {
             active
                 .cancelled
@@ -808,15 +962,15 @@ pub async fn unload_model_with_dirs(
 
     {
         let mut supervisor = state.supervisor.lock().map_err(|_| lock_error())?;
-        supervisor.stop();
-        // A deliberate unload is a reset: the old error no longer describes
-        // what is running, and leaving it would make the rows report a failure
-        // that the user has already cleared.
+        supervisor.stop()?;
+        // A deliberate unload is a reset only after the child is confirmed
+        // reaped; a stop failure must retain its diagnostic.
         supervisor.last_error = None;
     }
 
     state.clear_loaded();
     state.clear_failure();
+    drop(profile_gate);
 
     Ok(state.status_with_dirs(version, dirs).await)
 }
@@ -843,48 +997,66 @@ pub async fn execute_generation(
     request: GenerateRequest,
     on_event: Channel<GenerationEvent>,
 ) -> InferenceResult<GenerationOutcome> {
-    // Enforce authenticated session gate when an account backend is configured.
-    // Offline-only builds without a configured backend still run locally under
-    // the local tamper-evident daily allowance rather than deadlocking.
-    let stored_token = auth
-        .read_session_token()
-        .map_err(|e| InferenceError::new("storage_error", e.message))?;
-
-    if stored_token.is_none() && auth.client.is_configured() {
-        return Err(InferenceError::new(
-            "unauthenticated",
-            "Sign in to your Nexora account to send messages.",
-        ));
-    }
-
     let validated = request.validate()?;
 
-    let settings = state.settings_snapshot();
+    // Capture the selected profile, loaded profile, and running context under
+    // one gate shared with selection, settings writes, load, and unload.
+    let profile_gate = state.profile_gate.lock().map_err(|_| lock_error())?;
+    let settings = state
+        .settings
+        .lock()
+        .map(|store| store.settings.clone())
+        .map_err(|_| lock_error())?;
     let selected = registry::APPROVED.selected(settings.selected_id())?;
 
-    // The UI names the profile it composed the message under. It must still be
-    // the selected one: a chat tab rendered before a switch would otherwise be
-    // answered by a different model than its composer shows.
+    // The UI names the profile it composed the message under. Missing or stale
+    // ids fail closed; no default-profile substitution is permitted.
     registry::check_request_profile(request.profile_id.as_deref(), selected)?;
 
-    // A prompt that cannot fit the configured window would be silently cut by
-    // the runtime, so the model would answer with part of the conversation
-    // missing. Refuse it here: no engine work, no usage reserved.
+    let loaded = state.loaded_model();
+    let context_size = loaded
+        .as_ref()
+        .map(|model| model.context_size)
+        .unwrap_or(settings.context_size);
+
     let prompt_tokens =
         budget::conversation_tokens(request.messages.iter().map(|turn| turn.content.as_str()));
-
-    // The engine that will answer may have been started with an older context
-    // than the settings currently hold. The running engine is what matters.
-    let context_size = state.loaded_context().unwrap_or(settings.context_size);
-
     if let Some(overflow) = budget::overflow(prompt_tokens, validated.max_tokens, context_size) {
         return Err(InferenceError::invalid_request(overflow.message()));
     }
 
-    // Refuse before spending the daily unit or touching the engine when the
-    // selection and the running model disagree. This is the guard that stops a
-    // Sonnet request from being silently answered by Mini.
-    registry::check_selection(selected, state.loaded_profile_id())?;
+    // Require an explicitly confirmed loaded model and reject profile drift
+    // before account reservation or local usage accounting.
+    registry::check_selection(
+        selected,
+        loaded.as_ref().and_then(|model| model.profile_id),
+        loaded.is_some(),
+    )?;
+
+    let cancel = Arc::new(Notify::new());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = state.active.lock().map_err(|_| lock_error())?;
+        if slot.is_some() {
+            return Err(InferenceError::busy());
+        }
+        let loading = state
+            .loading
+            .lock()
+            .map(|slot| slot.is_some())
+            .map_err(|_| lock_error())?;
+        registry::check_generation_allowed(loading)?;
+        *slot = Some(ActiveGeneration {
+            request_id: request.request_id.clone(),
+            cancel: Arc::clone(&cancel),
+            cancelled: Arc::clone(&cancelled),
+        });
+    }
+    let _generation_claim = GenerationClaim {
+        state,
+        request_id: &request.request_id,
+    };
+    drop(profile_gate);
 
     let (port, key) = {
         let mut supervisor = state.supervisor.lock().map_err(|_| lock_error())?;
@@ -917,12 +1089,27 @@ pub async fn execute_generation(
         }
     }
 
-    let cancel = Arc::new(Notify::new());
-    let cancelled = Arc::new(AtomicBool::new(false));
+    // Local inference does not require an account session. A readable session
+    // lets us record account usage opportunistically; unavailable keychain or
+    // auth state must not block local chat or grant any account entitlement.
+    let mut usage_warnings = Vec::new();
+    let stored_token = match auth.read_session_token() {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("Nexora account session lookup failed ({})", error.code);
+            usage_warnings.push(account_usage_warning(
+                "account_session_unavailable",
+                "checked",
+                &error,
+            ));
+            None
+        }
+    };
 
-    // Reserve backend-authoritative daily quota per user + plan + model first when signed in.
-    // When `nexora-auth` is temporarily unreachable (offline mode) or unconfigured,
-    // fall back cleanly to the local tamper-evident daily allowance below.
+    // Account usage is a best-effort record, not an entitlement gate for the
+    // separate local model. Only a verified session token is sent to the
+    // backend; missing/unconfigured policy, network failure or a server-side
+    // quota response cannot deny local inference.
     let server_reservation = match stored_token.as_deref() {
         Some(token) => match auth
             .client
@@ -930,63 +1117,73 @@ pub async fn execute_generation(
             .await
         {
             Ok(res) => Some((token.to_string(), res)),
-            Err(err) if err.is_session_invalid() => {
+            Err(error) if error.is_session_invalid() => {
                 auth.purge_local_session();
-                return Err(InferenceError::new(
-                    "unauthenticated",
-                    "Your session has expired. Please sign in again.",
+                eprintln!("Nexora account usage reservation rejected ({})", error.code);
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_reservation_failed",
+                    "reserved",
+                    &error,
                 ));
+                None
             }
-            Err(err) if err.code == "network_error" || err.code == "backend_unconfigured" => None,
-            Err(err) => {
-                let static_code = match err.code.as_str() {
-                    "quota_exceeded" => "quota_exceeded",
-                    "unauthenticated" | "session_expired" => "unauthenticated",
-                    "validation_error" => "invalid_request",
-                    "rate_limited" => "rate_limited",
-                    _ => "quota_check_failed",
-                };
-                return Err(InferenceError::new(static_code, err.message));
+            Err(error) if error.code == "quota_policy_unconfigured" => {
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_policy_unconfigured",
+                    "reserved",
+                    &error,
+                ));
+                None
+            }
+            Err(error) if error.code == "backend_unconfigured" => {
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_backend_unavailable",
+                    "reserved",
+                    &error,
+                ));
+                None
+            }
+            Err(error) => {
+                eprintln!("Nexora account usage reservation failed ({})", error.code);
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_reservation_failed",
+                    "reserved",
+                    &error,
+                ));
+                None
             }
         },
         None => None,
     };
 
-    // Reserve the local slot/fallback allowance under the single active-generation mutex.
-    let slot_result: InferenceResult<_> = {
-        let mut slot = state.active.lock().map_err(|_| lock_error())?;
-
-        if slot.is_some() {
-            Err(InferenceError::busy())
-        } else if let Err(err) = registry::check_generation_allowed(state.load_in_flight()) {
-            Err(err)
-        } else {
-            let charge = if server_reservation.is_none() {
-                Some(usage.reserve(SystemTime::now())?)
-            } else {
-                None
-            };
-
-            *slot = Some(ActiveGeneration {
-                request_id: request.request_id.clone(),
-                cancel: Arc::clone(&cancel),
-                cancelled: Arc::clone(&cancelled),
-            });
-
-            Ok(charge)
-        }
-    };
-
-    let charge = match slot_result {
-        Ok(c) => c,
-        Err(err) => {
-            if let Some((ref token, ref res)) = server_reservation {
-                let _ = auth
-                    .client
-                    .settle_usage(token, &res.reservation_id, false)
-                    .await;
+    // Always keep the device-local accounting path separate from account
+    // reservations. Production currently has no local limit, so this records
+    // accepted generations without turning auth/backend availability into a
+    // gate for signed-out or offline chat.
+    let charge = match usage.reserve(SystemTime::now()) {
+        Ok(charge) => charge,
+        Err(error) => {
+            let mut error: InferenceError = error.into();
+            if let Some((token, reservation)) = server_reservation.as_ref() {
+                if let Err(settle_error) =
+                    settle_account_usage(auth, token, &reservation.reservation_id, false).await
+                {
+                    if settle_error.is_session_invalid() {
+                        auth.purge_local_session();
+                    }
+                    eprintln!(
+                        "Nexora account usage reservation release failed ({})",
+                        settle_error.code
+                    );
+                    usage_warnings.push(account_usage_warning(
+                        "account_usage_release_failed",
+                        "released",
+                        &settle_error,
+                    ));
+                }
             }
-            return Err(err);
+            append_usage_warnings(&mut error, &usage_warnings);
+            return Err(error);
         }
     };
 
@@ -1006,8 +1203,6 @@ pub async fn execute_generation(
         &accepted,
     )
     .await;
-
-    state.finish_generation(&request.request_id);
 
     // If the sidecar process died unexpectedly during generation, reap it immediately,
     // clear `state.loaded`, and surface a dedicated `process_exited` error rather than
@@ -1038,30 +1233,59 @@ pub async fn execute_generation(
         }
     };
 
-    // Charged only once the engine accepted the request and began streaming.
-    // A failure before that point releases the reservation for free, so a
-    // missing model, a dead engine or a rejected request never costs a unit.
+    // Charge only after the engine accepted the request and began streaming.
+    // Settlement is idempotent, retried once for transient failures, and any
+    // remaining accounting error is surfaced as a warning without undoing a
+    // successful local response.
     if accepted.load(Ordering::SeqCst) {
-        if let Some((ref token, ref res)) = server_reservation {
-            let _ = auth
-                .client
-                .settle_usage(token, &res.reservation_id, true)
-                .await;
+        if let Some((token, reservation)) = server_reservation.as_ref() {
+            if let Err(error) =
+                settle_account_usage(auth, token, &reservation.reservation_id, true).await
+            {
+                if error.is_session_invalid() {
+                    auth.purge_local_session();
+                }
+                eprintln!("Nexora account usage settlement failed ({})", error.code);
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_settlement_failed",
+                    "settled",
+                    &error,
+                ));
+            }
         }
-        if let Some(charge) = charge {
-            let _ = charge.commit();
+        if let Err(error) = charge.commit() {
+            eprintln!("Nexora local usage recording failed ({})", error.code);
+            usage_warnings.push(local_usage_warning(error));
         }
     } else {
-        if let Some((ref token, ref res)) = server_reservation {
-            let _ = auth
-                .client
-                .settle_usage(token, &res.reservation_id, false)
-                .await;
+        if let Some((token, reservation)) = server_reservation.as_ref() {
+            if let Err(error) =
+                settle_account_usage(auth, token, &reservation.reservation_id, false).await
+            {
+                if error.is_session_invalid() {
+                    auth.purge_local_session();
+                }
+                eprintln!("Nexora account usage reservation release failed ({})", error.code);
+                usage_warnings.push(account_usage_warning(
+                    "account_usage_release_failed",
+                    "released",
+                    &error,
+                ));
+            }
         }
         drop(charge);
     }
 
-    outcome
+    match outcome {
+        Ok(mut completed) => {
+            completed.usage_warnings.extend(usage_warnings);
+            Ok(completed)
+        }
+        Err(mut error) => {
+            append_usage_warnings(&mut error, &usage_warnings);
+            Err(error)
+        }
+    }
 }
 
 /// Stops the generation with this id. Returns whether a match was found.
@@ -1070,16 +1294,15 @@ pub fn cancel_generation(state: State<'_, InferenceState>, request_id: String) -
     state.cancel_generation(&request_id)
 }
 
-/// Downloads the approved Nexora Mini artefact into a folder and verifies it.
+/// Downloads the selected approved Nexora artefact into application data and verifies it.
 ///
 /// Never called on startup: the user presses a button, sees progress, and can
-/// cancel. The file is written under a temporary name and renamed only after
-/// its length and SHA-256 match the registry.
+/// cancel. The file is written under a temporary name and published without
+/// replacing an existing file only after its length and SHA-256 match the registry.
 #[tauri::command]
 pub async fn start_model_download(
     app: AppHandle,
     state: State<'_, InferenceState>,
-    target_dir: Option<String>,
     profile_id: Option<String>,
     on_event: Channel<DownloadEvent>,
 ) -> InferenceResult<DownloadOutcome> {
@@ -1095,7 +1318,6 @@ pub async fn start_model_download(
 
     execute_model_download(
         &state,
-        target_dir,
         profile_id,
         default_dir,
         None,
@@ -1105,11 +1327,12 @@ pub async fn start_model_download(
     .await
 }
 
-pub async fn execute_model_download(
+/// Core implementation with an injected app-data model directory for tests.
+/// The Tauri command never accepts a destination path from IPC.
+async fn execute_model_download(
     state: &InferenceState,
-    target_dir: Option<String>,
     profile_id: Option<String>,
-    default_dir: PathBuf,
+    directory: PathBuf,
     plan_override: Option<acquisition::DownloadPlan>,
     policy: acquisition::DownloadPolicy,
     on_event: &Channel<DownloadEvent>,
@@ -1123,15 +1346,8 @@ pub async fn execute_model_download(
         None => acquisition::plan_for(profile)?,
     };
 
-    let directory = match target_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => PathBuf::from(value),
-        None => default_dir,
-    };
-
+    // Production supplies only `app_data_dir()/models`; tests inject a private
+    // temporary directory. No path is accepted from the desktop UI.
     acquisition::validate_download_directory(&directory)?;
 
     std::fs::create_dir_all(&directory).map_err(|error| {
@@ -1143,19 +1359,62 @@ pub async fn execute_model_download(
 
     let final_path = directory.join(&plan.file_name);
 
-    // Avoid unnecessary re-downloads when the exact artifact is already on disk
-    // and verified against its digest in this session.
+    // An existing exact-size file with a cached success is only a candidate for
+    // the no-op path. Re-hash its current bytes through one locked handle before
+    // returning success; cached verification alone is never new evidence.
     let exact_present = std::fs::symlink_metadata(&final_path)
         .map(|meta| meta.file_type().is_file() && meta.len() == plan.size_bytes)
         .unwrap_or(false);
     if exact_present && state.verification_status(profile.id, Some(&final_path)).0 {
-        return Ok(DownloadOutcome {
-            path: Some(final_path.to_string_lossy().into_owned()),
-            file_name: plan.file_name,
-            size_bytes: plan.size_bytes,
-            sha256: plan.sha256,
-            cancelled: false,
-        });
+        if let Ok(mut ledger) = state.verified.lock() {
+            ledger.begin_verifying(profile.id);
+        }
+
+        let hash_path = final_path.clone();
+        let fresh = tauri::async_runtime::spawn_blocking(move || {
+            acquisition::hash_file_with_size(&hash_path, &AtomicBool::new(false))
+        })
+        .await
+        .map_err(|error| InferenceError::internal(error.to_string()))
+        .and_then(|result| result);
+
+        match fresh {
+            Ok((size_bytes, sha256))
+                if size_bytes == plan.size_bytes
+                    && sha256.eq_ignore_ascii_case(&plan.sha256) =>
+            {
+                if let Ok(mut ledger) = state.verified.lock() {
+                    ledger.mark_verified(profile.id, &final_path);
+                }
+
+                return Ok(DownloadOutcome {
+                    path: Some(final_path.to_string_lossy().into_owned()),
+                    file_name: plan.file_name,
+                    size_bytes,
+                    sha256,
+                    cancelled: false,
+                });
+            }
+            Ok((size_bytes, sha256)) => {
+                if let Ok(mut ledger) = state.verified.lock() {
+                    ledger.mark_failed(profile.id);
+                }
+                return Err(InferenceError::integrity_failed(format!(
+                    "{} no longer matches the approved download (expected {} bytes and SHA-256 {}, found {} bytes and SHA-256 {}). Move or remove the file before downloading again.",
+                    final_path.display(),
+                    plan.size_bytes,
+                    plan.sha256,
+                    size_bytes,
+                    sha256
+                )));
+            }
+            Err(error) => {
+                if let Ok(mut ledger) = state.verified.lock() {
+                    ledger.mark_failed(profile.id);
+                }
+                return Err(error);
+            }
+        }
     }
 
     // Never overwrite or auto-delete an existing user model file.
@@ -1326,6 +1585,90 @@ pub async fn verify_model_inner(
     Ok(report)
 }
 
+/// Rechecks a registered profile at load time only when this exact path had
+/// previously been verified in the current session. Unregistered models and
+/// first-time registered files still follow the existing explicit verification
+/// flow in `loading::plan`.
+async fn verify_cached_profile_for_load(
+    state: &InferenceState,
+    path: &str,
+    owner: Option<&'static registry::ModelProfile>,
+) -> InferenceResult<bool> {
+    let Some(profile) = owner else {
+        return Ok(false);
+    };
+
+    if !state
+        .verification_status(profile.id, Some(Path::new(path)))
+        .0
+    {
+        return Ok(false);
+    }
+
+    let report = verify_model_inner(state, path.to_string(), Some(profile.id.to_string())).await?;
+
+    if !report.size_matches || !report.digest_matches {
+        return Err(InferenceError::integrity_failed(format!(
+            "{} changed since it was verified. Expected {} bytes and SHA-256 {}, but found {} bytes and SHA-256 {}. Re-verify or download the approved file before loading.",
+            profile.display_name,
+            report.expected_size_bytes,
+            report.expected_sha256,
+            report.size_bytes,
+            report.sha256
+        )));
+    }
+
+    Ok(true)
+}
+
+#[cfg(test)]
+mod registered_model_verification_tests {
+    use super::*;
+
+    fn temporary_directory() -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("nexora-load-verification-{nonce}"));
+        std::fs::create_dir_all(&path).expect("create test directory");
+        path
+    }
+
+    #[tokio::test]
+    async fn load_rehashes_a_registered_path_after_same_path_mutation() {
+        let root = temporary_directory();
+        let profile = &registry::NEXORA_MINI;
+        let source = profile.artifact.source().expect("approved Mini source");
+        let model_path = root.join(source.file_name);
+        std::fs::write(&model_path, b"previous bytes from an earlier check")
+            .expect("write initial test model");
+
+        let state = InferenceState::load(root.join("config"));
+        state
+            .verified
+            .lock()
+            .expect("lock verification ledger")
+            .mark_verified(profile.id, &model_path);
+
+        // Keep the same path but replace the bytes after the cached success.
+        std::fs::write(&model_path, b"modified bytes at the same path").expect("mutate test model");
+
+        let error =
+            verify_cached_profile_for_load(&state, &model_path.to_string_lossy(), Some(profile))
+                .await
+                .expect_err("stale verification must not authorize loading");
+
+        assert_eq!(error.code, "integrity_failed");
+        assert!(error.message.contains("changed since it was verified"));
+        let (verified, failed) = state.verification_status(profile.id, Some(&model_path));
+        assert!(!verified, "failed re-hash clears the old success");
+        assert!(failed, "readiness must report the digest failure");
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -1377,6 +1720,83 @@ mod tests {
         (channel, captured)
     }
 
+    fn spawn_failing_usage_backend() -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind usage mock");
+        let address = listener.local_addr().expect("usage mock address");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_calls = Arc::clone(&calls);
+        let handle = std::thread::spawn(move || {
+            // One reservation, followed by the initial settlement attempt and
+            // its single transient retry.
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().expect("accept usage request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("set request timeout");
+                let mut request = Vec::new();
+                let mut expected_total = None;
+                loop {
+                    let mut buffer = [0u8; 4096];
+                    let count = stream.read(&mut buffer).expect("read usage request");
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    if expected_total.is_none() {
+                        if let Some(header_end) = request
+                            .windows(4)
+                            .position(|window| window == b"\r\n\r\n")
+                        {
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let length = headers
+                                .lines()
+                                .filter_map(|line| line.split_once(':'))
+                                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            expected_total = Some(header_end + 4 + length);
+                        }
+                    }
+                    if expected_total.is_some_and(|total| request.len() >= total) {
+                        break;
+                    }
+                }
+                thread_calls.fetch_add(1, Ordering::SeqCst);
+                let request_text = String::from_utf8_lossy(&request);
+                let path = request_text
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("");
+                let (status, body) = if path.ends_with("/usage/reserve") {
+                    (
+                        "200 OK",
+                        r#"{"reservationId":"reservation-test","planId":"free","modelId":"nexora-mini","dailyLimit":3,"remainingAfter":2,"resetsAtUtc":"2026-10-25T00:00:00Z","replayed":false}"#,
+                    )
+                } else {
+                    (
+                        "503 Service Unavailable",
+                        r#"{"error":{"code":"dependency_unavailable","message":"Usage storage is temporarily unavailable."}}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write usage response");
+            }
+        });
+        (format!("http://{address}"), calls, handle)
+    }
+
     #[derive(Default)]
     struct TestMemVault(StdMutex<Option<String>>);
 
@@ -1392,6 +1812,22 @@ mod tests {
 
         fn delete_token(&self) -> crate::auth::AuthResult<()> {
             *self.0.lock().expect("vault lock") = None;
+            Ok(())
+        }
+    }
+
+    struct FailingReadVault;
+
+    impl crate::auth::commands::CredentialVault for FailingReadVault {
+        fn save_token(&self, _token: &str) -> crate::auth::AuthResult<()> {
+            Ok(())
+        }
+
+        fn get_token(&self) -> crate::auth::AuthResult<Option<String>> {
+            Err(crate::auth::AuthError::storage("The test keyring is unavailable."))
+        }
+
+        fn delete_token(&self) -> crate::auth::AuthResult<()> {
             Ok(())
         }
     }
@@ -1623,18 +2059,19 @@ server.serve_forever()
 
         let usage = UsageState::load(&root.join("usage"));
 
-        // 1. Configured backend with NO signed-in user rejects before touching engine.
+        // 1. A configured but unreachable account backend and a signed-out
+        // desktop still allow the independent local chat path.
         let unauth_online = AuthState::with_vault(
             AuthApiClient::with_base_url("http://127.0.0.1:9"),
             Arc::new(TestMemVault::default()),
         );
         let (ch0, _) = event_collector();
-        let unauth_err = execute_generation(
+        let signed_out = execute_generation(
             &state,
             &usage,
             &unauth_online,
             GenerateRequest {
-                request_id: "req-unauth".into(),
+                request_id: "req-signed-out".into(),
                 profile_id: Some("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m".into()),
                 messages: vec![ChatTurn {
                     role: "user".into(),
@@ -1646,11 +2083,41 @@ server.serve_forever()
             ch0,
         )
         .await
-        .expect_err("must require sign-in when backend is configured and no local session exists");
-        assert_eq!(unauth_err.code, "unauthenticated");
+        .expect("signed-out local generation must not require an account backend");
+        assert!(!signed_out.cancelled);
+        assert!(signed_out.usage_warnings.is_empty());
 
-        // 2. Signed-in user when online auth server is completely unreachable (`127.0.0.1:9`)
-        //    streams tokens cleanly offline using local tamper-evident daily allowance!
+        let keyring_unavailable = AuthState::with_vault(
+            AuthApiClient::with_base_url("http://127.0.0.1:9"),
+            Arc::new(FailingReadVault),
+        );
+        let (ch_keyring, _) = event_collector();
+        let keyring_local = execute_generation(
+            &state,
+            &usage,
+            &keyring_unavailable,
+            GenerateRequest {
+                request_id: "req-keyring-unavailable".into(),
+                profile_id: Some("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m".into()),
+                messages: vec![ChatTurn {
+                    role: "user".into(),
+                    content: "Write add()".into(),
+                }],
+                max_tokens: Some(128),
+                temperature: Some(0.1),
+            },
+            ch_keyring,
+        )
+        .await
+        .expect("keyring failure must not block local inference");
+        assert!(!keyring_local.cancelled);
+        assert_eq!(
+            keyring_local.usage_warnings[0].code,
+            "account_session_unavailable"
+        );
+
+        // 2. A signed-in user whose auth server is unreachable also receives a
+        // local reply; account-usage failure is surfaced separately as a warning.
         unauth_online
             .persist_session_token("offline-cached-session-token")
             .expect("seed local keyring token");
@@ -1676,6 +2143,11 @@ server.serve_forever()
 
         assert!(!outcome.cancelled);
         assert_eq!(outcome.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(outcome.usage_warnings.len(), 1);
+        assert_eq!(
+            outcome.usage_warnings[0].code,
+            "account_usage_reservation_failed"
+        );
 
         let wire_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&wire_file).expect("wire body"))
@@ -1699,11 +2171,56 @@ server.serve_forever()
             .collect();
         assert_eq!(assembled, "fn add(a: i32, b: i32) -> i32 { a + b }");
 
-        // 3. Standalone unconfigured desktop build (`EndpointState::Unconfigured`) also works offline.
+        // 3. A reservation succeeds but both idempotent settlement attempts
+        // fail. The local reply still completes and returns a typed warning.
+        let (quota_url, quota_calls, quota_thread) = spawn_failing_usage_backend();
+        let quota_auth = AuthState::with_vault(
+            AuthApiClient::with_base_url(quota_url),
+            Arc::new(TestMemVault::default()),
+        );
+        quota_auth
+            .persist_session_token("mock-account-session-token")
+            .expect("seed mock account session");
+        let (ch_settlement, _) = event_collector();
+        let settled_locally = execute_generation(
+            &state,
+            &usage,
+            &quota_auth,
+            GenerateRequest {
+                request_id: "req-settlement-warning".into(),
+                profile_id: Some("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m".into()),
+                messages: vec![ChatTurn {
+                    role: "user".into(),
+                    content: "Write add()".into(),
+                }],
+                max_tokens: Some(128),
+                temperature: Some(0.1),
+            },
+            ch_settlement,
+        )
+        .await
+        .expect("account settlement failure must not discard a local reply");
+        assert!(!settled_locally.cancelled);
+        assert_eq!(settled_locally.usage_warnings.len(), 1);
+        assert_eq!(
+            settled_locally.usage_warnings[0].code,
+            "account_usage_settlement_failed"
+        );
+        assert!(settled_locally.usage_warnings[0]
+            .message
+            .contains("conversation history are unaffected"));
+        assert_eq!(quota_calls.load(Ordering::SeqCst), 3);
+        quota_thread.join().expect("usage mock thread");
+
+        // 4. A cached token with an unconfigured account backend does not gate
+        // local inference, and the skipped account reservation is explicit.
         let unconfigured_auth = AuthState::with_vault(
             AuthApiClient::unconfigured(),
             Arc::new(TestMemVault::default()),
         );
+        unconfigured_auth
+            .persist_session_token("cached-token-with-no-backend")
+            .expect("seed local session");
         let (ch_standalone, _) = event_collector();
         let standalone_ok = execute_generation(
             &state,
@@ -1724,8 +2241,13 @@ server.serve_forever()
         .await
         .expect("standalone offline build must run local AI without deadlocking");
         assert!(!standalone_ok.cancelled);
+        assert_eq!(standalone_ok.usage_warnings.len(), 1);
+        assert_eq!(
+            standalone_ok.usage_warnings[0].code,
+            "account_usage_backend_unavailable"
+        );
 
-        // 4. Concurrency guards (second generate -> `busy`; load while generating -> `busy`) + Cancellation!
+        // 5. Concurrency guards (second generate -> `busy`; load while generating -> `busy`) + Cancellation!
         let (ch_slow, _) = event_collector();
         let slow_fut = execute_generation(
             &state,
@@ -2141,24 +2663,9 @@ http.server.HTTPServer((host, port), H).serve_forever()
         assert_eq!(initial_mini.state, ReadinessState::ReadyToDownload);
 
         // 2. Unsafe traversal destination paths are rejected before touching disk.
-        let ch_bad = download_channel();
-        let traversal_err = execute_model_download(
-            &state,
-            Some(
-                models_dir
-                    .join("..")
-                    .join("escape")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            Some(registry::NEXORA_MINI_ID.into()),
-            models_dir.clone(),
-            None,
-            acquisition::DownloadPolicy::loopback_for_tests(Duration::from_secs(1)),
-            &ch_bad,
-        )
-        .await
-        .expect_err("traversal destination rejected");
+        let traversal = models_dir.join("..").join("escape");
+        let traversal_err = acquisition::validate_download_directory(&traversal)
+            .expect_err("traversal destination rejected");
         assert_eq!(traversal_err.code, "invalid_request");
 
         // 3. Slow download -> duplicate concurrent download returns `busy` -> user cancels ->
@@ -2198,7 +2705,6 @@ http.server.HTTPServer((host, port), H).serve_forever()
         let slow_plan_dup = slow_plan.clone();
         let mut first_fut = std::pin::pin!(execute_model_download(
             &state,
-            None,
             Some(registry::NEXORA_MINI_ID.into()),
             models_dir.clone(),
             Some(slow_plan),
@@ -2227,7 +2733,6 @@ http.server.HTTPServer((host, port), H).serve_forever()
                 // Duplicate concurrent download is refused with `busy`.
                 let dup_err = execute_model_download(
                     &state,
-                    None,
                     Some(registry::NEXORA_MINI_ID.into()),
                     models_dir.clone(),
                     Some(slow_plan_dup),
@@ -2291,7 +2796,6 @@ http.server.HTTPServer((host, port), H).serve_forever()
         let ch_retry = download_channel();
         let promoted = execute_model_download(
             &state,
-            None,
             Some(registry::NEXORA_MINI_ID.into()),
             models_dir.clone(),
             Some(ok_plan.clone()),
@@ -2306,7 +2810,6 @@ http.server.HTTPServer((host, port), H).serve_forever()
         // Calling download again when already verified returns immediately without hitting network!
         let skipped = execute_model_download(
             &state,
-            None,
             Some(registry::NEXORA_MINI_ID.into()),
             models_dir.clone(),
             Some(ok_plan),
@@ -2374,7 +2877,6 @@ http.server.HTTPServer((host, port), H).serve_forever()
         });
         let sonnet_err = execute_model_download(
             &state,
-            None,
             Some(registry::NEXORA_SONNET_ID.into()),
             models_dir.clone(),
             Some(acquisition::DownloadPlan {
@@ -2538,6 +3040,28 @@ Threaded((host, port), H).serve_forever()
             .await
             .expect("load custom mini");
 
+        // Missing profile ids must not fall back to the configured Mini profile.
+        let (ch_missing, _) = event_collector();
+        let missing_err = execute_generation(
+            &state,
+            &usage,
+            &offline_auth,
+            GenerateRequest {
+                request_id: "req-missing-profile".into(),
+                profile_id: None,
+                messages: vec![ChatTurn {
+                    role: "user".into(),
+                    content: "hello".into(),
+                }],
+                max_tokens: Some(64),
+                temperature: Some(0.2),
+            },
+            ch_missing,
+        )
+        .await
+        .expect_err("missing profile rejected without default substitution");
+        assert_eq!(missing_err.code, "model_mismatch");
+
         // Unknown profile id -> rejected cleanly with typed `model_mismatch`.
         let (ch_unknown, _) = event_collector();
         let unknown_err = execute_generation(
@@ -2642,6 +3166,10 @@ Threaded((host, port), H).serve_forever()
                         }
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
+                    assert!(state.active.lock().expect("active generation").is_some());
+                    let switch_error = ensure_switch_allowed(&state, &registry::NEXORA_SONNET)
+                        .expect_err("selection cannot change while generation is reserved");
+                    assert_eq!(switch_error.code, "busy");
                     // Stale cancellation targeting an earlier generation returns false and keeps live stream healthy!
                     assert!(!state.cancel_generation("req-stale-previous"));
                 } => {

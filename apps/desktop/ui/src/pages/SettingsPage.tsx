@@ -123,17 +123,17 @@ export function SettingsPage({
           </div>
           <div className="settings-row settings-row--static">
             <span>
-              <span className="settings-row__label">Plans, Subscriptions & Licensing</span>
+              <span className="settings-row__label">Plans & Offline Licensing</span>
               <span className="settings-row__hint">
-                Manage your Nexora subscription plan, daily model quotas, or air-gapped licence key.
+                Review account-reported plan status and the future-plan concept, or manage an issued offline licence key separately.
               </span>
             </span>
             <div style={{ display: "flex", gap: 8 }}>
               <RouterLink to="plans" className="button button--primary button--sm">
-                Plans & Billing
+                Plans & Premium
               </RouterLink>
               <RouterLink to="licensing" className="button button--ghost button--sm">
-                <Icon name="shield" size={12} /> View Plans & Licences
+                <Icon name="shield" size={12} /> Offline Licence Keys
               </RouterLink>
             </div>
           </div>

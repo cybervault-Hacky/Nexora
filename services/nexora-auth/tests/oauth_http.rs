@@ -28,9 +28,10 @@ async fn post_json(uri: &str, json: &str) -> (StatusCode, String) {
 
 fn valid_body() -> String {
     format!(
-        r#"{{"code":"4/0AeanS0b-code","codeVerifier":"{}","state":"{}","redirectUri":"http://127.0.0.1:49152/callback"}}"#,
+        r#"{{"code":"4/0AeanS0b-code","codeVerifier":"{}","state":"{}","redirectUri":"http://127.0.0.1:49152/callback","nonce":"{}"}}"#,
         "v".repeat(43),
-        "s".repeat(32)
+        "s".repeat(32),
+        "n".repeat(22)
     )
 }
 
@@ -40,8 +41,9 @@ async fn exchange_validates_shapes_before_any_state_or_provider_work() {
     let (status, body) = post_json(
         "/v1/auth/google/exchange",
         &format!(
-            r#"{{"code":"x","codeVerifier":"short","state":"{}","redirectUri":"http://127.0.0.1:1/callback"}}"#,
-            "s".repeat(32)
+            r#"{{"code":"x","codeVerifier":"short","state":"{}","redirectUri":"http://127.0.0.1:1/callback","nonce":"{}"}}"#,
+            "s".repeat(32),
+            "n".repeat(22)
         ),
     )
     .await;
@@ -52,12 +54,26 @@ async fn exchange_validates_shapes_before_any_state_or_provider_work() {
     let (status, _) = post_json(
         "/v1/auth/google/exchange",
         &format!(
-            r#"{{"code":"x","codeVerifier":"{}","state":"tiny","redirectUri":"http://127.0.0.1:1/callback"}}"#,
-            "v".repeat(43)
+            r#"{{"code":"x","codeVerifier":"{}","state":"tiny","redirectUri":"http://127.0.0.1:1/callback","nonce":"{}"}}"#,
+            "v".repeat(43),
+            "n".repeat(22)
         ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // OIDC nonce is required, not an optional downgrade path.
+    let (status, body) = post_json(
+        "/v1/auth/google/exchange",
+        &format!(
+            r#"{{"code":"x","codeVerifier":"{}","state":"{}","redirectUri":"http://127.0.0.1:49152/callback"}}"#,
+            "v".repeat(43),
+            "s".repeat(32)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("validation_failed"), "body: {body}");
 
     // Unknown fields rejected.
     let (status, _) = post_json(
@@ -75,9 +91,10 @@ async fn redirect_uri_mismatch_is_refused_generically() {
     let (status, body) = post_json(
         "/v1/auth/google/exchange",
         &format!(
-            r#"{{"code":"x","codeVerifier":"{}","state":"{}","redirectUri":"https://evil.example.test/callback"}}"#,
+            r#"{{"code":"x","codeVerifier":"{}","state":"{}","redirectUri":"https://evil.example.test/callback","nonce":"{}"}}"#,
             "v".repeat(43),
-            "s".repeat(32)
+            "s".repeat(32),
+            "n".repeat(22)
         ),
     )
     .await;

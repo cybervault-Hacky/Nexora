@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   authChangePassword,
   authGetSession,
+  billingListPlans,
   authGoogleBegin,
   authGoogleCancel,
   authLogin,
@@ -178,6 +179,12 @@ describe("Phase 24 — Desktop Authentication IPC Contracts", () => {
     const session = await authGetSession();
     expect(session.authenticated).toBe(false);
     expect(session.user).toBeNull();
+    await expect(billingListPlans()).resolves.toEqual({
+      paymentConfigured: false,
+      provider: "unconfigured",
+      plans: [],
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("billing_list_plans");
 
     await expect(authLogin({ email: "a@b.c", password: "p" })).rejects.toMatchObject({
       code: "desktop_required",

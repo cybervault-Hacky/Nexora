@@ -6,11 +6,11 @@
 //! pass through before it reaches stderr, plus the [`REDACTED`] placeholder
 //! used by the custom `Debug` impls of secret-bearing types.
 //!
-//! The service deliberately logs almost nothing (startup capability line and
-//! the plan-mandated password-change audit metadata); scrubbing is applied
-//! anyway so that future log lines cannot casually leak. The
-//! `tests/secret_leakage.rs` suite asserts the list works and that errors,
-//! bodies, and `Debug` output never carry secret material.
+//! The service deliberately logs almost nothing (startup capability and
+//! password-change audit action/outcome); subject identifiers are withheld
+//! from stderr. Scrubbing is applied anyway so future log lines cannot
+//! casually leak. The `tests/secret_leakage.rs` suite asserts the list works
+//! and that errors, bodies, and `Debug` output never carry secret material.
 
 /// Placeholder printed in place of any secret-bearing value.
 pub const REDACTED: &str = "<redacted>";
@@ -22,18 +22,32 @@ pub const REDACTED: &str = "<redacted>";
 const SCRUB_KEYS: &[&str] = &[
     "password",
     "passwd",
+    "access_token",
+    "refresh_token",
+    "id_token",
     "token",
     "authorization",
     "cookie",
     "code_verifier",
+    "authorization_code",
     "code",
-    "secret",
     "client_secret",
+    "webhook_secret",
+    "webhook_signature",
+    "secret_key",
+    "private_key",
+    "api_key",
+    "signature",
+    "v1",
+    "v0",
+    "secret",
     "state",
     "nonce",
     "key",
     "hash",
     "session",
+    "database_url",
+    "connection_string",
     "url",
 ];
 
@@ -53,12 +67,12 @@ fn find_scrub_pair(line: &str) -> Option<(usize, usize)> {
                 || !lowered[..key_start]
                     .chars()
                     .next_back()
-                    .map(|c| c.is_ascii_alphanumeric() || c == '_')
+                    .map(|c| c.is_ascii_alphanumeric())
                     .unwrap_or(false);
             let boundary_after = !lowered[after_key..]
                 .chars()
                 .next()
-                .map(|c| c.is_ascii_alphanumeric() || c == '_')
+                .map(|c| c.is_ascii_alphanumeric())
                 .unwrap_or(false);
             if boundary_before && boundary_after {
                 let rest = &line[after_key..];
@@ -132,18 +146,17 @@ pub fn scrub(line: &str) -> String {
     out
 }
 
-/// Audit metadata line (plan §4: password change is "audit-logged (metadata
-/// only)"). Values pass through [`scrub`] first; callers must only pass
-/// non-secret metadata (action names, ids, outcomes) — never emails, tokens,
-/// or credentials. Action names use underscores (`password_change`) so they
-/// are not misread as `key=value` pairs.
+/// Format the plan-mandated password-change audit line without writing an
+/// account identifier to stderr. Action names use underscores
+/// (`password_change`) so they are not misread as scrub-list key/value pairs.
+fn audit_line(action: &str, _subject_id: &str, outcome: &str) -> String {
+    scrub(&format!(
+        "nexora-auth: audit action={action} subject={REDACTED} outcome={outcome}"
+    ))
+}
+
 pub fn audit(action: &str, subject_id: &str, outcome: &str) {
-    eprintln!(
-        "{}",
-        scrub(&format!(
-            "nexora-auth: audit action={action} subject={subject_id} outcome={outcome}"
-        ))
-    );
+    eprintln!("{}", audit_line(action, subject_id, outcome));
 }
 
 #[cfg(test)]
@@ -188,11 +201,31 @@ mod tests {
     }
 
     #[test]
-    fn audit_metadata_passes_through_scrubbed() {
-        assert_eq!(
-            scrub("nexora-auth: audit action=password_change subject=abc outcome=ok"),
-            "nexora-auth: audit action=password_change subject=abc outcome=ok"
+    fn database_urls_and_payment_signatures_are_scrubbed() {
+        let database = scrub(
+            "NEXORA_AUTH_DATABASE_URL=postgres://db_user:SENTINEL_db_pass@db.internal/app",
         );
+        assert!(!database.contains("SENTINEL_db_pass"));
+        assert!(!database.contains("db_user"));
+
+        let signature = scrub(
+            "Stripe-Signature: t=123456,v1=SENTINEL_payment_signature",
+        );
+        assert!(!signature.contains("SENTINEL_payment_signature"));
+
+        let environment_secret = scrub("STRIPE_WEBHOOK_SECRET=SENTINEL_webhook_secret");
+        assert!(!environment_secret.contains("SENTINEL_webhook_secret"));
+    }
+
+    #[test]
+    fn audit_metadata_redacts_subject_identifiers() {
+        let line = audit_line("password_change", "SENTINEL_user_id", "ok");
+        assert_eq!(
+            line,
+            "nexora-auth: audit action=password_change subject=<redacted> outcome=ok"
+        );
+        assert!(!line.contains("SENTINEL"));
+
         // A careless caller passing a secret-looking value is still safe.
         let careless = scrub("nexora-auth: audit action=password_change token=LEAK outcome=ok");
         assert!(!careless.contains("LEAK"));

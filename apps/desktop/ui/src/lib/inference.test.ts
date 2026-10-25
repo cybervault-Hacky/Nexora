@@ -151,7 +151,7 @@ describe("outside the desktop shell", () => {
   });
 
   it("cannot start a model download from a browser preview", async () => {
-    await expect(startModelDownload(null, "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", () => {})).rejects.toEqual({
+    await expect(startModelDownload("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", () => {})).rejects.toEqual({
       code: "desktop_only",
       message: expect.stringContaining("desktop app"),
     });
@@ -195,7 +195,7 @@ describe("inside the desktop shell", () => {
   });
 
   it("sends the streaming request and channel under the names Rust expects", async () => {
-    invoke.mockResolvedValue({ requestId: "req-1", finishReason: "stop", cancelled: false });
+    invoke.mockResolvedValue({ requestId: "req-1", finishReason: "stop", cancelled: false, usageWarnings: [] });
 
     const request = {
       requestId: "req-1",
@@ -226,7 +226,7 @@ describe("inside the desktop shell", () => {
         args.onEvent.onmessage?.({ type: "delta", requestId: "req-1" });
         args.onEvent.onmessage?.({ type: "finished" });
 
-        return { requestId: "req-1", finishReason: "stop", cancelled: false };
+        return { requestId: "req-1", finishReason: "stop", cancelled: false, usageWarnings: [] };
       },
     );
 
@@ -330,19 +330,18 @@ describe("inside the desktop shell", () => {
     const events: unknown[] = [];
 
     await expect(
-      startModelDownload(null, "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", (event: unknown) => events.push(event)),
+      startModelDownload("nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", (event: unknown) => events.push(event)),
     ).resolves.toEqual(outcome);
 
     const [command, args] = invoke.mock.calls[0] as [string, Record<string, unknown>];
 
     expect(command).toBe("start_model_download");
-    expect(Object.keys(args).sort()).toEqual(["onEvent", "profileId", "targetDir"]);
-    expect(args.targetDir).toBeNull();
+    expect(Object.keys(args).sort()).toEqual(["onEvent", "profileId"]);
     expect(args.onEvent).toBeInstanceOf(Channel);
     expect(events).toEqual([{ type: "progress", received: 4, total: 10 }]);
   });
 
-  it("sends an explicit download folder when one is chosen", async () => {
+  it("selects a profile without accepting a caller-controlled filesystem path", async () => {
     invoke.mockResolvedValue({
       path: null,
       fileName: "m.gguf",
@@ -351,13 +350,12 @@ describe("inside the desktop shell", () => {
       cancelled: true,
     });
 
-    await startModelDownload("D:/Models", "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m", () => {});
+    const profileId = "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m";
+    await startModelDownload(profileId, () => {});
 
-    expect(invoke).toHaveBeenCalledWith("start_model_download", {
-      targetDir: "D:/Models",
-      profileId: "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m",
-      onEvent: expect.anything(),
-    });
+    const [, args] = invoke.mock.calls[0] as [string, Record<string, unknown>];
+    expect(args.profileId).toBe(profileId);
+    expect(args).not.toHaveProperty("targetDir");
   });
 
   it("reports a failed cancel as false and a stopped download as cancelled", async () => {

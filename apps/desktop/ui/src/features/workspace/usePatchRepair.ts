@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelGeneration, generate } from "../../lib/inference";
 import { isDesktopShell, type AppStatus } from "../../lib/ipc";
+import { isApprovedProfileId } from "../models/readiness";
 import { createPatchProposal, validatePatchProposal, type PatchProposal, type PatchValidation } from "../../lib/patch";
 import { parseAndValidatePatchResponse } from "../../lib/patchContract";
 import type { ValidationReport } from "../../lib/validation";
@@ -144,6 +145,11 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
         setState({ status: "error", message: `Model unavailable — ${engineStatus?.engine.detail ?? "not ready"}`, attempts: state.attempts });
         return;
       }
+      const selectedProfile = profileRef.current;
+      if (!isApprovedProfileId(selectedProfile)) {
+        setState({ status: "error", message: "Select an approved local model before explaining a repair." , attempts: state.attempts });
+        return;
+      }
       if (proposal.id !== proposalIdRef.current && state.status === "revised" && (state as any).originalProposal?.id === proposal.id) {
         // already have revised for this proposal, don't re-explain? Allow.
       }
@@ -172,7 +178,7 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
             messages: messages as any,
             maxTokens: 800,
             temperature: 0.2,
-            profileId: profileRef.current,
+            profileId: selectedProfile,
           },
           (ev) => {
             if (ev.type === "delta" && ev.text) {
@@ -253,6 +259,11 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
         setState({ status: "error", message: `Model unavailable — ${engineStatus?.engine.detail ?? "not ready"}`, attempts: state.attempts });
         return;
       }
+      const selectedProfile = profileRef.current;
+      if (!isApprovedProfileId(selectedProfile)) {
+        setState({ status: "error", message: "Select an approved local model before repairing a patch.", attempts: state.attempts });
+        return;
+      }
 
       generatingRef.current = true;
       const requestId = `repair-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -279,7 +290,7 @@ export function usePatchRepair(opts: UsePatchRepairOptions) {
             messages: messages as any,
             maxTokens: 1200,
             temperature: 0.2,
-            profileId: profileRef.current,
+            profileId: selectedProfile,
           },
           (ev) => {
             if (ev.type === "delta" && ev.text) {

@@ -15,7 +15,7 @@ describe("Phase 26 — LicensingPage", () => {
     mockUseLicence.mockReset();
   });
 
-  it("renders Community Edition status and plan comparison grid", () => {
+  it("renders local licence status and activation without a commercial plan comparison", () => {
     mockUseLicence.mockReturnValue({
       licence: {
         tier: "community",
@@ -36,9 +36,9 @@ describe("Phase 26 — LicensingPage", () => {
 
     expect(screen.getByRole("heading", { name: "Developer Licensing" })).toBeTruthy();
     expect(screen.getByText("Community Edition")).toBeTruthy();
-    expect(screen.getByText(/Community Sovereignty Guarantee/i)).toBeTruthy();
-    expect(screen.getByText("Developer Pro")).toBeTruthy();
-    expect(screen.getByText("Team & Enterprise")).toBeTruthy();
+    expect(screen.getByText("Offline licence status")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Activate Offline Licence" })).toBeTruthy();
+    expect(screen.queryByText(/Developer Pro|Team & Enterprise|\$19|\$49|perpetual/i)).toBeNull();
   });
 
   it("renders active Pro licence details with licensee and validity", () => {
@@ -47,7 +47,7 @@ describe("Phase 26 — LicensingPage", () => {
         tier: "pro",
         planName: "Developer Pro Edition",
         active: true,
-        licenceKey: "NEXORA-PRO-PERPETUAL_ACME-1234",
+        licenceKey: "NEXORA-PRO-ACME-1234",
         licensee: "ACME Corp",
         expiresAt: null,
         features: ["commercial_use_rights"],
@@ -62,7 +62,8 @@ describe("Phase 26 — LicensingPage", () => {
 
     expect(screen.getByText("Developer Pro Edition")).toBeTruthy();
     expect(screen.getByText("ACME Corp")).toBeTruthy();
-    expect(screen.getByText("Perpetual Offline Licence")).toBeTruthy();
+    expect(screen.getByText("No expiry date recorded")).toBeTruthy();
+    expect(screen.queryByText(/perpetual/i)).toBeNull();
     expect(screen.getByRole("button", { name: /Deactivate licence/i })).toBeTruthy();
   });
 
@@ -72,7 +73,7 @@ describe("Phase 26 — LicensingPage", () => {
       tier: "pro",
       planName: "Developer Pro Edition",
       active: true,
-      licenceKey: "NEXORA-PRO-PERPETUAL_DEV-9999",
+      licenceKey: "NEXORA-PRO-DEV-9999",
       licensee: "DEV",
       expiresAt: null,
       features: [],
@@ -99,11 +100,11 @@ describe("Phase 26 — LicensingPage", () => {
     const input = screen.getByRole("textbox", { name: "Licence Key" });
     const submitBtn = screen.getByRole("button", { name: /Activate key/i });
 
-    await user.type(input, "NEXORA-PRO-PERPETUAL_DEV-9999");
+    await user.type(input, "NEXORA-PRO-DEV-9999");
     await user.click(submitBtn);
 
     await waitFor(() => {
-      expect(activateKeyMock).toHaveBeenCalledWith("NEXORA-PRO-PERPETUAL_DEV-9999");
+      expect(activateKeyMock).toHaveBeenCalledWith("NEXORA-PRO-DEV-9999");
     });
 
     expect(await screen.findByText("Successfully activated Developer Pro Edition!")).toBeTruthy();
@@ -126,7 +127,7 @@ describe("Phase 26 — LicensingPage", () => {
         tier: "pro",
         planName: "Developer Pro Edition",
         active: true,
-        licenceKey: "NEXORA-PRO-PERPETUAL_DEV-9999",
+        licenceKey: "NEXORA-PRO-DEV-9999",
         licensee: "DEV",
         expiresAt: null,
         features: [],

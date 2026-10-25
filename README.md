@@ -1,8 +1,10 @@
 # Nexora — Windows Desktop AI Coding Assistant
 
-Nexora is an integrated Windows desktop AI coding assistant combining **100% local on-device GGUF model execution** (`Nexora Mini` 7B and `Nexora Sonnet` 14B via `llama.cpp`) with a **server-authoritative authentication, subscription plans, billing, and daily quota backend** (`services/nexora-auth` on Rust + Axum + SQLx + PostgreSQL).
+> **Pre-release status (2026-10-25): NO-GO.** Step 1 remains **IMPLEMENTED — VALIDATION BLOCKED**; Step 2 remains **PARTIAL — IMPLEMENTATION COMPLETE, VERIFICATION BLOCKED**; Step 3 remains **PARTIAL — IMPLEMENTATION COMPLETE, WINDOWS VERIFICATION BLOCKED**; Step 4 remains **PARTIAL — EVIDENCE INCOMPLETE**. Step 5 final gate is **BLOCKED — NOT VERIFIED** and is not authorization to publish. The current pnpm checks and audits pass, and Step 5 added fail-closed webhook timestamp and duplicate-payload checks, but native Rust/PostgreSQL validation, Windows packaging/signing, genuine model inference, complete licensing/legal review, and verified support/security operations remain blocked. This README describes repository design and source features, not a released or fully validated product. See [Phase 18](docs/PHASE_18_INTEGRATION_VERIFICATION.md), [Phase 19](docs/PHASE_19_WINDOWS_PACKAGING.md), [Phase 20](docs/PHASE_20_PUBLISHING_PREPARATION.md), the [Phase 21 final assessment](docs/PHASE_21_FINAL_APPROVAL_AND_RELEASE.md), the [current Windows Public Beta preparation report](docs/PUBLIC_BETA_PREPARATION_WINDOWS.md), [security reporting status](SECURITY.md), [support/diagnostics prerequisites](docs/SUPPORT_AND_DIAGNOSTICS.md), and the [incomplete third-party notices](docs/THIRD_PARTY_NOTICES_DRAFT.md).
 
-All source files, workspace scans, AST symbols, diff previews, conversation transcripts, and prompt contexts stay strictly on your local Windows machine and never traverse external cloud AI APIs.
+Nexora is a Windows-first Tauri desktop application designed around signed-out local chat and loopback-only inference using a separately supplied `llama.cpp` runtime. The Mini and Sonnet profiles have pinned artifact metadata, but neither genuine model has been locally verified (`locally_verified: false`); neither runtime nor model weights are bundled. Optional account-service code is separate and has not been validated as a live service. Payment-provider composition and account quota policy remain unconfigured.
+
+The architecture is designed to keep prompts, source files, workspace scans, and conversation transcripts out of hosted AI APIs by using local inference. This is a source/design statement, not evidence of native Windows runtime behavior. Account operations are separate and may exchange account metadata with a configured service.
 
 ---
 
@@ -25,40 +27,40 @@ All source files, workspace scans, AST symbols, diff previews, conversation tran
 │  │  - Workspace Scanner, AST Symbol Indexer, Atomic Patch Engine          │  │
 │  │  - Model Verifier (SHA-256 + GGUF v3), Hardware Fit & Readiness Gate   │  │
 │  │  - Process Supervisor (`llama-server` on 127.0.0.1 + 32-byte keyfile)  │  │
-│  │  - OS Credential Vault (`keyring` / Windows Credential Manager)        │  │
-│  │  - Typed Auth, Account, Plans, Billing & Server Quota Client           │  │
+│  │  - OS credential-vault integration (Windows behavior unverified)        │  │
+│  │  - Optional account-service code        │  │
 │  └───────────────┬───────────────────────────────────────┬────────────────┘  │
 │                  │ Loopback SSE (127.0.0.1:ephemeral)    │ HTTPS JSON REST   │
 │                  ▼                                       ▼                   │
 │  ┌───────────────────────────────────┐   ┌────────────────────────────────┐  │
 │  │   Local `llama-server` Sidecar    │   │     `services/nexora-auth`     │  │
-│  │  - Local Qwen2.5-Coder 7B / 14B   │   │  - Axum + SQLx + PostgreSQL 16 │  │
-│  │  - Zero cloud prompt transmission │   │  - Email/Password + Google PKCE│  │
-│  └───────────────────────────────────┘   │  - Plans, Stripe Billing &     │  │
-│                                          │    Signed Webhook Idempotency  │  │
-│                                          │  - UTC Daily Quota Reservations│  │
+│  │  - Model profile metadata only   │   │  - Axum + SQLx + PostgreSQL 16 │  │
+│  │  - Inference path unverified │   │  - Auth/OAuth source unverified│  │
+│  └───────────────────────────────────┘   │  - Stripe-oriented source only │  │
+│                                          │    (provider unconfigured)     │  │
+│                                          │  - Quota policy unconfigured  │  │
 │                                          └────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Core Product Capabilities
+## 2. Core Application Design (Not Release-Verified)
 
 ### 2.1 Direct-to-Chat Desktop Experience (`#/chat`)
 - Opens directly into the primary desktop Chat workspace on every launch — no marketing splash screen, no separate sign-in page, and no popup auth window.
-- Clean, calm neutral desktop palette in both **Light** and **Dark** themes with WCAG AA contrast (`>= 4.5:1`), restrained solid borders, readable typography, and zero glassmorphism, neon glow, or gratuitous motion.
-- When an unauthenticated user submits a prompt, a centred **floating authentication modal** (`Sign in`, `Create account`, `Continue with Google`, inline email verification, and password recovery) opens directly over the conversation, preserves the exact unsent prompt text, and seamlessly continues in the same chat immediately after authentication.
+- Light and Dark themes use a neutral palette, restrained borders, and readable typography. WCAG AA contrast has not been independently verified.
+- Signed-out local chat and conversation history do not require an account. Sign-in and account screens are separate optional flows; prompts are not gated on authentication. Live account/OAuth integration remains unverified.
 
 ### 2.2 Local On-Device AI Models (`#/models` & Header Model Selector)
-- **Nexora Mini** (`qwen2.5-coder-7b-instruct-q4_k_m.gguf`) and **Nexora Sonnet** (`qwen2.5-coder-14b-instruct-q4_k_m.gguf`) with pinned SHA-256 verification, GGUF v3 header checks, live available-RAM + free-disk checks, download progress/cancellation, explicit load/unload controls, and **strict no-silent-fallback attribution**.
-- Streaming Server-Sent Events (SSE) token delivery, fenced code blocks with copy controls, immediate generation cancellation (`Stop`), truncation/crash detection (never saving partial crashed streams as complete), and persistent local conversation history.
+- Source defines **Nexora Mini** (`qwen2.5-coder-7b-instruct-q4_k_m.gguf`) and **Nexora Sonnet** (`qwen2.5-coder-14b-instruct-q4_k_m.gguf`) profiles, pinned SHA-256 metadata, GGUF header checks, readiness checks, and explicit user-initiated acquisition. These mechanisms have not been verified against a genuine downloaded artifact or a Windows inference run; both profiles remain `locally_verified: false`.
+- The source includes streaming, cancellation, crash/truncation handling, and local conversation-history paths. Frontend tests are mocked; no genuine Mini/Sonnet inference has been recorded.
 
-### 2.3 Server-Side Authentication, Plans, Billing & Daily Usage Limits (`services/nexora-auth`, `#/plans`, `#/account`)
-- **Authentication & Security**: Argon2id password hashing, opaque rotating session tokens stored in OS keyring, email verification, password reset, Google OAuth 2.0 Authorization Code + S256 PKCE with loopback callback (`127.0.0.1:<port>/callback`), explicit Google account linking, structured log secret scrubbing, and endpoint rate limiting.
-- **Configurable Plans & Stripe Billing**: Server-authoritative plan catalogue (`free`, `pro`, `team` with env-configurable pricing — `$0`, `$19/mo` or `$190/yr`, `$39/mo` or `$390/yr` — and per-model daily quotas `25/5`, `300/100`, `1000/300`; all proposed defaults documented for review in `.env.example`), idempotent Stripe Checkout session creation (`POST /v1/billing/checkout`), server-side order verification (`POST /v1/billing/verify`), RFC-compliant `Stripe-Signature` HMAC-SHA256 webhook verification with replay window & event-id deduplication (`POST /v1/billing/webhooks/stripe`), plan changes (`POST /v1/billing/change-plan`), subscription cancellation (`POST /v1/billing/cancel`), and Billing Portal sessions (`POST /v1/billing/portal`).
-- **Backend-Authoritative Daily Quotas**: Atomic PostgreSQL row-locked (`SELECT ... FOR UPDATE`) per-user, per-model (`nexora-mini` / `nexora-sonnet`), UTC-day (`00:00:00Z`) quota reservation (`POST /v1/usage/reserve`), completion commit (`POST /v1/usage/commit`), failed-generation release (`POST /v1/usage/release`), and live remaining/reset summary (`GET /v1/usage`). Local offline work (`workspace scan`, `symbol search`, `offline local usage ledger`) never breaks when offline, and server-authoritative quota states are surfaced honestly without fabrication.
-- **Account Self-Service & GDPR Controls (`#/account`, `#/settings`)**: Display name updates (`PATCH /v1/account/profile`), password rotation (`POST /v1/auth/password-change`), Google identity linking (`POST /v1/auth/google/link`), full JSON account data export (`GET /v1/account/export`), and explicit confirmation-gated account deletion (`POST /v1/account/delete`).
+### 2.3 Optional Account-Service Code (Not Release-Verified)
+- **Authentication/account source** includes email/password and Google PKCE flows, account operations, and OS credential-storage integration. Backend/provider interoperability and native credential-vault behavior have not been verified; signed-out local chat remains independent.
+- **Plans and payments are not an active offer.** The service has Stripe-oriented source, but production composition uses an unconfigured provider. G-01 source paths now fail closed for client-selected plan changes and unsupported cancellation; the Rust/PostgreSQL regression tests have not run in this environment. Do not treat a client plan request as entitlement evidence. Razorpay is not implemented. Pricing, quotas, trials, Premium terms, and paid benefits are unapproved; no draft defaults in `.env.example` should be presented as offers.
+- **Quota policy is unconfigured.** No Free/Premium limit, token allowance, reset period, or paid entitlement is approved or active. Do not treat subscription rows or provider/backend failures as entitlement evidence.
+- These integrations are not evidence of a deployed service, verified account behavior, or production readiness. See the Phase 18 verification report and the pre-launch legal template for current limitations.
 
 ---
 
@@ -71,7 +73,7 @@ All source files, workspace scans, AST symbols, diff previews, conversation tran
 2. Review every section in [`.env.example`](.env.example):
    - **Never put server secrets, OAuth client secrets, database URLs, or Stripe keys into `VITE_*` variables or frontend files.**
    - `services/nexora-auth` validates configuration at startup and **fails fast in `NEXORA_ENV=production`** if `NEXORA_AUTH_DATABASE_URL` is missing, if configured secrets/URLs still contain placeholder values (`REPLACE_WITH`, `CHANGE_ME`, `nexora.local`), or if `STRIPE_SECRET_KEY` uses `sk_test_*`.
-3. Full deployment, TLS reverse-proxy, webhook, signing, and rollback instructions are in [`docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md`](docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md), and legal/privacy documentation is in [`docs/LEGAL_PRIVACY_TERMS.md`](docs/LEGAL_PRIVACY_TERMS.md).
+3. Deployment, TLS reverse-proxy, webhook, signing, and rollback guidance is in [`docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md`](docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md); it is reference material, not evidence of a deployed service or release approval. The pre-launch legal/privacy template is [`docs/LEGAL_PRIVACY_TERMS.md`](docs/LEGAL_PRIVACY_TERMS.md).
 
 ---
 
@@ -81,7 +83,7 @@ All source files, workspace scans, AST symbols, diff previews, conversation tran
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck          # TypeScript strict typecheck
-pnpm test               # 85 Vitest suites (792 unit, UI, IPC contract & build config tests)
+pnpm test               # Vitest UI, unit, and contract tests
 pnpm build              # Production Vite frontend bundle -> apps/desktop/ui/dist
 ```
 
@@ -89,30 +91,34 @@ pnpm build              # Production Vite frontend bundle -> apps/desktop/ui/dis
 ```bash
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml    # 366 tests
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml    # Rust unit tests (not run in this sandbox)
 ```
 
 ### 4.3 Auth, Billing & Quota Service (`services/nexora-auth`)
 ```bash
 cargo clippy --manifest-path services/nexora-auth/Cargo.toml --all-targets -- -D warnings
-NEXORA_AUTH_TEST_DATABASE_URL="postgres://postgres@127.0.0.1:5432/postgres" \
-  cargo test --manifest-path services/nexora-auth/Cargo.toml -- --include-ignored --test-threads=1   # 184 tests
+# CAUTION: isolated throwaway test DB only; integration tests include destructive cleanup.
+# Review the URL and confirm the target is disposable before running anything.
+NEXORA_AUTH_TEST_DATABASE_URL="postgres://postgres@127.0.0.1:5432/nexora_test?sslmode=disable" \
+  cargo test --manifest-path services/nexora-auth/Cargo.toml -- --include-ignored --test-threads=1
 ```
 
 ### 4.4 Windows 10/11 NSIS Installer Build & Smoke Verification
-Run on a Windows 10 (22H2+) or Windows 11 x64 host with Rust MSVC, Node.js 22 LTS, pnpm 9, and Visual Studio 2022 C++ Build Tools:
+Run on a Windows 10 (22H2+) or Windows 11 x64 host with the pinned Rust 1.93.0 MSVC toolchain, Node.js 22 LTS, pnpm 9.15.4, and Visual Studio 2022 C++ Build Tools:
 ```powershell
-# Reproducible release build + secret scan + optional Authenticode signing + SHA256SUMS.txt
+# Guarded native Windows build + secret scan + optional certificate-store signing + SHA256SUMS.txt
 .\scripts\windows\build-installer.ps1
 
 # Automated per-user silent install, binary launch sanity check, and silent uninstall smoke test
 .\scripts\windows\smoke-verify.ps1
 ```
 
-See [`docs/VERIFICATION_REPORT_2026_10_22.md`](docs/VERIFICATION_REPORT_2026_10_22.md) for the complete executed `PASS` / `FAIL` / `BLOCKED` verification matrix.
+Current verification evidence is recorded in [Phase 18](docs/PHASE_18_INTEGRATION_VERIFICATION.md), [Phase 19](docs/PHASE_19_WINDOWS_PACKAGING.md), and [Phase 20](docs/PHASE_20_PUBLISHING_PREPARATION.md). The older [2026-10-22 report](docs/VERIFICATION_REPORT_2026_10_22.md) is historical and superseded; do not use it as current release evidence.
 
 ---
 
-## 5. License
+## 5. License, Support & Security Contact Status
 
-Proprietary / All rights reserved by repository owner unless otherwise specified; third-party Apache-2.0 and MIT runtime/model notices are documented in [`docs/LEGAL_PRIVACY_TERMS.md`](docs/LEGAL_PRIVACY_TERMS.md).
+No approved top-level `LICENSE` or complete distributable third-party notices file is present. [`docs/THIRD_PARTY_NOTICES_DRAFT.md`](docs/THIRD_PARTY_NOTICES_DRAFT.md) covers only a subset of frontend runtime dependencies and is explicitly not distribution-ready. The legal/privacy document is a pre-launch template; exact native Rust, model/runtime, icon, and redistribution-license review remains incomplete. No legal publisher, signing identity, or owner-approved model redistribution rights are established here.
+
+No verified support contact or private security-reporting route is recorded. [`SECURITY.md`](SECURITY.md) and [`docs/SUPPORT_AND_DIAGNOSTICS.md`](docs/SUPPORT_AND_DIAGNOSTICS.md) contain explicit release-blocking placeholders rather than invented contact details. Do not treat them as operational channels or distribute Nexora until the owner supplies and verifies the required contacts and processes.

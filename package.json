@@ -9,7 +9,8 @@
     "build": "pnpm --filter @nexora/desktop build",
     "typecheck": "pnpm --filter @nexora/desktop typecheck",
     "test": "pnpm --filter @nexora/desktop test",
+    "test:installer-contract": "node --test scripts/check-installer-contract.test.mjs",
     "tauri": "pnpm --filter @nexora/desktop tauri",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm test:installer-contract && pnpm build"
   }
 }

@@ -23,9 +23,11 @@ use nexora_auth::registration::{self, RegisterRequest};
 use nexora_auth::session;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
+
+mod support;
 
 const GOOD_PASSWORD: &str = "correct horse battery";
 const NEW_PASSWORD: &str = "a brand new password";
@@ -83,6 +85,7 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");
@@ -221,6 +224,60 @@ async fn recovery_request_is_enumeration_safe_and_eligibility_gated() {
     .unwrap();
     assert_eq!(for_verified, 1);
     assert_eq!(for_others, 0, "unknown and locked accounts get no token");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn concurrent_recovery_requests_leave_only_the_newest_token_live() {
+    let pool = test_pool().await;
+    let email = create_verified_user(&pool, "concurrent-recovery-request").await;
+    let provider_a = Arc::new(CaptureProvider::default());
+    let provider_b = Arc::new(CaptureProvider::default());
+
+    let pool_a = pool.clone();
+    let email_a = email.clone();
+    let provider_a_task = Arc::clone(&provider_a);
+    let request_a = tokio::spawn(async move {
+        recovery::request_recovery(
+            Some(&pool_a),
+            provider_a_task.as_ref(),
+            EmailDelivery::Configured,
+            recovery::DEFAULT_RESET_TTL_SECS,
+            &RecoveryRequest { email: email_a },
+        )
+        .await
+    });
+    let pool_b = pool.clone();
+    let email_b = email.clone();
+    let provider_b_task = Arc::clone(&provider_b);
+    let request_b = tokio::spawn(async move {
+        recovery::request_recovery(
+            Some(&pool_b),
+            provider_b_task.as_ref(),
+            EmailDelivery::Configured,
+            recovery::DEFAULT_RESET_TTL_SECS,
+            &RecoveryRequest { email: email_b },
+        )
+        .await
+    });
+
+    assert_eq!(request_a.await.unwrap().unwrap(), EmailDelivery::Configured);
+    assert_eq!(request_b.await.unwrap().unwrap(), EmailDelivery::Configured);
+    let (live_tokens,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM password_reset_tokens t \
+         JOIN users u ON u.id = t.user_id \
+         WHERE u.email = $1 AND t.used_at IS NULL AND t.revoked_at IS NULL \
+           AND t.expires_at > now()",
+    )
+    .bind(&email)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        live_tokens,
+        1,
+        "only the most recently committed reset is live"
+    );
 }
 
 #[tokio::test]
@@ -480,6 +537,58 @@ async fn concurrent_login_and_reset_leave_no_stale_session() {
     .is_ok());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn concurrent_reset_and_refresh_cannot_leave_a_live_session() {
+    let pool = test_pool().await;
+    let provider = CaptureProvider::default();
+    let email = create_verified_user(&pool, "race-refresh-reset").await;
+    let login = login::login(
+        Some(&pool),
+        session::DEFAULT_SESSION_TTL_SECS,
+        &login_request(&email, GOOD_PASSWORD),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    request_reset(&pool, &provider, &email).await;
+    let reset_token = provider.reset_token_from_last();
+    let reset_request = reset_request(&reset_token, NEW_PASSWORD);
+
+    let rotate_pool = pool.clone();
+    let raw_session = login.session.raw_token.clone();
+    let rotate = tokio::spawn(async move {
+        session::rotate_session(
+            &rotate_pool,
+            &raw_session,
+            session::DEFAULT_SESSION_TTL_SECS,
+            604_800,
+            None,
+            None,
+        )
+        .await
+    });
+    let reset_pool = pool.clone();
+    let reset = tokio::spawn(async move {
+        recovery::reset_password(Some(&reset_pool), &reset_request).await
+    });
+    let rotate_result = rotate.await.unwrap();
+    let reset_result = reset.await.unwrap();
+    reset_result.expect("password reset must complete");
+
+    match rotate_result {
+        Ok((rotated, _)) => assert!(
+            session::authenticate(&pool, &rotated.raw_token, 604_800)
+                .await
+                .is_err(),
+            "refresh that raced reset left a live session"
+        ),
+        Err(error) => assert_eq!(error.code(), "invalid_or_expired_token"),
+    }
+    assert_eq!(live_sessions(&pool).await, 0);
+}
+
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn password_change_keeps_current_family_and_revokes_others() {
@@ -565,6 +674,60 @@ async fn password_change_keeps_current_family_and_revokes_others() {
 
 #[tokio::test]
 #[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn concurrent_reset_and_password_change_follow_one_account_first_lock_order() {
+    let pool = test_pool().await;
+    let provider = CaptureProvider::default();
+    let email = create_verified_user(&pool, "reset-change-lock-order").await;
+    let session = login::login(
+        Some(&pool),
+        session::DEFAULT_SESSION_TTL_SECS,
+        &login_request(&email, GOOD_PASSWORD),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let context = session::authenticate(&pool, &session.session.raw_token, 604_800)
+        .await
+        .unwrap();
+    request_reset(&pool, &provider, &email).await;
+    let raw_token = provider.reset_token_from_last();
+
+    let reset_pool = pool.clone();
+    let reset = tokio::spawn(async move {
+        recovery::reset_password(
+            Some(&reset_pool),
+            &reset_request(&raw_token, NEW_PASSWORD),
+        )
+        .await
+    });
+    let change_pool = pool.clone();
+    let change = tokio::spawn(async move {
+        recovery::change_password(
+            Some(&change_pool),
+            &context,
+            &ChangePasswordRequest {
+                current_password: GOOD_PASSWORD.to_string(),
+                new_password: NEW_PASSWORD.to_string(),
+            },
+        )
+        .await
+    });
+
+    let reset_result = reset.await.unwrap();
+    let change_result = change.await.unwrap();
+    assert!(
+        matches!(
+            (&reset_result, &change_result),
+            (Ok(()), Err(recovery::RecoveryError::InvalidCredentials))
+                | (Err(recovery::RecoveryError::InvalidOrExpiredToken), Ok(()))
+        ),
+        "one account-first operation must win without a deadlock: reset={reset_result:?}, change={change_result:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
 async fn recovery_rate_window_blocks_excess_attempts() {
     use nexora_auth::rate_limit::{self, CountMode, RateLimitRule};
 
@@ -579,12 +742,15 @@ async fn recovery_rate_window_blocks_excess_attempts() {
         rate_limit::check(&pool, "recovery", &key, rule, CountMode::AllAttempts)
             .await
             .unwrap();
-        rate_limit::record(&pool, "recovery", &key, "success").await;
+        rate_limit::record(&pool, "recovery", &key, "success")
+            .await
+            .expect("record rate-limit event");
     }
     let retry_after = rate_limit::check(&pool, "recovery", &key, rule, CountMode::AllAttempts)
         .await
-        .unwrap_err();
-    assert_eq!(retry_after, 900);
+        .unwrap_err()
+        .retry_after_secs();
+    assert_eq!(retry_after, Some(900));
 }
 
 #[tokio::test]

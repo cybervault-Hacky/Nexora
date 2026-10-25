@@ -30,7 +30,7 @@ import {
   unloadModel,
 } from "./lib/inference";
 import { isDesktopShell, isEngineReady, type AppStatus } from "./lib/ipc";
-import { navigateTo, ROUTES, useHashRoute, type AnyRouteId } from "./lib/router";
+import { navigateTo, replaceRouteTo, ROUTES, useHashRoute, type AnyRouteId } from "./lib/router";
 import { clearSymbolIndex, getSymbolIndex, type SymbolIndex } from "./lib/symbolIndex";
 import { useAppStatus } from "./lib/useAppStatus";
 import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
@@ -67,12 +67,18 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthModalMode>("signin");
   const [authReason, setAuthReason] = useState<string | null>(null);
+  const [authInitialToken, setAuthInitialToken] = useState("");
+  const [authReturnFocusTarget, setAuthReturnFocusTarget] = useState<HTMLElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
 
   const openAuthModal = useCallback(
-    (mode: AuthModalMode = "signin", reason: string | null = null) => {
+    (mode: AuthModalMode = "signin", reason: string | null = null, initialToken = "") => {
+      const active = document.activeElement;
+      setAuthReturnFocusTarget(active instanceof HTMLElement ? active : null);
+      setSearchOpen(false);
       setAuthMode(mode);
       setAuthReason(reason);
+      setAuthInitialToken(initialToken);
       setAuthOpen(true);
     },
     [],
@@ -97,25 +103,32 @@ export default function App() {
     void refreshServerUsage();
   }, [refreshServerUsage]);
 
-  // Legacy auth route deep-links open the floating modal cleanly over AI Chat.
+  // Legacy flow links open as floating dialogs over the workspace. One-time
+  // credentials are read once, then the URL is replaced so browser history no
+  // longer retains a verification/reset token.
   useEffect(() => {
+    const hash = window.location.hash;
+    const queryStart = hash.indexOf("?");
+    const params = new URLSearchParams(queryStart >= 0 ? hash.slice(queryStart) : "");
+    const token = params.get("token") ?? "";
+
     if (route.id === "signin") {
       openAuthModal("signin", null);
-      navigateTo("chat");
+      replaceRouteTo("chat");
     } else if (route.id === "signup") {
       openAuthModal("signup", null);
-      navigateTo("chat");
+      replaceRouteTo("chat");
     } else if (route.id === "recover") {
       openAuthModal("recover", null);
-      navigateTo("chat");
+      replaceRouteTo("chat");
     } else if (route.id === "reset") {
-      openAuthModal("reset", null);
-      navigateTo("chat");
+      openAuthModal("reset", null, token);
+      replaceRouteTo("chat");
     } else if (route.id === "verify") {
-      openAuthModal("verify", null);
-      navigateTo("chat");
+      openAuthModal("verify", null, token);
+      replaceRouteTo("chat");
     } else if (route.id === "welcome" || route.id === "onboarding") {
-      navigateTo("chat");
+      replaceRouteTo("chat");
     }
   }, [route.id, openAuthModal]);
 
@@ -521,7 +534,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+      if (authOpen || !(event.ctrlKey || event.metaKey) || event.altKey) {
         return;
       }
 
@@ -551,7 +564,7 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [startNewChat]);
+  }, [startNewChat, authOpen]);
 
   const desktop = isDesktopShell();
   const pageLabel =
@@ -563,6 +576,8 @@ export default function App() {
     <>
       <div
         className={`app ${sidebarCollapsed ? "app--collapsed" : ""}${reducedMotion ? " reduced-motion" : ""}${!codeLigatures ? " no-ligatures" : ""}`.trim()}
+        aria-hidden={authOpen ? true : undefined}
+        inert={authOpen ? true : undefined}
       >
         <TitleBar
           pageLabel={pageLabel}
@@ -592,7 +607,7 @@ export default function App() {
           onOpenAuthModal={(mode = "signin") => openAuthModal(mode, null)}
         />
 
-        <main className="workspace" aria-label={pageLabel}>
+        <main className="workspace" aria-label={pageLabel} tabIndex={-1}>
           {statusError ? (
             <div className="notice" role="status">
               <Icon name="alert" size={14} />
@@ -707,10 +722,11 @@ export default function App() {
           ) : route.id === "plans" ? (
             <PlansPage
               isAuthenticated={auth.isAuthenticated}
+              accountId={auth.user?.id ?? null}
               onRequestSignIn={() =>
                 openAuthModal(
                   "signin",
-                  "Sign in is required to manage account plans and billing. Local AI chat remains available without signing in.",
+                  "Sign-in is optional and only needed to view an account plan status. Local AI chat remains available without signing in.",
                 )
               }
             />
@@ -728,7 +744,7 @@ export default function App() {
               onToggleReducedMotion={() => setReducedMotion((current) => !current)}
             />
           ) : route.id === "account" ? (
-            <AccountPage onOpenAuthModal={(mode) => openAuthModal(mode, null)} />
+            <AccountPage auth={auth} onOpenAuthModal={(mode) => openAuthModal(mode, null)} />
           ) : route.id === "founder" ? (
             <FounderPage status={engineStatus} />
           ) : route.id === "licensing" ? (
@@ -740,7 +756,7 @@ export default function App() {
       </div>
 
       <ConversationSearchModal
-        open={searchOpen}
+        open={searchOpen && !authOpen}
         conversations={conversation.conversations}
         activeId={conversation.activeId}
         historyLoading={conversation.listLoading}
@@ -754,11 +770,15 @@ export default function App() {
       <AuthModal
         open={authOpen}
         initialMode={authMode}
+        initialToken={authInitialToken}
         reason={authReason}
         preservedPrompt={conversation.draft}
+        returnFocusTarget={authReturnFocusTarget}
         onClose={() => {
           setAuthOpen(false);
           setAuthReason(null);
+          setAuthInitialToken("");
+          setAuthReturnFocusTarget(null);
         }}
         onLogin={async (payload) => {
           const loggedIn = await auth.login(payload);

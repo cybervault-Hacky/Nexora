@@ -57,7 +57,7 @@ pub fn is_valid_session_token_shape(raw: &str) -> bool {
 }
 
 /// The authenticated caller's account (only safe fields).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUser {
     pub id: String,
@@ -65,11 +65,31 @@ pub struct SessionUser {
     pub email: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl std::fmt::Debug for SessionUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionUser")
+            .field("id", &crate::scrub::REDACTED)
+            .field("name", &crate::scrub::REDACTED)
+            .field("email", &crate::scrub::REDACTED)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionContext {
     pub user: SessionUser,
     pub session_id: String,
     pub family_id: String,
+}
+
+impl std::fmt::Debug for SessionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionContext")
+            .field("user", &self.user)
+            .field("session_id", &crate::scrub::REDACTED)
+            .field("family_id", &crate::scrub::REDACTED)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,9 +108,17 @@ pub enum SessionError {
 }
 
 impl SessionError {
-    /// Plan §6 stable code for bearer-token failures.
+    /// Keep ordinary bearer failures generic, but do not make storage failures
+    /// look like an invalid credential to desktop clients. In particular, the
+    /// desktop IPC layer clears local credentials on `invalid_or_expired_token`.
     pub fn code(&self) -> &'static str {
-        "invalid_or_expired_token"
+        match self {
+            SessionError::InvalidToken | SessionError::Expired | SessionError::Revoked { .. } => {
+                "invalid_or_expired_token"
+            }
+            SessionError::DependencyUnavailable => "dependency_unavailable",
+            SessionError::Internal => "internal",
+        }
     }
     pub fn message(&self) -> &str {
         match self {
@@ -296,14 +324,37 @@ pub async fn rotate_session(
 
     let mut transaction = pool.begin().await.map_err(|_| SessionError::Internal)?;
 
+    // Serialize refresh with password reset/change. Those operations lock the
+    // account before revoking sessions; locking it here means a refresh either
+    // commits before that revocation or sees the old session revoked afterward.
+    let active_user = sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM users \
+         WHERE id = CAST($1 AS uuid) AND status = 'active' \
+           AND email_verified_at IS NOT NULL FOR UPDATE",
+    )
+    .bind(&context.user.id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|_| SessionError::Internal)?;
+    if active_user.is_none() {
+        let _ = transaction.rollback().await;
+        return Err(SessionError::InvalidToken);
+    }
+
     let raw_token_new = generate_session_token();
     let digest = hash_session_token(&raw_token_new);
     let ttl = clamp_ttl(session_ttl_secs);
 
+    // Every rotated token keeps the family's original absolute expiry. Without
+    // this bound, repeated refreshes would slide `expires_at` forever and turn
+    // the configured absolute TTL into an idle-only lifetime.
     let row = sqlx::query(
         "INSERT INTO sessions (user_id, token_hash, family_id, expires_at, app_version, platform) \
          VALUES (CAST($1 AS uuid), $2, CAST($3 AS uuid), \
-                 now() + make_interval(secs => $4), $5, $6) \
+                 LEAST(
+                     now() + make_interval(secs => $4),
+                     (SELECT min(expires_at) FROM sessions WHERE family_id = CAST($3 AS uuid))
+                 ), $5, $6) \
          RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
     )
     .bind(&context.user.id)
@@ -421,15 +472,33 @@ mod tests {
     }
 
     #[test]
+    fn session_debug_redacts_user_and_session_identifiers() {
+        let context = SessionContext {
+            user: SessionUser {
+                id: "SENTINEL_user_id".to_string(),
+                name: "SENTINEL_person".to_string(),
+                email: "SENTINEL_email@example.test".to_string(),
+            },
+            session_id: "SENTINEL_session_id".to_string(),
+            family_id: "SENTINEL_family_id".to_string(),
+        };
+        assert!(!format!("{context:?}").contains("SENTINEL"));
+    }
+
+    #[test]
     fn session_errors_are_generic_and_secret_free() {
         let expired = SessionError::Expired;
         assert_eq!(expired.code(), "invalid_or_expired_token");
         let revoked = SessionError::Revoked { reuse: true };
         assert_eq!(revoked.code(), "invalid_or_expired_token");
+        assert_eq!(SessionError::DependencyUnavailable.code(), "dependency_unavailable");
+        assert_eq!(SessionError::Internal.code(), "internal");
         for message in [
             expired.message(),
             revoked.message(),
             SessionError::InvalidToken.message(),
+            SessionError::DependencyUnavailable.message(),
+            SessionError::Internal.message(),
         ] {
             assert!(!message.contains('@'));
             assert!(!message.to_lowercase().contains("token hash"));

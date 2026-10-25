@@ -96,10 +96,11 @@ interface ModelSetupProps {
 type Busy = "runtime" | "model" | "load" | "verify" | null;
 
 /**
- * Connects the UI to a runtime executable and a GGUF file the user already has.
+ * Connects the UI to an external runtime executable and a GGUF file.
  *
- * Nexora does not download weights or binaries. Both paths are validated by the
- * Rust core before anything is launched.
+ * Approved model weights may be acquired only after an explicit user action;
+ * runtime binaries remain user-provided. The Rust core validates both paths
+ * before anything is launched.
  */
 export function ModelSetup({
   status,
@@ -269,7 +270,7 @@ export function ModelSetup({
     setDownload({ received: 0, total: approvedBytes ?? 0, verifying: false });
 
     try {
-      const outcome = await startModelDownload(null, profile?.id ?? "", (event) => {
+      const outcome = await startModelDownload(profile?.id ?? "", (event) => {
         if (event.type === "progress") {
           setDownload({ received: event.received, total: event.total, verifying: false });
         } else {

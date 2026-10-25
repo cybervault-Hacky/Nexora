@@ -59,6 +59,41 @@ pub const GOOGLE_CLIENT_SECRET_VAR: &str = "NEXORA_AUTH_GOOGLE_CLIENT_SECRET";
 /// Phase 23F: registered loopback redirect (plan §8 `GOOGLE_OAUTH_REDIRECT_URI`).
 pub const GOOGLE_REDIRECT_URI_VAR: &str = "NEXORA_AUTH_GOOGLE_REDIRECT_URI";
 
+/// Typed deployment mode used by startup validation. Production is never
+/// inferred from partially configured credentials; the service requires an
+/// explicit mode in release builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentEnvironment {
+    Development,
+    Test,
+    Production,
+}
+
+impl DeploymentEnvironment {
+    fn parse(raw: Option<&str>, require_explicit: bool) -> Result<Self, ConfigError> {
+        match raw.map(str::trim).filter(|value| !value.is_empty()) {
+            Some("development") => Ok(Self::Development),
+            Some("test") => Ok(Self::Test),
+            Some("production") => Ok(Self::Production),
+            Some(_) => Err(ConfigError::new(
+                "NEXORA_ENV must be one of 'development', 'test', or 'production'. (Value withheld.)",
+            )),
+            None if require_explicit => Err(ConfigError::new(
+                "NEXORA_ENV must be set to development, test, or production in a release build. (Value withheld.)",
+            )),
+            None => Ok(Self::Development),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Test => "test",
+            Self::Production => "production",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthConfig {
     pub bind: SocketAddr,
@@ -87,8 +122,8 @@ pub struct AuthConfig {
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub google_redirect_uri: Option<String>,
-    /// Deployment environment mode (`development`, `test`, `production`).
-    pub environment: String,
+    /// Validated deployment environment mode.
+    pub environment: DeploymentEnvironment,
     /// Optional Stripe billing configuration (all secrets redacted).
     pub stripe_secret_key: Option<String>,
     pub stripe_webhook_secret: Option<String>,
@@ -227,7 +262,7 @@ impl AuthConfig {
             google_client_id: None,
             google_client_secret: None,
             google_redirect_uri: None,
-            environment: "development".to_string(),
+            environment: DeploymentEnvironment::Development,
             stripe_secret_key: None,
             stripe_webhook_secret: None,
             stripe_success_url: None,
@@ -249,6 +284,13 @@ impl AuthConfig {
             "your-",
             "your_",
             "example_only",
+            "example.invalid",
+            "example.test",
+            "example.com",
+            "example.org",
+            ".example",
+            ".invalid",
+            ".test",
             "nexora.local",
             "000000000000",
         ]
@@ -265,16 +307,7 @@ impl AuthConfig {
         stripe_cancel_url: Option<&str>,
         stripe_portal_return_url: Option<&str>,
     ) -> Result<(), ConfigError> {
-        let mode = env_mode
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or("development")
-            .to_ascii_lowercase();
-        if !matches!(mode.as_str(), "development" | "test" | "production") {
-            return Err(ConfigError::new(
-                "NEXORA_ENV must be one of 'development', 'test', or 'production'. (Value withheld.)",
-            ));
-        }
+        let environment = DeploymentEnvironment::parse(env_mode, false)?;
 
         let clean = |v: Option<&str>| {
             v.map(str::trim)
@@ -289,16 +322,28 @@ impl AuthConfig {
 
         if sk.is_some() != wh.is_some() {
             return Err(ConfigError::new(
-                "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together to enable billing. \
-                 Partial Stripe configuration is refused. (Values withheld.)",
+                "If retained for audit, STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together; this build still leaves payment flows disabled. (Values withheld.)",
             ));
         }
 
-        if mode == "production" {
+        for (label, candidate) in [
+            ("STRIPE_SUCCESS_URL", su.as_deref()),
+            ("STRIPE_CANCEL_URL", cu.as_deref()),
+            ("STRIPE_PORTAL_RETURN_URL", pu.as_deref()),
+        ] {
+            if let Some(value) = candidate {
+                validate_optional_web_url(label, value, environment)?;
+            }
+        }
+
+        if environment == DeploymentEnvironment::Production {
             if self.database_url.is_none() {
                 return Err(ConfigError::new(format!(
                     "Production startup refused: {DATABASE_URL_VAR} is required when NEXORA_ENV=production."
                 )));
+            }
+            if let Some(database_url) = self.database_url.as_deref() {
+                validate_production_database_tls(database_url)?;
             }
             for (label, candidate) in [
                 (DATABASE_URL_VAR, self.database_url.as_deref()),
@@ -330,7 +375,7 @@ impl AuthConfig {
             }
         }
 
-        self.environment = mode;
+        self.environment = environment;
         self.stripe_secret_key = sk;
         self.stripe_webhook_secret = wh;
         self.stripe_success_url = su;
@@ -369,6 +414,9 @@ impl AuthConfig {
 
     /// Resolve from the process environment. Never logs or prints values.
     pub fn from_env() -> Result<Self, ConfigError> {
+        let env_mode = std::env::var("NEXORA_ENV").ok();
+        DeploymentEnvironment::parse(env_mode.as_deref(), !cfg!(debug_assertions))?;
+
         let bind = std::env::var(BIND_VAR).ok();
         let allow = std::env::var(ALLOW_NON_LOOPBACK_VAR).ok();
         let database_url = std::env::var(DATABASE_URL_VAR).ok();
@@ -380,7 +428,6 @@ impl AuthConfig {
         config.apply_email_settings(EmailSettings::from_env()?)?;
         config.apply_session_settings(SessionSettings::from_env()?)?;
         config.apply_google_settings(GoogleSettings::from_env()?)?;
-        let env_mode = std::env::var("NEXORA_ENV").ok();
         let stripe_sk = std::env::var("STRIPE_SECRET_KEY").ok();
         let stripe_wh = std::env::var("STRIPE_WEBHOOK_SECRET").ok();
         let stripe_su = std::env::var("STRIPE_SUCCESS_URL").ok();
@@ -514,9 +561,9 @@ impl EmailSettings {
 
         let email_provider_configured = match provider.map(str::trim) {
             None | Some("") | Some("unconfigured") => false,
-            Some(other) => {
+            Some(_) => {
                 return Err(ConfigError::new(format!(
-                    "{EMAIL_PROVIDER_VAR} value '{other}' is not supported in this build. \
+                    "{EMAIL_PROVIDER_VAR} contains an unsupported value. \
                      Supported: 'unconfigured' (no mail is sent). Credentials for a real \
                      provider must never be placed in the repository."
                 )));
@@ -532,31 +579,125 @@ impl EmailSettings {
     }
 }
 
-/// Validate an optional database URL: `postgres://` or `postgresql://` scheme
-/// with a non-empty authority. Errors name the variable and expected shape but
-/// **never** include any part of the provided value (it may embed a password).
+/// Validate an optional database URL: PostgreSQL scheme, parseable authority,
+/// and a non-empty host. Errors never include the URL because it may contain
+/// credentials.
 fn validate_database_url(value: Option<&str>) -> Result<Option<String>, ConfigError> {
     match value.map(str::trim) {
         None | Some("") => Ok(None),
         Some(raw) => {
-            let rest = raw
-                .strip_prefix("postgres://")
-                .or_else(|| raw.strip_prefix("postgresql://"))
-                .ok_or_else(|| {
-                    ConfigError::new(format!(
-                        "{DATABASE_URL_VAR} must start with postgres:// or postgresql://. \
-                         The provided value cannot be used (value withheld)."
-                    ))
-                })?;
-            let authority = rest.split(['/', '?']).next().unwrap_or("");
-            if authority.is_empty() {
+            let parsed = reqwest::Url::parse(raw).map_err(|_| {
+                ConfigError::new(format!(
+                    "{DATABASE_URL_VAR} must be a valid PostgreSQL URL with a host. (Value withheld.)"
+                ))
+            })?;
+            if !matches!(parsed.scheme(), "postgres" | "postgresql")
+                || parsed.host_str().map(str::is_empty).unwrap_or(true)
+                || parsed.fragment().is_some()
+            {
                 return Err(ConfigError::new(format!(
-                    "{DATABASE_URL_VAR} must include a host (value withheld)."
+                    "{DATABASE_URL_VAR} must use postgres:// or postgresql://, include a host, and omit fragments. (Value withheld.)"
                 )));
             }
             Ok(Some(raw.to_string()))
         }
     }
+}
+
+fn url_host_is_loopback(host: &str) -> bool {
+    let address = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    address.eq_ignore_ascii_case("localhost")
+        || address
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
+}
+
+/// Production remote databases must use encrypted PostgreSQL transport. Local
+/// loopback databases are allowed because they never cross the network.
+fn validate_production_database_tls(raw: &str) -> Result<(), ConfigError> {
+    let parsed = reqwest::Url::parse(raw).map_err(|_| {
+        ConfigError::new(format!(
+            "Production startup refused: {DATABASE_URL_VAR} is not a valid PostgreSQL URL. (Value withheld.)"
+        ))
+    })?;
+    let host = parsed.host_str().unwrap_or("");
+    if url_host_is_loopback(host) {
+        return Ok(());
+    }
+
+    let mut sslmode_values = parsed
+        .query_pairs()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("sslmode"))
+        .map(|(_, value)| value.to_ascii_lowercase());
+    let sslmode = sslmode_values.next();
+    if sslmode_values.next().is_some()
+        || !matches!(
+            sslmode.as_deref(),
+            Some("require" | "verify-ca" | "verify-full")
+        )
+    {
+        return Err(ConfigError::new(format!(
+            "Production startup refused: remote {DATABASE_URL_VAR} must specify sslmode=require, verify-ca, or verify-full. (Value withheld.)"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate provider return URLs even while the payment integration is disabled,
+/// so unsafe configuration never becomes latent behavior. Production permits
+/// HTTPS only; HTTP is restricted to loopback in development/test.
+fn validate_optional_web_url(
+    variable: &str,
+    raw: &str,
+    environment: DeploymentEnvironment,
+) -> Result<(), ConfigError> {
+    if raw.len() > 2_048
+        || raw
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(ConfigError::new(format!(
+            "{variable} must be a valid absolute web URL. (Value withheld.)"
+        )));
+    }
+    let parsed = reqwest::Url::parse(raw).map_err(|_| {
+        ConfigError::new(format!(
+            "{variable} must be a valid absolute web URL. (Value withheld.)"
+        ))
+    })?;
+    let host = parsed.host_str().unwrap_or("");
+    let raw_authority = raw
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""))
+        .unwrap_or("");
+    if host.is_empty()
+        || raw_authority.contains('@')
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(ConfigError::new(format!(
+            "{variable} must include a host and must not contain credentials. (Value withheld.)"
+        )));
+    }
+
+    let allowed = match parsed.scheme() {
+        "https" => true,
+        "http" if environment != DeploymentEnvironment::Production => {
+            url_host_is_loopback(host)
+        }
+        _ => false,
+    };
+    if !allowed {
+        return Err(ConfigError::new(format!(
+            "{variable} must use HTTPS; loopback HTTP is allowed only in development/test. (Value withheld.)"
+        )));
+    }
+    Ok(())
 }
 
 /// Strict boolean parsing: exactly `true` or `false` (after trim); unset or
@@ -716,6 +857,117 @@ mod tests {
     }
 
     #[test]
+    fn production_requires_explicit_mode_remote_database_tls_and_real_database_config() {
+        assert!(DeploymentEnvironment::parse(None, true).is_err());
+        assert_eq!(
+            DeploymentEnvironment::parse(Some("test"), true).unwrap(),
+            DeploymentEnvironment::Test
+        );
+        assert!(DeploymentEnvironment::parse(Some("production-ish"), false).is_err());
+
+        let mut missing = AuthConfig::resolve(None, None).unwrap();
+        let missing_error = missing
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .unwrap_err();
+        assert!(missing_error.message().contains(DATABASE_URL_VAR));
+
+        let mut remote_without_tls = AuthConfig::resolve_with_database(
+            None,
+            None,
+            Some("postgres://user:SENTINEL_db_password@db.internal:5432/nexora_auth"),
+        )
+        .unwrap();
+        let tls_error = remote_without_tls
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .unwrap_err();
+        assert!(tls_error.message().contains("sslmode"));
+        assert!(!tls_error.message().contains("SENTINEL_db_password"));
+        assert!(!tls_error.message().contains("db.internal"));
+
+        let mut remote_with_tls = AuthConfig::resolve_with_database(
+            None,
+            None,
+            Some("postgres://user:SENTINEL_db_password@db.internal:5432/nexora_auth?sslmode=verify-full"),
+        )
+        .unwrap();
+        remote_with_tls
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .expect("remote production databases require and accept verified TLS");
+
+        let mut duplicate_tls_modes = AuthConfig::resolve_with_database(
+            None,
+            None,
+            Some("postgres://user:password@db.internal:5432/nexora_auth?sslmode=verify-full&sslmode=disable"),
+        )
+        .unwrap();
+        let duplicate_tls_error = duplicate_tls_modes
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .unwrap_err();
+        assert!(duplicate_tls_error.message().contains("sslmode"));
+        assert!(!duplicate_tls_error.message().contains("password"));
+
+        let mut local = AuthConfig::resolve_with_database(
+            None,
+            None,
+            Some("postgres://user:local_only@127.0.0.1:5432/nexora_auth"),
+        )
+        .unwrap();
+        local
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .expect("loopback database transport does not cross the network");
+
+        let mut ipv6_loopback = AuthConfig::resolve_with_database(
+            None,
+            None,
+            Some("postgres://user:local_only@[::1]:5432/nexora_auth"),
+        )
+        .unwrap();
+        ipv6_loopback
+            .apply_deployment_and_billing_settings(
+                Some("production"), None, None, None, None, None,
+            )
+            .expect("IPv6 loopback databases are local and need no network TLS");
+    }
+
+    #[test]
+    fn configured_return_urls_use_safe_schemes_and_never_echo_values() {
+        assert!(validate_optional_web_url(
+            "STRIPE_SUCCESS_URL",
+            "https://billing.example.invalid/success",
+            DeploymentEnvironment::Production,
+        )
+        .is_ok());
+        assert!(validate_optional_web_url(
+            "STRIPE_SUCCESS_URL",
+            "http://127.0.0.1:8787/success",
+            DeploymentEnvironment::Development,
+        )
+        .is_ok());
+        for (raw, environment) in [
+            ("http://public.example.test/return", DeploymentEnvironment::Development),
+            ("http://127.0.0.1:8787/return", DeploymentEnvironment::Production),
+            ("javascript:alert(1)", DeploymentEnvironment::Development),
+            ("https://user:password@example.test/return", DeploymentEnvironment::Production),
+        ] {
+            let error = validate_optional_web_url("STRIPE_SUCCESS_URL", raw, environment)
+                .unwrap_err();
+            assert!(error.message().contains("STRIPE_SUCCESS_URL"));
+            assert!(!error.message().contains("password"));
+            assert!(!error.message().contains("example.test"));
+        }
+    }
+
+    #[test]
     fn debug_output_redacts_database_url() {
         let config = AuthConfig::resolve_with_database(
             None,
@@ -775,6 +1027,17 @@ mod email_settings_tests {
         assert!(smtp.message().contains("not implemented"));
         assert!(smtp.message().contains("no mail is sent"));
         assert!(smtp.message().contains("withheld"));
+    }
+
+    #[test]
+    fn unsupported_email_provider_values_are_not_echoed() {
+        let sentinel = "smtp://operator:SENTINEL_mail_secret@mail.example.test";
+        let error = EmailSettings::resolve(None, None, Some(sentinel), None, false).unwrap_err();
+        assert!(error.message().contains(EMAIL_PROVIDER_VAR));
+        assert!(error.message().contains("unsupported"));
+        assert!(!error.message().contains("SENTINEL"));
+        assert!(!error.message().contains("operator"));
+        assert!(!error.message().contains("mail.example.test"));
     }
 
     #[test]
@@ -1069,6 +1332,25 @@ impl GoogleSettings {
             .filter(|v| !v.is_empty())
             .map(str::to_string);
 
+        if client_id.as_deref().is_some_and(|value| {
+            AuthConfig::contains_placeholder(value)
+                || value
+                    .chars()
+                    .any(|character| character.is_control() || character.is_whitespace())
+        }) {
+            return Err(ConfigError::new(format!(
+                "{GOOGLE_CLIENT_ID_VAR} must be a real public OAuth client ID, not a placeholder. (Value withheld.)"
+            )));
+        }
+        if client_secret
+            .as_deref()
+            .is_some_and(AuthConfig::contains_placeholder)
+        {
+            return Err(ConfigError::new(format!(
+                "{GOOGLE_CLIENT_SECRET_VAR} contains a placeholder; remove it or provide a real backend-only credential. (Value withheld.)"
+            )));
+        }
+
         match (&client_id, &client_secret, &redirect_uri) {
             (None, None, None) => Ok(Self {
                 client_id: None,
@@ -1148,6 +1430,29 @@ mod google_settings_tests {
         .unwrap_err();
         assert!(bad_uri.message().contains(GOOGLE_REDIRECT_URI_VAR));
         assert!(!bad_uri.message().contains("example.test"));
+    }
+
+    #[test]
+    fn google_settings_reject_template_placeholders_instead_of_activating_oauth() {
+        let id_error = GoogleSettings::resolve(
+            Some("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"),
+            None,
+            Some("http://127.0.0.1/callback"),
+        )
+        .unwrap_err();
+        assert!(id_error.message().contains(GOOGLE_CLIENT_ID_VAR));
+        assert!(!id_error.message().contains("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"));
+
+        let secret_error = GoogleSettings::resolve(
+            Some("client-id-value"),
+            Some("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"),
+            Some("http://127.0.0.1/callback"),
+        )
+        .unwrap_err();
+        assert!(secret_error.message().contains(GOOGLE_CLIENT_SECRET_VAR));
+        assert!(!secret_error
+            .message()
+            .contains("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"));
     }
 
     #[test]

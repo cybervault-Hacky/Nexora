@@ -382,9 +382,14 @@ pub async fn delete_account(
         return Err(AccountError::DependencyUnavailable);
     };
 
+    // Keep the row lock through credential verification, audit persistence, and
+    // deletion. A pool-level SELECT ... FOR UPDATE would release its lock when
+    // its implicit statement transaction ends, leaving both a race and a
+    // possible false "account_deleted" audit event.
+    let mut transaction = pool.begin().await.map_err(|_| AccountError::Internal)?;
     let row = sqlx::query("SELECT email, password_hash FROM users WHERE id = $1::uuid FOR UPDATE")
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| AccountError::Internal)?
         .ok_or(AccountError::NotFound)?;
@@ -404,21 +409,30 @@ pub async fn delete_account(
         }
     }
 
-    audit::record_event(
-        pool,
+    audit::record_event_in_transaction(
+        &mut transaction,
         Some(user_id),
         user_id,
         "account_deleted",
         "ok",
         json!({}),
     )
-    .await;
+    .await
+    .map_err(|_| AccountError::Internal)?;
 
-    sqlx::query("DELETE FROM users WHERE id = $1::uuid")
+    let deletion = sqlx::query("DELETE FROM users WHERE id = $1::uuid")
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| AccountError::Internal)?;
+    if deletion.rows_affected() != 1 {
+        return Err(AccountError::NotFound);
+    }
 
+    transaction.commit().await.map_err(|_| AccountError::Internal)?;
+    // Emit success only after both the persistent audit record and deletion
+    // have committed. The audit row's actor FK is set NULL by the delete, but
+    // its non-FK subject id is retained according to the existing schema.
+    crate::scrub::audit("account_deleted", user_id, "ok");
     Ok(())
 }

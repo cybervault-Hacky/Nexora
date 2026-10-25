@@ -122,14 +122,14 @@ describe("Phase 26 — Developer Licensing & Workspace Tiering Integration", () 
 
     expect(await screen.findByRole("heading", { name: "Developer Licensing" })).toBeTruthy();
     expect(screen.getByText("Community Edition")).toBeTruthy();
-    expect(screen.getByText(/Community Sovereignty Guarantee/i)).toBeTruthy();
+    expect(screen.getByText(/Offline licence status/i)).toBeTruthy();
   });
 
-  it("navigates to Plans & Billing page via /billing alias", async () => {
+  it("navigates to Plans & Premium via the existing /billing alias", async () => {
     render(<App />);
     goto("#/billing");
 
-    expect(await screen.findByRole("heading", { name: "Plans & Billing" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
   });
 
   it("Settings page provides direct navigation link to Licensing page", async () => {
@@ -138,7 +138,7 @@ describe("Phase 26 — Developer Licensing & Workspace Tiering Integration", () 
     goto("#/settings");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
-    const plansLink = screen.getByRole("link", { name: /View Plans & Licences/i });
+    const plansLink = screen.getByRole("link", { name: /Offline Licence Keys/i });
     expect(plansLink).toBeTruthy();
 
     await user.click(plansLink);

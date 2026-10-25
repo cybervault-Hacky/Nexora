@@ -153,10 +153,21 @@ pub enum GenerationEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UsageWarning {
+    /// Stable category; never contains a session token or prompt content.
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenerationOutcome {
     pub request_id: String,
     pub finish_reason: Option<String>,
     pub cancelled: bool,
+    /// Account/local accounting failures are warnings, not failures of the
+    /// separate local inference result.
+    pub usage_warnings: Vec<UsageWarning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -236,6 +247,8 @@ pub struct ActiveDownload {
 pub struct InferenceState {
     pub supervisor: Mutex<process::Supervisor>,
     pub settings: Mutex<SettingsStore>,
+    /// Serializes selected-profile changes against generation/load capture.
+    pub profile_gate: Mutex<()>,
     pub active: Mutex<Option<ActiveGeneration>>,
     /// What the engine last loaded. Cleared on unload and on a failed load.
     pub loaded: Mutex<Option<LoadedModel>>,
@@ -314,6 +327,7 @@ impl InferenceState {
         Self {
             supervisor: Mutex::new(process::Supervisor::new()),
             settings: Mutex::new(SettingsStore::load(&config_dir)),
+            profile_gate: Mutex::new(()),
             active: Mutex::new(None),
             loaded: Mutex::new(None),
             verified: Mutex::new(readiness::VerificationLedger::default()),
@@ -322,6 +336,14 @@ impl InferenceState {
             download: Mutex::new(None),
             config_dir,
         }
+    }
+
+    /// A snapshot of the model the supervisor confirmed ready, when present.
+    pub fn loaded_model(&self) -> Option<LoadedModel> {
+        self.loaded
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned())
     }
 
     /// The context window of the running engine, when one is recorded.
@@ -657,13 +679,25 @@ impl InferenceState {
             }
         }
 
+        let loaded_before_stop = self.loaded_model();
         let mut supervisor = match self.supervisor.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        supervisor.stop();
+        let stop_result = supervisor.stop();
+        let stop_error = supervisor.last_error.clone();
         drop(supervisor);
-        self.clear_loaded();
+
+        if stop_result.is_ok() {
+            self.clear_loaded();
+        } else if let Some(model) = loaded_before_stop {
+            self.record_failure(
+                model.profile_id,
+                stop_error.unwrap_or_else(|| {
+                    "The local engine could not be confirmed stopped.".to_string()
+                }),
+            );
+        }
     }
 }
 

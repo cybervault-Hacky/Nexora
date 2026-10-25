@@ -5,6 +5,7 @@ import {
   toInferenceError,
 } from "../../lib/inference";
 import type { GenerationOutcome } from "../../lib/ipc";
+import { isApprovedProfileId } from "../models/readiness";
 import {
   BUSY_ERROR,
   createAssistantMessage,
@@ -168,6 +169,10 @@ export function useConversation({
           return;
         }
 
+        if (outcome.usageWarnings.length > 0) {
+          setRuntimeError(outcome.usageWarnings.map((warning) => warning.message).join(" "));
+        }
+
         if (outcome.cancelled || session.cancelled) {
           // Never invent an assistant turn: an empty stop stays empty so it is
           // excluded from the next request and shown as a system note instead.
@@ -276,6 +281,10 @@ export function useConversation({
   );
 
   const submit = useCallback(() => {
+    if (!isApprovedProfileId(profileRef.current)) {
+      setRuntimeError("Select an approved local model before sending.");
+      return;
+    }
     if (sessionRef.current) {
       setError(BUSY_ERROR);
       return;
@@ -304,6 +313,10 @@ export function useConversation({
   }, [launchGeneration]);
 
   const retry = useCallback(() => {
+    if (!isApprovedProfileId(profileRef.current)) {
+      setRuntimeError("Select an approved local model before retrying.");
+      return;
+    }
     if (sessionRef.current) {
       setError(BUSY_ERROR);
       return;

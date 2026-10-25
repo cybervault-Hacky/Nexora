@@ -72,12 +72,15 @@ describe("Floating Create Account & Email Verification Modal Flow", () => {
     expect(invokeMock).toHaveBeenCalledWith("auth_register", {
       request: { name: "Ada Lovelace", email: "ada@example.com", password: "strongpassword123" },
     });
-    expect(await within(modal).findByLabelText("Verification token")).toBeTruthy();
+    expect(await within(modal).findByLabelText("Verification code")).toBeTruthy();
 
-    await user.type(within(modal).getByLabelText("Verification token"), "abcdef123456");
+    const verificationToken = "a".repeat(64);
+    await user.type(within(modal).getByLabelText("Verification code"), verificationToken);
     await user.click(within(modal).getByRole("button", { name: "Verify email" }));
     expect(invokeMock).toHaveBeenCalledWith("auth_verify_email", {
-      request: { token: "abcdef123456" },
+      request: { token: verificationToken },
     });
+    expect(await within(modal).findByText("Email verified.")).toBeTruthy();
+    expect(within(modal).getByRole("tab", { name: "Sign in" }).getAttribute("aria-selected")).toBe("true");
   });
 });

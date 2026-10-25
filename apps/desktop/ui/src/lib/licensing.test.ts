@@ -10,10 +10,8 @@ import {
   licenceActivate,
   licenceDeactivate,
   licenceGetStatus,
-  PLAN_TIERS,
 } from "./licensing";
 import { getIpcTelemetryEvents, clearIpcTelemetry } from "./telemetry";
-import { PUBLISHED_DAILY_ALLOWANCE } from "./usage";
 import { markDesktop } from "../test/fixtures";
 
 describe("Phase 26 — Licensing Client & IPC Contracts", () => {
@@ -23,30 +21,12 @@ describe("Phase 26 — Licensing Client & IPC Contracts", () => {
     markDesktop(true);
   });
 
-  it("exports valid plan tiers with community tier as default", () => {
-    expect(PLAN_TIERS.length).toBe(3);
-    const community = PLAN_TIERS.find((p) => p.id === "community");
-    expect(community).toBeDefined();
-    expect(community?.price).toBe("$0");
-  });
-
-  it("never promises unlimited local inference", () => {
-    for (const plan of PLAN_TIERS) {
-      expect(plan.features.some((feature) => /unlimited/i.test(feature.name))).toBe(false);
-      expect(
-        plan.features.some((feature) =>
-          feature.name.startsWith(`${PUBLISHED_DAILY_ALLOWANCE} local generations per day`),
-        ),
-      ).toBe(true);
-    }
-  });
-
   it("licenceGetStatus invokes licence_get_status and records telemetry", async () => {
     invokeMock.mockResolvedValueOnce({
       tier: "pro",
       planName: "Developer Pro Edition",
       active: true,
-      licenceKey: "NEXORA-PRO-PERPETUAL_DEV-1234",
+      licenceKey: "NEXORA-PRO-DEV-1234",
       licensee: "DEV",
       expiresAt: null,
       features: ["commercial_use_rights"],
@@ -66,18 +46,18 @@ describe("Phase 26 — Licensing Client & IPC Contracts", () => {
       tier: "team",
       planName: "Team Commercial Edition",
       active: true,
-      licenceKey: "NEXORA-TEAM-PERPETUAL_ACME-5678",
+      licenceKey: "NEXORA-TEAM-ACME-5678",
       licensee: "ACME",
       expiresAt: null,
       features: ["multi_seat_workspaces"],
     });
 
     const status = await licenceActivate({
-      licenceKey: "NEXORA-TEAM-PERPETUAL_ACME-5678",
+      licenceKey: "NEXORA-TEAM-ACME-5678",
     });
 
     expect(invokeMock).toHaveBeenCalledWith("licence_activate", {
-      request: { licenceKey: "NEXORA-TEAM-PERPETUAL_ACME-5678" },
+      request: { licenceKey: "NEXORA-TEAM-ACME-5678" },
     });
     expect(status.tier).toBe("team");
     expect(status.licensee).toBe("ACME");

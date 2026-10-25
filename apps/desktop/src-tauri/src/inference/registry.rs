@@ -145,7 +145,7 @@ pub const NEXORA_MINI: ModelProfile = ModelProfile {
     quantization: "Q4_K_M",
     licence: LicenceRef {
         id: "Apache-2.0",
-        reference: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/blob/main/LICENSE",
+        reference: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/blob/13fb94bfda8c8cf22497dc57b78f391a9acb426a/LICENSE",
     },
     artifact: ArtifactState::Approved(ModelSource {
         repository: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
@@ -319,14 +319,20 @@ fn find_unique<'a>(profiles: &'a [ModelProfile], id: &str) -> InferenceResult<&'
 /// by a different model than the one its composer names, which is exactly the
 /// silent substitution this project refuses to do.
 ///
-/// `None` means the caller did not state an expectation; that is accepted so an
-/// older client keeps working against the same settings-derived selection.
+/// Every request must identify the profile its composer captured. A missing or
+/// blank id is refused rather than silently substituting the current selection.
 pub fn check_request_profile(
     requested: Option<&str>,
     selected: &ModelProfile,
 ) -> InferenceResult<()> {
     let Some(requested) = requested.map(str::trim).filter(|id| !id.is_empty()) else {
-        return Ok(());
+        return Err(InferenceError::new(
+            "model_mismatch",
+            format!(
+                "This message did not identify the model it was prepared for. {} is selected. Refresh the model list and send it again. Nothing was sent.",
+                selected.display_name
+            ),
+        ));
     };
 
     let requested = match APPROVED.by_id(requested) {
@@ -430,7 +436,11 @@ pub fn check_generation_allowed(load_in_flight: bool) -> InferenceResult<()> {
 ///
 /// Taking the profile rather than an id keeps the pending branch testable with
 /// a profile that is not in the registry.
-pub fn check_selection(chosen: &ModelProfile, loaded: Option<&str>) -> InferenceResult<()> {
+pub fn check_selection(
+    chosen: &ModelProfile,
+    loaded: Option<&str>,
+    has_loaded_model: bool,
+) -> InferenceResult<()> {
     // A profile that cannot be installed cannot be the model being answered
     // with, so say that plainly instead of reporting a mismatch.
     if !chosen.artifact.is_approved() {
@@ -438,6 +448,16 @@ pub fn check_selection(chosen: &ModelProfile, loaded: Option<&str>) -> Inference
             "artifact_pending",
             format!(
                 "{} cannot be used yet: no approved artefact is recorded. Choose another model, or record the artefact metadata first.",
+                chosen.display_name
+            ),
+        ));
+    }
+
+    if !has_loaded_model {
+        return Err(InferenceError::new(
+            "model_mismatch",
+            format!(
+                "{} is selected, but no model is confirmed loaded. Load the selected model before sending.",
                 chosen.display_name
             ),
         ));
@@ -613,6 +633,9 @@ mod tests {
             source.sha256,
             "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c"
         );
+        // Keep the licence pointer at the same immutable artifact revision;
+        // this consistency check is not independent licence verification.
+        assert!(NEXORA_MINI.licence.reference.contains(source.revision));
         assert_eq!(NEXORA_MINI.context.recommended, 32_768);
         assert_eq!(NEXORA_MINI.context.documented_max, 32_768);
     }
@@ -875,13 +898,13 @@ mod tests {
 
     #[test]
     fn generation_matches_only_the_selected_profile() {
-        assert!(check_selection(&NEXORA_MINI, Some(NEXORA_MINI_ID)).is_ok());
-        assert!(check_selection(&NEXORA_SONNET, Some(NEXORA_SONNET_ID)).is_ok());
+        assert!(check_selection(&NEXORA_MINI, Some(NEXORA_MINI_ID), true).is_ok());
+        assert!(check_selection(&NEXORA_SONNET, Some(NEXORA_SONNET_ID), true).is_ok());
     }
 
     #[test]
     fn selecting_sonnet_never_runs_on_a_loaded_mini() {
-        let error = check_selection(&NEXORA_SONNET, Some(NEXORA_MINI_ID)).unwrap_err();
+        let error = check_selection(&NEXORA_SONNET, Some(NEXORA_MINI_ID), true).unwrap_err();
 
         assert_eq!(error.code, "model_mismatch");
         assert!(error.message.contains("Nexora Sonnet is selected"));
@@ -890,7 +913,7 @@ mod tests {
 
     #[test]
     fn selecting_mini_never_runs_on_a_loaded_sonnet() {
-        let error = check_selection(&NEXORA_MINI, Some(NEXORA_SONNET_ID)).unwrap_err();
+        let error = check_selection(&NEXORA_MINI, Some(NEXORA_SONNET_ID), true).unwrap_err();
 
         assert_eq!(error.code, "model_mismatch");
         assert!(error.message.contains("Nexora Mini is selected"));
@@ -902,7 +925,7 @@ mod tests {
         let profile = pending_profile();
 
         for loaded in [None, Some(NEXORA_MINI_ID)] {
-            let error = check_selection(&profile, loaded).unwrap_err();
+            let error = check_selection(&profile, loaded, true).unwrap_err();
 
             assert_eq!(error.code, "artifact_pending");
             assert!(error.message.contains("cannot be used yet"));
@@ -912,16 +935,20 @@ mod tests {
 
     #[test]
     fn an_unidentified_file_cannot_stand_in_for_sonnet() {
-        let error = check_selection(&NEXORA_SONNET, None).unwrap_err();
+        let error = check_selection(&NEXORA_SONNET, None, true).unwrap_err();
 
         assert_eq!(error.code, "model_mismatch");
     }
 
     #[test]
-    fn an_unidentified_file_still_works_for_the_default_profile() {
-        // Existing installations load a path that may not match a registered
-        // artefact; Mini is the default, so this must keep working.
-        assert!(check_selection(&NEXORA_MINI, None).is_ok());
+    fn the_default_profile_accepts_an_unknown_file_only_when_loaded_is_confirmed() {
+        // Mini may run a user-provided custom GGUF, but an absent loaded record
+        // must never stand in for that successful runtime attribution.
+        assert!(check_selection(&NEXORA_MINI, None, true).is_ok());
+
+        let error = check_selection(&NEXORA_MINI, None, false).unwrap_err();
+        assert_eq!(error.code, "model_mismatch");
+        assert!(error.message.contains("no model is confirmed loaded"));
     }
     #[test]
     fn serialises_with_stable_camel_case_keys() {
@@ -953,18 +980,18 @@ mod tests {
     fn a_request_prepared_for_the_selected_profile_is_accepted() {
         assert!(check_request_profile(Some(NEXORA_MINI_ID), &NEXORA_MINI).is_ok());
         assert!(check_request_profile(Some(NEXORA_SONNET_ID), &NEXORA_SONNET).is_ok());
-        // Surrounding whitespace is not a different model.
-        assert!(check_request_profile(Some("  "), &NEXORA_MINI).is_ok());
-        assert!(check_request_profile(Some(""), &NEXORA_MINI).is_ok());
+        // Surrounding whitespace is trimmed without changing the captured id.
+        assert!(check_request_profile(Some("  nexora-mini  "), &NEXORA_MINI).is_ok());
     }
 
     #[test]
-    fn a_request_without_an_expectation_uses_the_stored_selection() {
-        // Compatibility: callers that name no profile are answered by whatever
-        // the core has selected, which is checked separately against the
-        // loaded engine.
-        assert!(check_request_profile(None, &NEXORA_MINI).is_ok());
-        assert!(check_request_profile(None, &NEXORA_SONNET).is_ok());
+    fn a_missing_or_blank_profile_id_is_refused_without_dispatch() {
+        for requested in [None, Some(""), Some("  ")] {
+            let error = check_request_profile(requested, &NEXORA_MINI).unwrap_err();
+            assert_eq!(error.code, "model_mismatch");
+            assert!(error.message.contains("did not identify the model"));
+            assert!(error.message.contains("Nothing was sent"));
+        }
     }
 
     #[test]

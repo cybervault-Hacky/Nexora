@@ -1,16 +1,20 @@
 # Nexora Desktop
 
-The Tauri 2 desktop client for Nexora. This is the Phase 5 feature set — a
-native window shell, a polished React interface, and a Rust core that supervises
-a user-supplied `llama-server` process and streams its output into the
-conversation — carried through the Phase 6–7 verification work. It still contains **no agent
-tools, no project modification, and no model or runtime downloads**.
+The Tauri 2 desktop client for Nexora. Its source includes a native-window shell,
+React interface, workspace analysis, and explicit patch generation/review/application
+paths, plus a Rust core designed to supervise a separately supplied `llama-server`
+process. These source features are not evidence of verified Windows behavior. The
+installer configuration includes neither a runtime executable nor model weights.
+Approved model profiles are acquired separately after an explicit user action; the
+source checks expected size and SHA-256 before accepting an artifact, but no genuine
+model download or inference has been verified.
 
-The Rust crate cannot be compiled in the development sandbox (no toolchain, no
-reachable crate registry). [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
-compiles it, runs clippy with warnings denied, runs its unit tests on Linux
-(48) and Windows (45), and links the Windows executable. Nothing has verified the window, the installer, or a real
-model run. See [`docs/phase-8/`](../../docs/phase-8/README.md).
+The current verification environment has no Cargo toolchain, so no native Rust
+compile or test was run here. [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
+defines Linux and Windows Rust/packaging jobs, but those jobs were not triggered for
+Phase 18 or 19. The native window, Windows installer, and real model behavior remain
+unverified. See [Phase 18](../../docs/PHASE_18_INTEGRATION_VERIFICATION.md) and
+[Phase 19](../../docs/PHASE_19_WINDOWS_PACKAGING.md).
 
 ## Stack
 
@@ -26,15 +30,20 @@ model run. See [`docs/phase-8/`](../../docs/phase-8/README.md).
 
 ## Prerequisites (Windows)
 
-1. **Node.js 22 LTS** and **pnpm 9** (`corepack enable pnpm`).
-2. **Rust stable** via [rustup](https://rustup.rs). The pin is in
-   `rust-toolchain.toml` at the repository root.
+1. **Node.js 22.22.3** and the pinned **pnpm 9.15.4** (`corepack enable pnpm`).
+2. **Rust 1.93.0** via [rustup](https://rustup.rs). The exact toolchain and
+   `rustfmt`/`clippy` components are pinned in `rust-toolchain.toml`.
 3. **Visual Studio 2022 Build Tools** with "Desktop development with C++" and
-   the Windows 10/11 SDK.
-4. **WebView2 Evergreen runtime** (preinstalled on Windows 11).
-5. **A llama.cpp `llama-server` build** pinned to the version recorded in
-   [`docs/phase-2/`](../../docs/phase-2/README.md), and **a GGUF model file**.
-   Nexora does not ship, download, or install either one.
+   the Windows 10/11 SDK; run from an x64 developer shell where `cl.exe`,
+   `link.exe`, and `rc.exe` are available.
+4. **WebView2 Evergreen runtime**. NSIS uses Tauri's silent download
+   bootstrapper when the runtime is absent, so installation may require internet
+   access.
+5. A compatible **`llama-server.exe` runtime** supplied/managed separately; the
+   installer does not bundle or acquire it. The approved Nexora Mini/Sonnet GGUF
+   weights are acquired separately through the explicit in-app download flow or
+   selected from a local file, then verified against the approved SHA-256
+   metadata. Neither model is included in the installer.
 
 Tauri's full prerequisite list is at <https://v2.tauri.app/start/prerequisites/>.
 
@@ -43,13 +52,13 @@ Tauri's full prerequisite list is at <https://v2.tauri.app/start/prerequisites/>
 Run from the repository root unless noted.
 
 ```bash
-pnpm install                 # workspace dependencies
-pnpm dev                     # Vite only, http://localhost:1420
-pnpm tauri dev               # native window (runs Vite automatically)
-pnpm typecheck               # tsc --noEmit
-pnpm test                    # Vitest: unit, hook, and DOM interaction tests
-pnpm build                   # typecheck + production UI build
-pnpm tauri build             # Windows installer (NSIS, per-user)
+pnpm install --frozen-lockfile  # exact workspace dependencies
+pnpm dev                        # Vite only, http://localhost:1420
+pnpm tauri dev                  # native window (runs Vite automatically)
+pnpm typecheck                  # tsc --noEmit
+pnpm test                       # Vitest: unit, hook, and DOM interaction tests
+pnpm test:installer-contract    # metadata, icon, frontend, and payload assertions
+pnpm build                      # typecheck + production UI build + security/installer scans
 ```
 
 `cargo check` or `cargo clippy` run before `pnpm build` will fail: Tauri's
@@ -60,7 +69,52 @@ pnpm build && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-`pnpm tauri build` must be run on Windows with the prerequisites above.
+For a Windows x64 production installer, run the guarded packaging and smoke scripts
+on a native Windows host from an x64 Visual Studio developer shell. The smoke
+script refuses an existing Nexora install/shortcut registration or non-empty
+roaming/local AppData; it uses a disposable Unicode/space test path under
+`LOCALAPPDATA` that cannot overlap the default install or product-data roots. It
+removes only content-matching test sentinels and an unchanged installer copy;
+unexpected or modified test files are left for manual review:
+
+```powershell
+.\scripts\windows\build-installer.ps1
+.\scripts\windows\smoke-verify.ps1
+```
+
+The build script checks Node.js 22.22.3, pnpm 9.15.4, Rust/Cargo 1.93.0,
+the x64 MSVC target, and required compiler tools; it installs the frozen lockfile,
+runs frontend typecheck/tests and installer-contract tests, then explicitly runs
+`pnpm build` **before** Cargo formatting, Clippy, or Rust tests because Tauri's
+native macro embeds `ui/dist`. The final Tauri packaging command runs the
+configured frontend/security/contract build again. Existing NSIS `.exe` outputs
+or `SHA256SUMS.txt` are never reused or overwritten: archive them outside the
+bundle directory before another packaging run. The script requires exactly one
+fresh setup executable and creates the SHA-256 manifest with create-new semantics.
+Tauri 2.12.5 pins NSIS 3.13 and checks upstream toolchain/package hashes with
+SHA-1 (source-level behavior, not an installer signature or provenance
+attestation). The script enforces production settings and rejects configured
+backend-secret environment names. It skips signing and reports an unsigned
+installer unless a current-user Personal-store certificate with Code Signing EKU
+and a matching thumbprint is configured; it checks validity, verifies
+Authenticode, and requires the resulting signer thumbprint to match. PFX password
+variables are rejected to avoid command-line exposure. Node/Rust/package versions
+are pinned, but the hosted Windows/SDK image and WebView2 Evergreen bootstrapper
+are external build/runtime inputs; the manifest identifies actual installer
+bytes, not a complete reproducible-build attestation. The script does not publish
+or distribute artifacts.
+
+## Google sign-in packaging
+
+Set the public installed-app `GOOGLE_OAUTH_CLIENT_ID` in the environment before
+running the Windows packaging script. The Tauri build script embeds that public ID
+in the native binary so a packaged app launched from the Start menu or Dock does
+not depend on its parent shell environment; a runtime environment value can
+still override it. The backend must be configured with the matching Google
+client ID and, only if its OAuth client type requires one, the client secret.
+Never put a client secret in the desktop build. Source configuration is designed to disable Google
+sign-in when the public ID is missing or a placeholder; live OAuth and backend
+behavior remain unverified. Signed-out local chat is intended to remain available.
 
 ## Connecting a model
 
@@ -71,10 +125,12 @@ configured, Nexora shows a setup panel instead of an empty chat:
    `Check` runs `llama-server --version` and shows the first line it printed.
    A build that does not report the pinned number (llama.cpp b11714) is
    labelled as unverified rather than assumed compatible.
-2. **Model file (.gguf)** — full path to a GGUF file you already have.
-   `Check` reads the header (magic, version 2–3, tensor count), requires the
-   `.gguf` extension and a plausible size, and estimates memory need. The file
-   is never uploaded anywhere.
+2. **Model file (.gguf)** — choose an approved Nexora Mini/Sonnet download in
+   the model manager (started only by explicit user action) or select a local
+   GGUF file. Downloads are published only after the expected size and SHA-256
+   match the approved registry metadata. `Check` reads the header (magic,
+   version 2–3, tensor count), requires the `.gguf` extension and a plausible
+   size, and estimates memory need. The file is never uploaded anywhere.
 3. **Context window** — 8K–64K in the UI (the core clamps to 2 048–131 072).
 4. **Save and load model** — persists the choice to
    `<app config dir>/inference-settings.json`, starts the engine on a random
@@ -155,7 +211,12 @@ apps/desktop/
 - Errors keep whatever text arrived, mark the reply `Failed`, and show the
   core's message in a banner. An empty failed reply is removed instead of
   leaving a blank bubble.
-- Nothing is persisted. Closing the window loses the session, by design.
+- Conversation history is persisted by the Tauri core as `conversations.json` in
+  `app_data_dir()`. Closing the window stops the live session but does not clear
+  saved conversations. The smoke test seeds disposable history/settings/model
+  storage sentinels and checks that install, same-build reinstall, uninstall,
+  and reinstall-after-uninstall preserve them; it does not claim a prior-version
+  upgrade test.
 
 ## Security posture
 
@@ -177,8 +238,16 @@ apps/desktop/
   logs prompt text or the key.
 - Prompt and model output are treated as untrusted text. They are rendered as
   text only — never executed, never used to build a path or a command.
-- Exactly ten commands are exposed. None can browse the filesystem, run a
-  shell, or reach the network beyond the loopback endpoint the core owns.
+- At this checkout, `src-tauri/src/lib.rs` registers **86 application IPC
+  command handlers** spanning local inference, model acquisition, history,
+  workspace/file operations, patching/export, account/auth, and licensing.
+  This is a broad trusted-webview API surface and must be reviewed separately
+  from `capabilities/main.json`, which lists Tauri/plugin and window permissions.
+  No generic shell-execution command is registered. The UI has no general
+  browser HTTP access under the production CSP; the Rust core makes the defined
+  HTTPS account/OAuth and explicit model-download requests, while inference
+  talks only to the supervised loopback runtime. These are source/configuration
+  findings, not native-runtime verification.
 - CSP allows only local scripts, local styles, and Tauri IPC. There are no
   remote fonts, images, or scripts. The only window permissions are minimize,
   toggle-maximize, close, and start-dragging.
@@ -201,7 +270,7 @@ decision and a Windows machine to verify.
 
 ## Tests
 
-187 Vitest tests run in jsdom (plus a node-environment configuration suite):
+The current frontend suite runs **873 Vitest tests across 88 files** (jsdom plus a node-environment configuration suite):
 
 - request validation, message factories, and turn reduction
 - submission guard, conversation isolation, and message reducers
@@ -237,8 +306,10 @@ run in the development sandbox, which has no Rust toolchain.
   **not** been compiled or run here; no Rust toolchain is available in this
   container. They are unverified, not proven.
 - No genuine model inference has been performed. No weights or binaries are
-  committed, and nothing is downloaded automatically. A runtime binary *was*
-  built from the pinned source and its HTTP surface exercised on Linux; that
+  committed or bundled. Approved model artifacts can be downloaded only after an
+  explicit user action; no real model download or inference has been performed
+  here. A runtime binary *was* built from the pinned source and its HTTP surface
+  exercised on Linux; that
   proves the contract, not generation. Linux runs are not Windows proof.
 - Only the documented llama.cpp `llama-server` interface is targeted
   (`/health`, `/v1/chat/completions` with SSE). Arbitrary GGUF files are not
@@ -246,6 +317,29 @@ run in the development sandbox, which has no Rust toolchain.
   them.
 - Memory figures shown in setup are estimates from file size and context size,
   clearly labelled as such. No throughput measurement is displayed or claimed.
-- Chat history lives in React state only; it is not persisted.
-- Windows packaging (NSIS) and the native window have **not** been verified in
-  this environment.
+- Conversation history, inference settings, and the runtime session key are
+  stored through Tauri's app data/config directories; on Windows these resolve
+  under `%APPDATA%\com.nexora.desktop`. Approved model acquisition defaults to
+  `app_data_dir()/models`. Tauri's `app_local_data_dir()` uses the separate
+  `%LOCALAPPDATA%\com.nexora.desktop` path. All user data is separate from the
+  per-user NSIS install root.
+- The pinned Tauri NSIS template exposes an explicit app-data deletion choice
+  during interactive uninstall and skips data deletion during an upgrade. The
+  smoke script invokes silent uninstall without requesting deletion and checks
+  roaming/local/model-storage sentinels; it also checks that WebView2 Evergreen
+  remains installed. These are authored checks, not Windows results.
+- Windows packaging (NSIS), native window startup, and these data/WebView2
+  lifecycle behaviors have **not** been verified in this environment.
+
+## Step 3 packaging verification (2026-10-24)
+
+Evidence is deliberately separated by type:
+
+| Evidence type | Result |
+|---|---|
+| Source/configuration inspection | Node `22.22.3`, pnpm `9.15.4`, and Rust/Cargo `1.93.0` match `package.json`, CI, and `rust-toolchain.toml`. The guarded build now creates `ui/dist` with `pnpm build` before native Cargo checks/tests, refuses existing installer `.exe`/manifest outputs instead of reusing or overwriting them, and writes its SHA-256 manifest with create-new semantics. The smoke harness rejects install paths overlapping the standard install/data roots and leaves modified sentinels or unexpected files for review. `.github/workflows/ci.yml` configures the hosted `windows-2022` job's x64 Visual Studio environment via the runner's `vswhere`/`VsDevCmd.bat`; that workflow was not run. |
+| Automated checks on Linux | `PATH="/tmp/nexora-pnpm-bin:$PATH" corepack pnpm check` **PASS**: TypeScript, **88 Vitest files / 873 tests**, installer-contract **17/17**, frontend production build, config-security scan, and production frontend contract scan. `node scripts/check-installer-contract.mjs` reported Nexora `0.1.0`, `com.nexora.desktop`, NSIS, **4 files / 720,456 bytes**, with no model/runtime/credential payload. Vite retained non-fatal warnings for `theme-init.js`, mixed static/dynamic imports, and a 590.21 kB minified chunk. `git diff --check` passed. |
+| PowerShell / native Windows | **NOT VERIFIED.** This host is Linux x86_64; PowerShell, Rust/Cargo, MSVC/Windows SDK, NSIS, and SignTool are absent. Neither `.ps1` script was parsed or executed. No installer, SHA-256 artifact manifest, signature result, or Windows install/launch/uninstall evidence exists. |
+| Windows acceptance | **NOT RUN.** `gh run list --branch arena/9ea88704-nexora` returned no runs. The existing hosted workflow is configuration, not an allocated runner result; this session cannot push the local worktree or trigger a run against these unpushed edits. There is no authorized Windows 10/11 x64 machine available here. No valid previous supported build was supplied, so same-build reinstall is not an upgrade; offline/missing-model runtime behavior also remains untested on Windows. |
+
+The Linux checks and authored smoke tests are **not** Windows acceptance. Do not infer successful packaging, signing, clean installation, shortcut launch, WebView2 bootstrap, version upgrade, uninstall/data retention, offline behavior, or model inference from them.

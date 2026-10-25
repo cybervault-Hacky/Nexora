@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,8 +47,31 @@ pub struct AuthState {
     pub client: AuthApiClient,
     pub current_user: Mutex<Option<AuthUser>>,
     pub google_cancel: Arc<AtomicBool>,
+    google_flow_status: Mutex<GoogleFlowStatus>,
     vault: Arc<dyn CredentialVault>,
     refresh_state: tokio::sync::Mutex<Option<RecentRotation>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GoogleFlowStatus {
+    Idle,
+    Active,
+    Cancelled,
+    Completed,
+}
+
+struct GoogleFlowGuard<'a> {
+    status: &'a Mutex<GoogleFlowStatus>,
+}
+
+impl Drop for GoogleFlowGuard<'_> {
+    fn drop(&mut self) {
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *status = GoogleFlowStatus::Idle;
+    }
 }
 
 impl AuthState {
@@ -56,6 +80,7 @@ impl AuthState {
             client: AuthApiClient::new(),
             current_user: Mutex::new(None),
             google_cancel: Arc::new(AtomicBool::new(false)),
+            google_flow_status: Mutex::new(GoogleFlowStatus::Idle),
             vault: Arc::new(OsCredentialVault),
             refresh_state: tokio::sync::Mutex::new(None),
         }
@@ -67,8 +92,57 @@ impl AuthState {
             client,
             current_user: Mutex::new(None),
             google_cancel: Arc::new(AtomicBool::new(false)),
+            google_flow_status: Mutex::new(GoogleFlowStatus::Idle),
             vault,
             refresh_state: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    fn begin_google_flow(&self) -> AuthResult<GoogleFlowGuard<'_>> {
+        let mut status = self
+            .google_flow_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *status != GoogleFlowStatus::Idle {
+            return Err(AuthError::new(
+                "google_flow_in_progress",
+                "A Google authentication flow is already in progress.",
+            ));
+        }
+        self.google_cancel.store(false, Ordering::SeqCst);
+        *status = GoogleFlowStatus::Active;
+        drop(status);
+        Ok(GoogleFlowGuard {
+            status: &self.google_flow_status,
+        })
+    }
+
+    fn cancel_google_flow(&self) -> bool {
+        let mut status = self
+            .google_flow_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *status {
+            GoogleFlowStatus::Active => {
+                *status = GoogleFlowStatus::Cancelled;
+                self.google_cancel.store(true, Ordering::SeqCst);
+                true
+            }
+            GoogleFlowStatus::Cancelled => true,
+            GoogleFlowStatus::Idle | GoogleFlowStatus::Completed => false,
+        }
+    }
+
+    fn complete_google_flow(&self) -> bool {
+        let mut status = self
+            .google_flow_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *status == GoogleFlowStatus::Active {
+            *status = GoogleFlowStatus::Completed;
+            true
+        } else {
+            false
         }
     }
 
@@ -87,12 +161,20 @@ impl AuthState {
     }
 
     pub fn purge_local_session(&self) {
-        let _ = self.vault.delete_token();
+        let _ = self.try_purge_local_session();
+    }
+
+    /// Clears cached identity even if the OS credential vault refuses deletion.
+    /// Account operations that promise a completed logout/deletion can surface
+    /// the vault failure; best-effort invalid-session cleanup stays non-blocking.
+    pub fn try_purge_local_session(&self) -> AuthResult<()> {
+        let delete_result = self.vault.delete_token();
         let mut user_guard = match self.current_user.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         *user_guard = None;
+        delete_result
     }
 
     fn cache_user(&self, user: AuthUser) {
@@ -198,8 +280,10 @@ pub async fn auth_get_session(state: State<'_, AuthState>) -> AuthResult<AuthSes
         });
     }
 
-    // Attempt restoring session from secure storage (Windows Credential Manager)
-    if let Ok(Some(token)) = state.read_session_token() {
+    // A vault failure is an account-status error, not a fabricated signed-out
+    // state. Local chat separately treats missing/unreadable account state as
+    // an optional warning and continues offline.
+    if let Some(token) = state.read_session_token()? {
         match state.client.get_me(&token).await {
             Ok(user) => {
                 state.cache_user(user.clone());
@@ -241,7 +325,11 @@ pub async fn auth_login(
         .login(&request.email, &request.password)
         .await?;
 
-    state.persist_session_token(&token)?;
+    if let Err(error) = state.persist_session_token(&token) {
+        let _ = state.client.logout(&token).await;
+        state.purge_local_session();
+        return Err(error);
+    }
     state.cache_user(user.clone());
 
     Ok(user)
@@ -302,8 +390,8 @@ pub async fn auth_reset_password(
         .reset_password(&request.token, &request.password)
         .await?;
 
-    // Password reset revokes all sessions; clear local credential storage
-    state.purge_local_session();
+    // Password reset revokes all sessions; report if persistent local cleanup failed.
+    state.try_purge_local_session()?;
 
     Ok(AuthStatusResponse::new(
         "reset",
@@ -337,6 +425,55 @@ pub async fn auth_change_password(
     ))
 }
 
+fn configured_google_client_id(raw: Option<&str>) -> Option<&str> {
+    let value = raw?.trim();
+    let lower = value.to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 512
+        || !value.ends_with(".apps.googleusercontent.com")
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        || [
+            "replace_with",
+            "change_me",
+            "changeme",
+            "placeholder",
+            "your_",
+            "your-",
+            "example.invalid",
+            "example.test",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn select_google_client_id(runtime: Option<&str>, packaged: Option<&str>) -> Option<String> {
+    configured_google_client_id(runtime.or(packaged)).map(str::to_owned)
+}
+
+fn desktop_google_client_id() -> Option<String> {
+    let runtime = std::env::var("GOOGLE_OAUTH_CLIENT_ID").ok();
+    select_google_client_id(
+        runtime.as_deref(),
+        option_env!("NEXORA_GOOGLE_OAUTH_CLIENT_ID"),
+    )
+}
+
+fn require_google_client_id() -> AuthResult<String> {
+    desktop_google_client_id().ok_or_else(|| {
+        AuthError::new(
+            "dependency_unavailable",
+            "Google sign-in is not configured in this desktop build.",
+        )
+    })
+}
+
 /// Returns developer and system diagnostics for Founder Control Centre.
 #[tauri::command]
 pub async fn get_developer_diagnostics(
@@ -354,6 +491,7 @@ pub async fn get_developer_diagnostics(
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         credential_vault: vault_status,
         auth_service_url: state.client.base_url().to_string(),
+        google_oauth_configured: desktop_google_client_id().is_some(),
         csp_enforced: true,
         offline_capable: true,
     })
@@ -366,7 +504,7 @@ pub async fn auth_logout(state: State<'_, AuthState>) -> AuthResult<bool> {
         let _ = state.client.logout(&token).await;
     }
 
-    state.purge_local_session();
+    state.try_purge_local_session()?;
 
     Ok(true)
 }
@@ -374,14 +512,12 @@ pub async fn auth_logout(state: State<'_, AuthState>) -> AuthResult<bool> {
 /// Begins Google OAuth PKCE flow using system browser and loopback redirect.
 #[tauri::command]
 pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUser> {
-    state.google_cancel.store(false, Ordering::SeqCst);
+    let _flow_guard = state.begin_google_flow()?;
+    let client_id = require_google_client_id()?;
 
     let pkce = generate_pkce()?;
     let (listener, port) = bind_loopback()?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-
-    let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "nexora-desktop-client.apps.googleusercontent.com".to_string());
 
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri={}&scope=openid%20email%20profile&state={}&code_challenge={}&code_challenge_method=S256&nonce={}",
@@ -392,8 +528,8 @@ pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUs
         urlencoding(&pkce.nonce),
     );
 
-    // Open system browser safely
-    open_browser(&auth_url);
+    // Open system browser without ever sending the authorization URL through a shell.
+    open_browser_result(&auth_url)?;
 
     // Wait for loopback redirect (120-second timeout).
     let cancel_flag = state.google_cancel.clone();
@@ -410,8 +546,14 @@ pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUs
     .map_err(|_| AuthError::new("task_error", "OAuth listener task ended unexpectedly."))?;
 
     let code = callback?;
+    if state.google_cancel.load(Ordering::SeqCst) {
+        return Err(AuthError::new(
+            "cancelled",
+            "Authentication flow was cancelled.",
+        ));
+    }
 
-    // Perform server-side code exchange
+    // Only the trusted auth service exchanges the code and issues the Nexora session.
     let (user, token) = state
         .client
         .google_exchange(
@@ -423,7 +565,18 @@ pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUs
         )
         .await?;
 
-    state.persist_session_token(&token)?;
+    if !state.complete_google_flow() {
+        let _ = state.client.logout(&token).await;
+        return Err(AuthError::new(
+            "cancelled",
+            "Authentication flow was cancelled.",
+        ));
+    }
+    if let Err(error) = state.persist_session_token(&token) {
+        let _ = state.client.logout(&token).await;
+        state.purge_local_session();
+        return Err(error);
+    }
     state.cache_user(user.clone());
 
     Ok(user)
@@ -432,8 +585,7 @@ pub async fn auth_google_begin(state: State<'_, AuthState>) -> AuthResult<AuthUs
 /// Cancels an in-progress Google OAuth loopback flow.
 #[tauri::command]
 pub async fn auth_google_cancel(state: State<'_, AuthState>) -> AuthResult<bool> {
-    state.google_cancel.store(true, Ordering::SeqCst);
-    Ok(true)
+    Ok(state.cancel_google_flow())
 }
 
 /// Fetches the enriched account profile (providers, password flag, active plan).
@@ -465,13 +617,12 @@ pub async fn account_update_profile(
 #[tauri::command]
 pub async fn account_link_google(state: State<'_, AuthState>) -> AuthResult<super::AccountProfile> {
     let token = state.require_session_token()?;
-    state.google_cancel.store(false, Ordering::SeqCst);
+    let _flow_guard = state.begin_google_flow()?;
+    let client_id = require_google_client_id()?;
 
     let pkce = generate_pkce()?;
     let (listener, port) = bind_loopback()?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-    let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "nexora-desktop-client.apps.googleusercontent.com".to_string());
 
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri={}&scope=openid%20email%20profile&state={}&code_challenge={}&code_challenge_method=S256&nonce={}",
@@ -481,7 +632,7 @@ pub async fn account_link_google(state: State<'_, AuthState>) -> AuthResult<supe
         urlencoding(&pkce.code_challenge),
         urlencoding(&pkce.nonce),
     );
-    open_browser(&auth_url);
+    open_browser_result(&auth_url)?;
 
     let cancel_flag = state.google_cancel.clone();
     let expected_state = pkce.state.clone();
@@ -497,6 +648,18 @@ pub async fn account_link_google(state: State<'_, AuthState>) -> AuthResult<supe
     .map_err(|_| AuthError::new("task_error", "OAuth listener task ended unexpectedly."))?;
 
     let code = callback?;
+    if state.google_cancel.load(Ordering::SeqCst) {
+        return Err(AuthError::new(
+            "cancelled",
+            "Authentication flow was cancelled.",
+        ));
+    }
+    if !state.complete_google_flow() {
+        return Err(AuthError::new(
+            "cancelled",
+            "Authentication flow was cancelled.",
+        ));
+    }
     state.inspect_auth_result(
         state
             .client
@@ -527,7 +690,7 @@ pub async fn account_delete(
 ) -> AuthResult<bool> {
     let token = state.require_session_token()?;
     state.inspect_auth_result(state.client.delete_account(&token, &request).await)?;
-    state.purge_local_session();
+    state.try_purge_local_session()?;
     Ok(true)
 }
 
@@ -570,7 +733,8 @@ pub async fn billing_verify_order(
     state.inspect_auth_result(state.client.verify_order(&token, &request).await)
 }
 
-/// Schedules cancellation at period end or cancels immediately.
+/// Requests cancellation; the backend currently fails closed until a verified
+/// provider lifecycle operation is supported.
 #[tauri::command]
 pub async fn billing_cancel_subscription(
     state: State<'_, AuthState>,
@@ -580,7 +744,8 @@ pub async fn billing_cancel_subscription(
     state.inspect_auth_result(state.client.cancel_subscription(&token, &request).await)
 }
 
-/// Upgrades or downgrades the user's active subscription plan.
+/// Requests a plan change; the backend currently fails closed without
+/// provider-verified lifecycle support.
 #[tauri::command]
 pub async fn billing_change_plan(
     state: State<'_, AuthState>,
@@ -602,46 +767,15 @@ pub async fn billing_open_portal(
     Ok(portal)
 }
 
-/// Returns backend-authoritative daily per-model quota usage, falling back honestly when offline.
+/// Returns a usage summary only when the authenticated backend can report one.
+/// Network/backend failures are not converted into a fabricated Free plan or
+/// account usage; they do not affect the separate local inference path.
 #[tauri::command]
 pub async fn usage_get_server_summary(
     state: State<'_, AuthState>,
-    local_usage: State<'_, crate::usage::UsageState>,
 ) -> AuthResult<super::ServerUsageSummaryDto> {
     let token = state.require_session_token()?;
-    match state.inspect_auth_result(state.client.get_usage_summary(&token).await) {
-        Ok(summary) => Ok(summary),
-        Err(err) if err.code == "network_error" || err.code == "backend_unconfigured" => {
-            let snap = local_usage.status(std::time::SystemTime::now());
-            Ok(super::ServerUsageSummaryDto {
-                plan_id: "free".to_string(),
-                plan_name: "Free (Offline Fallback)".to_string(),
-                period_day_utc: snap.day,
-                resets_at_utc: format!(
-                    "{} (offline local allowance)",
-                    crate::usage::format_utc_instant(snap.reset_at_ms)
-                ),
-                models: vec![
-                    super::ModelUsageItemDto {
-                        model_id: "nexora-mini".to_string(),
-                        daily_limit: snap.allowance as i32,
-                        used: snap.used as i32,
-                        reserved: 0,
-                        remaining: snap.remaining as i32,
-                    },
-                    super::ModelUsageItemDto {
-                        model_id: "nexora-sonnet".to_string(),
-                        daily_limit: snap.allowance as i32,
-                        used: snap.used as i32,
-                        reserved: 0,
-                        remaining: snap.remaining as i32,
-                    },
-                ],
-                offline_fallback: true,
-            })
-        }
-        Err(err) => Err(err),
-    }
+    state.inspect_auth_result(state.client.get_usage_summary(&token).await)
 }
 
 fn urlencoding(input: &str) -> String {
@@ -659,50 +793,174 @@ fn urlencoding(input: &str) -> String {
     out
 }
 
+fn valid_loopback_oauth_redirect(raw: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    parsed.scheme() == "http"
+        && parsed.host_str() == Some("127.0.0.1")
+        && parsed.port().is_some_and(|port| port > 0)
+        && parsed.path() == "/callback"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+}
+
+fn is_base64url(value: &str, expected_len: usize) -> bool {
+    value.len() == expected_len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Only the fixed Google OAuth authorization destination may be opened by the
+/// desktop. Billing URLs remain unavailable until an approved provider exists.
 pub(crate) fn validate_external_https_url(url: &str) -> AuthResult<&str> {
     let trimmed = url.trim();
-    if !trimmed.starts_with("https://") {
-        return Err(AuthError::new(
-            "unsafe_url",
-            "Refusing to open non-HTTPS external URL.",
-        ));
-    }
-    if trimmed.len() > 2048
+    if trimmed.is_empty()
+        || trimmed.len() > 2_048
         || trimmed
             .chars()
-            .any(|c| c.is_control() || c.is_whitespace() || c == '"')
+            .any(|character| {
+                character.is_control()
+                    || character.is_whitespace()
+                    || matches!(character, '"' | '\'' | '\\')
+            })
     {
         return Err(AuthError::new(
             "unsafe_url",
-            "External URL contains forbidden control or whitespace characters.",
+            "External browser URL contains invalid characters.",
         ));
     }
+
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| {
+        AuthError::new(
+            "unsafe_url",
+            "Only the fixed Google OAuth authorization destination may be opened.",
+        )
+    })?;
+    let raw_authority = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(""))
+        .unwrap_or("");
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("accounts.google.com")
+        || parsed.port().is_some()
+        || parsed.path() != "/o/oauth2/v2/auth"
+        || parsed.fragment().is_some()
+        || raw_authority.contains('@')
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(AuthError::new(
+            "unsafe_url",
+            "Only the fixed Google OAuth authorization destination may be opened.",
+        ));
+    }
+
+    let mut parameters = BTreeMap::new();
+    for (key, value) in parsed.query_pairs() {
+        if parameters.insert(key.into_owned(), value.into_owned()).is_some() {
+            return Err(AuthError::new(
+                "unsafe_url",
+                "Google authorization URL contains duplicate parameters.",
+            ));
+        }
+    }
+    const ALLOWED_PARAMETERS: [&str; 8] = [
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "scope",
+        "state",
+        "code_challenge",
+        "code_challenge_method",
+        "nonce",
+    ];
+    if parameters.len() != ALLOWED_PARAMETERS.len()
+        || parameters
+            .keys()
+            .any(|key| !ALLOWED_PARAMETERS.contains(&key.as_str()))
+    {
+        return Err(AuthError::new(
+            "unsafe_url",
+            "Google authorization URL contains missing or unsupported parameters.",
+        ));
+    }
+
+    let client_id = parameters.get("client_id").map(String::as_str);
+    let redirect_uri = parameters.get("redirect_uri").map(String::as_str);
+    if parameters.get("response_type").map(String::as_str) != Some("code")
+        || configured_google_client_id(client_id).is_none()
+        || !redirect_uri.is_some_and(valid_loopback_oauth_redirect)
+        || parameters.get("scope").map(String::as_str) != Some("openid email profile")
+        || !parameters
+            .get("state")
+            .is_some_and(|value| is_base64url(value, 22))
+        || !parameters
+            .get("code_challenge")
+            .is_some_and(|value| is_base64url(value, 43))
+        || parameters.get("code_challenge_method").map(String::as_str) != Some("S256")
+        || !parameters
+            .get("nonce")
+            .is_some_and(|value| is_base64url(value, 22))
+    {
+        return Err(AuthError::new(
+            "unsafe_url",
+            "Google authorization URL failed local PKCE validation.",
+        ));
+    }
+
     Ok(trimmed)
 }
 
-fn open_browser(url: &str) {
-    let Ok(safe_url) = validate_external_https_url(url) else {
-        return;
+fn open_browser_result(url: &str) -> AuthResult<()> {
+    let safe_url = validate_external_https_url(url)?;
+    let spawn_error = || {
+        AuthError::new(
+            "browser_unavailable",
+            "Could not open the system browser. Please open it and try again.",
+        )
     };
 
     #[cfg(target_os = "windows")]
     {
-        // Use rundll32 FileProtocolHandler rather than `cmd /C start` so `&` in OAuth/checkout
-        // query strings is NEVER interpreted as a shell command separator on Windows 10/11.
-        let _ = std::process::Command::new("rundll32.exe")
+        // Use rundll32 rather than a shell so OAuth query delimiters are never
+        // interpreted as command separators.
+        std::process::Command::new("rundll32.exe")
             .args(["url.dll,FileProtocolHandler", safe_url])
-            .spawn();
+            .spawn()
+            .map_err(|_| spawn_error())?;
     }
 
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(safe_url).spawn();
+        std::process::Command::new("open")
+            .arg(safe_url)
+            .spawn()
+            .map_err(|_| spawn_error())?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open").arg(safe_url).spawn();
+        std::process::Command::new("xdg-open")
+            .arg(safe_url)
+            .spawn()
+            .map_err(|_| spawn_error())?;
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = safe_url;
+        return Err(spawn_error());
+    }
+
+    Ok(())
+}
+
+fn open_browser(url: &str) {
+    let _ = open_browser_result(url);
 }
 
 #[cfg(test)]
@@ -712,9 +970,12 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use super::{validate_external_https_url, AuthState, CredentialVault};
+    use super::{
+        configured_google_client_id, select_google_client_id, validate_external_https_url,
+        AuthState, CredentialVault,
+    };
     use crate::auth::client::AuthApiClient;
-    use crate::auth::{AuthResult, AuthUser};
+    use crate::auth::{AuthError, AuthResult, AuthUser};
 
     #[derive(Default)]
     pub(crate) struct TestVault {
@@ -745,19 +1006,127 @@ pub(crate) mod tests {
         }
     }
 
+    struct FailingDeleteVault;
+
+    impl CredentialVault for FailingDeleteVault {
+        fn save_token(&self, _token: &str) -> AuthResult<()> {
+            Ok(())
+        }
+
+        fn get_token(&self) -> AuthResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn delete_token(&self) -> AuthResult<()> {
+            Err(AuthError::storage("The credential vault could not remove the saved session."))
+        }
+    }
+
     #[test]
-    fn allows_valid_https_urls_with_query_ampersands() {
-        let url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=abc&state=123";
+    fn strict_vault_cleanup_reports_failure_but_always_clears_cached_identity() {
+        let state = AuthState::with_vault(
+            AuthApiClient::unconfigured(),
+            Arc::new(FailingDeleteVault),
+        );
+        state.cache_user(AuthUser {
+            id: "SENTINEL_user_id".to_string(),
+            name: "SENTINEL_user".to_string(),
+            email: "user@example.test".to_string(),
+            email_verified: true,
+        });
+
+        let error = state
+            .try_purge_local_session()
+            .expect_err("persistent cleanup failure must be visible to logout");
+        assert_eq!(error.code, "storage_error");
+        assert!(state.cached_user().is_none());
+        assert!(!error.message.contains("SENTINEL"));
+    }
+
+    #[test]
+    fn allows_only_the_fixed_google_oauth_destination_with_pkce_parameters() {
+        let url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=public-client.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&scope=openid%20email%20profile&state=aaaaaaaaaaaaaaaaaaaaaa&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256&nonce=bbbbbbbbbbbbbbbbbbbbbb";
         assert_eq!(validate_external_https_url(url).unwrap(), url);
     }
 
     #[test]
-    fn rejects_non_https_or_whitespace_or_control_urls() {
+    fn browser_url_validation_rejects_non_google_hosts_and_malformed_pkce() {
         assert!(validate_external_https_url("http://insecure.example/pay").is_err());
         assert!(validate_external_https_url("file:///C:/Windows/System32/calc.exe").is_err());
         assert!(validate_external_https_url("javascript:alert(1)").is_err());
-        assert!(validate_external_https_url("https://ok.example/a b").is_err());
-        assert!(validate_external_https_url("https://ok.example/a\r\nb").is_err());
+        assert!(validate_external_https_url("https://checkout.stripe.com/pay/session").is_err());
+        assert!(validate_external_https_url("https://accounts.google.com.evil.example/o/oauth2/v2/auth").is_err());
+        assert!(validate_external_https_url("https://accounts.google.com/o/oauth2/v2/auth?client_id=abc").is_err());
+        assert!(validate_external_https_url("https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=public-client.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&scope=openid%20email%20profile&state=short&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256&nonce=bbbbbbbbbbbbbbbbbbbbbb").is_err());
+        assert!(validate_external_https_url("https://accounts.google.com/o/oauth2/v2/auth?x=1&x=2").is_err());
+    }
+
+    #[test]
+    fn rejects_whitespace_or_control_urls() {
+        assert!(validate_external_https_url("https://accounts.google.com/a b").is_err());
+        assert!(validate_external_https_url("https://accounts.google.com/a\r\nb").is_err());
+    }
+
+    #[test]
+    fn google_client_id_configuration_fails_closed_for_missing_or_placeholders() {
+        assert_eq!(configured_google_client_id(None), None);
+        assert_eq!(configured_google_client_id(Some("  ")), None);
+        assert_eq!(
+            configured_google_client_id(Some(" REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID ")),
+            None
+        );
+        assert_eq!(configured_google_client_id(Some("change_me")), None);
+        assert_eq!(
+            configured_google_client_id(Some(" test-client-id.apps.googleusercontent.com ")),
+            Some("test-client-id.apps.googleusercontent.com")
+        );
+        assert_eq!(configured_google_client_id(Some("client id")), None);
+    }
+
+    #[test]
+    fn packaged_google_client_id_works_without_a_parent_shell_environment() {
+        let packaged = "public-client.apps.googleusercontent.com";
+        assert_eq!(
+            select_google_client_id(None, Some(packaged)).as_deref(),
+            Some(packaged)
+        );
+        assert_eq!(
+            select_google_client_id(
+                Some("runtime-client.apps.googleusercontent.com"),
+                Some(packaged),
+            )
+            .as_deref(),
+            Some("runtime-client.apps.googleusercontent.com")
+        );
+        assert_eq!(
+            select_google_client_id(None, Some("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID")),
+            None
+        );
+        assert_eq!(select_google_client_id(Some(""), Some(packaged)), None);
+    }
+
+    #[test]
+    fn only_one_google_browser_flow_can_be_active_at_a_time() {
+        let state = AuthState::with_vault(
+            AuthApiClient::with_base_url("http://127.0.0.1:8787"),
+            Arc::new(TestVault::default()),
+        );
+        let guard = state.begin_google_flow().expect("first flow starts");
+        assert!(state.begin_google_flow().is_err());
+        assert!(state.cancel_google_flow());
+        assert!(!state.complete_google_flow());
+        assert!(
+            state.begin_google_flow().is_err(),
+            "cancelled flow stays guarded until it exits"
+        );
+        drop(guard);
+
+        let completed = state
+            .begin_google_flow()
+            .expect("next flow starts after cleanup");
+        assert!(state.complete_google_flow());
+        assert!(!state.cancel_google_flow(), "completed flow is no longer cancellable");
+        drop(completed);
     }
 
     #[tokio::test]
@@ -907,5 +1276,41 @@ pub(crate) mod tests {
         assert!(vault.get_token().unwrap().is_none());
         assert!(state.cached_user().is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_service_failure_preserves_stored_token_and_cached_user() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind 503 mock");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let body = r#"{"error":{"code":"dependency_unavailable","message":"Sessions are temporarily unavailable."}}"#;
+                let resp = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let vault = TestVault::with_token("stored-session-token");
+        let state = AuthState::with_vault(
+            AuthApiClient::with_base_url(format!("http://{addr}")),
+            Arc::clone(&vault) as Arc<dyn CredentialVault>,
+        );
+        state.cache_user(AuthUser {
+            id: "u1".to_string(),
+            name: "Cached User".to_string(),
+            email: "cached@example.org".to_string(),
+            email_verified: true,
+        });
+
+        let err = state.refresh_session().await.unwrap_err();
+        assert_eq!(err.code, "dependency_unavailable");
+        assert!(!err.is_session_invalid());
+        assert_eq!(vault.get_token().unwrap().as_deref(), Some("stored-session-token"));
+        assert_eq!(state.cached_user().unwrap().email, "cached@example.org");
     }
 }

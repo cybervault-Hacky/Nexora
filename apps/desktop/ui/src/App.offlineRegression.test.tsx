@@ -178,7 +178,7 @@ describe("Phase 23 Step 7 — Offline AI & Unauthenticated Regression Suite", ()
     expect(await screen.findByRole("dialog")).toBeTruthy();
 
     // Close modal back to AI Chat workspace without needing credentials
-    await user.click(screen.getByRole("button", { name: "Close sign-in dialog" }));
+    await user.click(screen.getByRole("button", { name: "Close authentication dialog" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByRole("region", { name: "Conversation messages" })).toBeTruthy();
     expect(window.location.hash).toBe("#/chat");

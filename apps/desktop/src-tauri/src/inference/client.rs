@@ -339,6 +339,7 @@ pub async fn stream_chat_with_timeouts(
         request_id: request_id.to_string(),
         finish_reason,
         cancelled: false,
+        usage_warnings: Vec::new(),
     })
 }
 
@@ -421,6 +422,7 @@ fn cancelled_outcome(request_id: &str) -> GenerationOutcome {
         request_id: request_id.to_string(),
         finish_reason: Some("stopped".to_string()),
         cancelled: true,
+        usage_warnings: Vec::new(),
     }
 }
 

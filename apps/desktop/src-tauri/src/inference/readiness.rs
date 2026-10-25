@@ -29,9 +29,9 @@ pub const MIB_BYTES: u64 = 1024 * 1024;
 
 /// Space held back on top of the weights when planning a download.
 ///
-/// The published file is written to a `.part` file and renamed into place, so
-/// the peak requirement is the file itself plus bookkeeping. This reserve also
-/// covers the filesystem's own metadata for a multi-gigabyte file.
+/// The published file is first written as a `.part` file, so the peak
+/// requirement is the file itself plus bookkeeping. This reserve also covers
+/// the filesystem's own metadata for a multi-gigabyte file.
 pub const INSTALL_HEADROOM_BYTES: u64 = 512 * MIB_BYTES;
 
 /// Memory the desktop and the runtime need on top of the weights.
@@ -88,6 +88,9 @@ impl VerificationLedger {
     }
 
     pub fn begin_verifying(&mut self, profile_id: &'static str) {
+        // A re-check is authoritative. Do not keep an earlier success visible
+        // if the file has since changed or cannot be read this time.
+        self.verified.remove(profile_id);
         self.in_progress.insert(profile_id);
     }
 
@@ -332,7 +335,7 @@ pub struct ResourceEstimate {
     pub model_bytes: u64,
     /// Free space the destination needs before a download may start.
     pub required_free_bytes: u64,
-    /// Bytes the weights occupy once installed (the `.part` is renamed).
+    /// Bytes the weights occupy once the verified `.part` is published.
     pub install_bytes: u64,
     /// Peak bytes on disk during a download, including the headroom reserve.
     pub peak_download_bytes: u64,
@@ -982,6 +985,22 @@ mod tests {
 
         assert!(ledger.is_verified(NEXORA_SONNET.id, path));
         assert!(!ledger.has_failed(NEXORA_SONNET.id));
+    }
+
+    #[test]
+    fn a_recheck_removes_the_previous_success_until_new_evidence_arrives() {
+        let mut ledger = VerificationLedger::default();
+        let path = Path::new("/models/sonnet.gguf");
+
+        ledger.mark_verified(NEXORA_SONNET.id, path);
+        ledger.begin_verifying(NEXORA_SONNET.id);
+
+        assert!(!ledger.is_verified(NEXORA_SONNET.id, path));
+        assert!(ledger.is_verifying(NEXORA_SONNET.id));
+
+        ledger.mark_verified(NEXORA_SONNET.id, path);
+        assert!(ledger.is_verified(NEXORA_SONNET.id, path));
+        assert!(!ledger.is_verifying(NEXORA_SONNET.id));
     }
 
     #[test]

@@ -12,6 +12,7 @@ import { UsageMeter } from "../components/UsageMeter";
 import type { usePersistentConversation } from "../features/chat/usePersistentConversation";
 import type { ModelCatalog } from "../features/models/useModelCatalog";
 import type { UsageView } from "../features/usage/useUsage";
+import { isApprovedProfileId } from "../features/models/readiness";
 import { planContextBudget } from "../features/workspace/contextBudget";
 import type { RetrievalResult } from "../features/workspace/retrieval";
 import type { useWorkspace } from "../features/workspace/useWorkspace";
@@ -131,7 +132,8 @@ export function ChatPage({
   const hasMessages = messages.length > 0;
   const engineChip = describeEngineChip(engineStatus, statusError, engineReady);
   const allowanceExhausted = usage.status?.exhausted ?? false;
-  const missingApprovedSelection = models.entries.length > 0 && !models.selected;
+  const missingApprovedSelection =
+    !models.selected || !isApprovedProfileId(models.selected.profile.id);
   const showUsage = usage.status !== null || usage.error !== null;
   const conversationTitle = activeId
     ? activeTitle
@@ -278,7 +280,7 @@ export function ChatPage({
             {engineChip.label}
           </span>
 
-          {serverUsage ? (
+          {serverUsage?.quotaConfigured && serverUsage.planName ? (
             <span className="chip" aria-label="Daily plan allowance">
               {serverUsage.planName}
             </span>
@@ -475,7 +477,7 @@ export function ChatPage({
         </div>
       ) : null}
 
-      {serverUsage ? (
+      {serverUsage?.quotaConfigured && serverUsage.models.length > 0 ? (
         <div className="server-quota-bar" role="region" aria-label="Daily model quota">
           <span>
             {serverUsage.models
@@ -486,7 +488,7 @@ export function ChatPage({
               .join(" · ")}
           </span>
           <RouterLink to="plans" className="server-quota-bar__upgrade">
-            Plans &amp; Quotas
+            Plans &amp; Premium
           </RouterLink>
         </div>
       ) : null}
@@ -511,11 +513,20 @@ export function ChatPage({
             : models.selectionError
               ? models.selectionError
               : missingApprovedSelection
-                ? "Select an approved local model before sending"
+                ? models.loading
+                  ? "Waiting for an approved local model profile"
+                  : "Select an approved local model before sending"
                 : null
         }
         onChange={setDraft}
         onSubmit={() => {
+          if (
+            !models.selected ||
+            !isApprovedProfileId(models.selected.profile.id) ||
+            models.selectionError
+          ) {
+            return;
+          }
           stickToBottomRef.current = true;
           onSubmit();
         }}

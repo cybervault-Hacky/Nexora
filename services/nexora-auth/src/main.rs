@@ -37,17 +37,23 @@ async fn main() {
                 });
             if let Err(error) = sqlx::query("SELECT 1").execute(&pool).await {
                 eprintln!(
-                    "nexora-auth: configured database is unreachable ({error}). \
-                     (Connection string withheld.)"
+                    "nexora-auth: configured database is unreachable ({}).",
+                    nexora_auth::scrub::scrub(&error.to_string())
                 );
                 std::process::exit(1);
             }
             if let Err(error) = nexora_auth::run_migrations(&pool).await {
-                eprintln!("nexora-auth: database migrations failed ({error}).");
+                eprintln!(
+                    "nexora-auth: database migrations failed ({}).",
+                    nexora_auth::scrub::scrub(&error.to_string())
+                );
                 std::process::exit(1);
             }
             if let Err(error) = nexora_auth::billing::sync_plan_catalog(&pool, &catalog).await {
-                eprintln!("nexora-auth: failed to synchronize plan catalogue ({error}).");
+                eprintln!(
+                    "nexora-auth: failed to synchronize plan catalogue ({}).",
+                    nexora_auth::scrub::scrub(&error.to_string())
+                );
                 std::process::exit(1);
             }
             Some(pool)
@@ -71,33 +77,25 @@ async fn main() {
     let google_provider: Option<Arc<dyn nexora_auth::oauth::GoogleProvider>> =
         match (&config.google_client_id, &config.google_redirect_uri) {
             (Some(client_id), Some(_)) => {
-                Some(Arc::new(nexora_auth::oauth::HttpGoogleProvider::new(
+                let provider = match nexora_auth::oauth::HttpGoogleProvider::new(
                     client_id.clone(),
                     config.google_client_secret.clone(),
-                )))
+                ) {
+                    Ok(provider) => provider,
+                    Err(_) => {
+                        eprintln!("nexora-auth: Google HTTP client could not be initialized.");
+                        std::process::exit(1);
+                    }
+                };
+                Some(Arc::new(provider))
             }
             _ => None,
         };
 
-    let payment_provider: Arc<dyn nexora_auth::billing::PaymentProvider> =
-        match &config.stripe_secret_key {
-            Some(secret_key) => Arc::new(nexora_auth::billing::StripeHttpProvider::new(
-                secret_key.clone(),
-                config
-                    .stripe_success_url
-                    .clone()
-                    .unwrap_or_else(|| "https://nexora.local/billing/success".to_string()),
-                config
-                    .stripe_cancel_url
-                    .clone()
-                    .unwrap_or_else(|| "https://nexora.local/billing/cancel".to_string()),
-                config
-                    .stripe_portal_return_url
-                    .clone()
-                    .unwrap_or_else(|| "https://nexora.local/billing/return".to_string()),
-            )),
-            None => Arc::new(nexora_auth::billing::UnconfiguredPaymentProvider),
-        };
+    // Payment integration is intentionally disabled until an approved provider
+    // implementation and entitlement review exist. Environment credentials are
+    // never sufficient to activate checkout, webhooks, or portal operations.
+    let (payment_provider, stripe_webhook_secret) = payment_runtime_config(&config);
 
     let state = Arc::new(AppState {
         pool,
@@ -114,13 +112,20 @@ async fn main() {
         google_provider,
         google_redirect_uri: config.google_redirect_uri.clone(),
         payment_provider,
-        stripe_webhook_secret: config.stripe_webhook_secret.clone(),
+        // Proposed catalogue values are not quota approval. Keep account
+        // generation unconfigured until a reviewed policy is explicitly wired.
+        quota_policy: nexora_auth::quota::QuotaPolicy::unconfigured(),
+        stripe_webhook_secret,
     });
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .unwrap_or_else(|error| {
-            eprintln!("nexora-auth: cannot bind {}: {error}", config.bind);
+            eprintln!(
+                "nexora-auth: cannot bind {}: {}",
+                config.bind,
+                nexora_auth::scrub::scrub(&error.to_string())
+            );
             std::process::exit(1);
         });
 
@@ -153,13 +158,54 @@ async fn main() {
     .with_graceful_shutdown(shutdown_signal())
     .await
     {
-        eprintln!("nexora-auth: server error: {error}");
+        eprintln!(
+            "nexora-auth: server error: {}",
+            nexora_auth::scrub::scrub(&error.to_string())
+        );
         std::process::exit(1);
     }
+}
+
+fn payment_runtime_config(
+    _config: &AuthConfig,
+) -> (
+    Arc<dyn nexora_auth::billing::PaymentProvider>,
+    Option<String>,
+) {
+    (
+        Arc::new(nexora_auth::billing::UnconfiguredPaymentProvider),
+        None,
+    )
 }
 
 const DATABASE_URL_LABEL: &str = "NEXORA_AUTH_DATABASE_URL";
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payment_credentials_never_activate_runtime_provider_or_webhooks() {
+        let mut config = AuthConfig::resolve(None, None).expect("default config");
+        config
+            .apply_deployment_and_billing_settings(
+                Some("test"),
+                Some("sk_test_PHASE17_FIXTURE_ONLY"),
+                Some("whsec_PHASE17_FIXTURE_ONLY"),
+                Some("https://billing.example.test/success"),
+                Some("https://billing.example.test/cancel"),
+                Some("https://billing.example.test/return"),
+            )
+            .expect("synthetic test credentials are accepted only as inert config");
+
+        let (provider, webhook_secret) = payment_runtime_config(&config);
+        assert!(!provider.is_configured());
+        assert!(webhook_secret.is_none());
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("PHASE17_FIXTURE_ONLY"));
+    }
 }

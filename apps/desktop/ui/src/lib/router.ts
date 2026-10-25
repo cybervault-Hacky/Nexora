@@ -14,7 +14,7 @@ export const ROUTES = [
   { id: "projects", path: "/projects", label: "Projects" },
   { id: "code", path: "/code", label: "Code Intelligence" },
   { id: "models", path: "/models", label: "Local Models" },
-  { id: "plans", path: "/plans", label: "Plans & Billing" },
+  { id: "plans", path: "/plans", label: "Plans & Premium" },
   { id: "account", path: "/account", label: "Account" },
   { id: "settings", path: "/settings", label: "Settings" },
   { id: "founder", path: "/founder", label: "Diagnostics" },
@@ -110,5 +110,13 @@ export function navigateTo(id: RouteId): void {
   const current = window.location.hash;
   if (parseRoute(current).id === id) return;
   window.location.hash = href;
+  window.dispatchEvent(new Event("hashchange"));
+}
+
+/** Replace a flow URL without retaining a one-time token in browser history. */
+export function replaceRouteTo(id: RouteId): void {
+  const href = routeHref(id);
+  if (window.location.hash === href) return;
+  window.history.replaceState(window.history.state, "", href);
   window.dispatchEvent(new Event("hashchange"));
 }

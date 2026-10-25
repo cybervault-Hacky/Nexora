@@ -12,8 +12,9 @@ const SETTINGS_FILE: &str = "inference-settings.json";
 
 /// User-chosen engine configuration.
 ///
-/// Nexora never downloads weights or binaries on its own; both paths point at
-/// files the user already has, and both are re-validated on every load.
+/// Model weights may be explicitly acquired through the approved registry or
+/// selected from the user's files. Runtime binaries remain user-provided; both
+/// paths are re-validated on every load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {

@@ -12,11 +12,18 @@ vi.mock("../../lib/inference", async (importOriginal) => {
 });
 
 import { cancelGeneration, generate } from "../../lib/inference";
-import { usePersistentConversation } from "./usePersistentConversation";
+import { usePersistentConversation as usePersistentConversationImpl } from "./usePersistentConversation";
 import { clearFallbackStorage } from "../../lib/history";
 
 const MINI_ID = "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m";
 const SONNET_ID = "nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m";
+const usePersistentConversation = (
+  options?: Parameters<typeof usePersistentConversationImpl>[0],
+) =>
+  usePersistentConversationImpl({
+    ...options,
+    profileId: options?.profileId === undefined ? MINI_ID : options.profileId,
+  });
 
 const generateMock = vi.mocked(generate);
 
@@ -54,7 +61,7 @@ function session() {
     raw: (event: GenerationEvent) => emit(event),
     send: (text: string) => emit({ type: "delta", requestId, text }),
     settle: (overrides: Partial<GenerationOutcome> = {}) =>
-      resolve({ requestId, finishReason: "stop", cancelled: false, ...overrides }),
+      resolve({ requestId, finishReason: "stop", cancelled: false, usageWarnings: [], ...overrides }),
     fail: (cause: unknown) => reject(cause),
   };
 }
@@ -76,6 +83,31 @@ describe("usePersistentConversation", () => {
     expect(result.current.conversations).toHaveLength(0);
     expect(result.current.activeId).toBeNull();
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("keeps a completed local reply and surfaces an accounting warning", async () => {
+    const run = session();
+    const { result } = renderHook(() => usePersistentConversation());
+    await waitFor(() => expect(result.current.listLoading).toBe(false));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+    act(() => run.send("local answer"));
+    await act(async () => {
+      run.settle({
+        usageWarnings: [
+          {
+            code: "account_usage_settlement_failed",
+            message: "Account usage could not be settled; local inference is unaffected.",
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+    expect(result.current.messages[1]?.state).toBe("complete");
+    expect(result.current.messages[1]?.content).toBe("local answer");
+    expect(result.current.runtimeError).toContain("local inference is unaffected");
   });
 
   it("creates and switches conversations, preserving messages", async () => {
@@ -434,18 +466,20 @@ describe("usePersistentConversation", () => {
     await act(async () => run.settle());
   });
 
-  it("defaults to the default profile when no selection is passed", async () => {
-    const run = session();
-    const { result } = renderHook(() => usePersistentConversation());
+  it("refuses to submit while the approved profile selection is unavailable", async () => {
+    const { result } = renderHook(() =>
+      usePersistentConversation({ profileId: null }),
+    );
     await waitFor(() => expect(result.current.listLoading).toBe(false));
 
     act(() => result.current.setDraft("hello"));
     act(() => result.current.submit());
 
-    // No profile is named: the core falls back to its own stored selection,
-    // which is Nexora Mini. The UI never invents an id.
-    expect(sentRequest(0).profileId).toBeNull();
-    await act(async () => run.settle());
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.runtimeError).toBe(
+      "Select an approved local model before sending.",
+    );
   });
 
   it("sends the profile that is selected when the message is sent, not at mount", async () => {

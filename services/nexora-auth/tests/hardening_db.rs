@@ -29,6 +29,8 @@ use tower::ServiceExt;
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
+mod support;
+
 async fn test_pool() -> PgPool {
     let url = std::env::var(TEST_URL_VAR).unwrap_or_else(|_| {
         panic!("{TEST_URL_VAR} must be set to an isolated throwaway database");
@@ -38,6 +40,7 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");
@@ -60,23 +63,29 @@ async fn exponential_backoff_escalates_for_persistent_offenders() {
 
     // Exactly one exhausted window → plain window as Retry-After.
     for _ in 0..2 {
-        rate_limit::record(&pool, "login", &key, "failure").await;
+        rate_limit::record(&pool, "login", &key, "failure")
+            .await
+            .expect("record rate-limit event");
     }
     assert_eq!(
         rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly)
             .await
             .unwrap_err(),
-        600
+        rate_limit::RateLimitError::Limited(600)
     );
 
     // Keep failing: three full windows' worth → exponential backoff
     // (600 << (3-1) = 2400), per plan §4 "exponential lockout".
     for _ in 0..4 {
-        rate_limit::record(&pool, "login", &key, "failure").await;
+        rate_limit::record(&pool, "login", &key, "failure")
+            .await
+            .expect("record rate-limit event");
     }
     let retry = rate_limit::check(&pool, "login", &key, rule, CountMode::FailuresOnly)
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .retry_after_secs()
+        .expect("exhausted window");
     assert!(retry >= 2_400, "expected escalation, got {retry}");
     assert!(
         retry <= MAX_BACKOFF_SECS,
@@ -105,19 +114,27 @@ async fn window_boundary_blocks_exactly_at_the_limit() {
     };
     let key = rate_limit::ip_key("203.0.113.7");
 
-    rate_limit::record(&pool, "register", &key, "failure").await;
-    rate_limit::record(&pool, "register", &key, "failure").await;
+    rate_limit::record(&pool, "register", &key, "failure")
+        .await
+        .expect("record rate-limit event");
+    rate_limit::record(&pool, "register", &key, "failure")
+        .await
+        .expect("record rate-limit event");
     // 2 of 3 → allowed.
     assert!(
         rate_limit::check(&pool, "register", &key, rule, CountMode::FailuresOnly)
             .await
             .is_ok()
     );
-    rate_limit::record(&pool, "register", &key, "failure").await;
+    rate_limit::record(&pool, "register", &key, "failure")
+        .await
+        .expect("record rate-limit event");
     // 3 of 3 → blocked with a Retry-After the handler turns into a header.
     let retry = rate_limit::check(&pool, "register", &key, rule, CountMode::FailuresOnly)
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .retry_after_secs()
+        .expect("exhausted window");
     assert!(retry >= 900);
 }
 
@@ -165,6 +182,82 @@ async fn forwarded_headers_are_never_used_for_rate_limit_keys() {
         .unwrap();
     assert_eq!(spoofed, 0, "forwarded headers must never key the limiter");
     assert!(peer_rows > 0, "the socket peer must key the limiter");
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn email_flows_record_only_the_socket_peer_ip() {
+    let pool = test_pool().await;
+    let mut state = AppState::unconfigured();
+    state.pool = Some(pool.clone());
+    state.email = std::sync::Arc::new(UnconfiguredEmailProvider);
+    let app = build_router_with_state(Arc::new(state));
+    let peer: SocketAddr = "203.0.113.11:52000".parse().unwrap();
+    let email = "peer-limit@example.test";
+
+    let mut register = Request::builder()
+        .method("POST")
+        .uri("/v1/auth/register")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", "198.51.100.77")
+        .body(Body::from(format!(
+            r#"{{"name":"Test User","email":"{email}","password":"long enough password"}}"#
+        )))
+        .unwrap();
+    register.extensions_mut().insert(ConnectInfo(peer));
+    assert_eq!(
+        app.clone().oneshot(register).await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut resend = Request::builder()
+        .method("POST")
+        .uri("/v1/auth/resend-verification")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", "198.51.100.77")
+        .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
+        .unwrap();
+    resend.extensions_mut().insert(ConnectInfo(peer));
+    assert_eq!(
+        app.clone().oneshot(resend).await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut recovery = Request::builder()
+        .method("POST")
+        .uri("/v1/auth/recovery-request")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", "198.51.100.77")
+        .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
+        .unwrap();
+    recovery.extensions_mut().insert(ConnectInfo(peer));
+    assert_eq!(
+        app.oneshot(recovery).await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+
+    let peer_key = rate_limit::ip_key("203.0.113.11");
+    let spoofed_key = rate_limit::ip_key("198.51.100.77");
+    for scope in ["register", "resend", "recovery"] {
+        let (peer_rows,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM login_attempts WHERE scope = $1 AND key = $2 AND outcome = 'attempt'",
+        )
+        .bind(scope)
+        .bind(&peer_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let (spoofed_rows,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM login_attempts WHERE scope = $1 AND key = $2",
+        )
+        .bind(scope)
+        .bind(&spoofed_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(peer_rows, 1, "{scope} must record one peer attempt");
+        assert_eq!(spoofed_rows, 0, "{scope} must ignore forwarded headers");
+    }
 }
 
 #[tokio::test]

@@ -8,6 +8,18 @@ export interface AuthUser {
   emailVerified: boolean;
 }
 
+/** Runtime guard for data crossing the Tauri IPC boundary. */
+export function isAuthUser(value: unknown): value is AuthUser {
+  if (typeof value !== "object" || value === null) return false;
+  const user = value as Record<string, unknown>;
+  return (
+    typeof user.id === "string" && user.id.trim().length > 0 &&
+    typeof user.name === "string" &&
+    typeof user.email === "string" && user.email.trim().length > 0 &&
+    typeof user.emailVerified === "boolean"
+  );
+}
+
 export interface AccountProfile {
   id: string;
   name: string;
@@ -18,6 +30,24 @@ export interface AccountProfile {
   planId: string;
   planName: string;
   createdAt: string;
+}
+
+/** Runtime guard for the authenticated profile returned across Tauri IPC. */
+export function isAccountProfile(value: unknown): value is AccountProfile {
+  if (typeof value !== "object" || value === null) return false;
+  const profile = value as Record<string, unknown>;
+  return (
+    typeof profile.id === "string" && profile.id.trim().length > 0 &&
+    typeof profile.name === "string" && profile.name.trim().length > 0 &&
+    typeof profile.email === "string" && profile.email.trim().length > 0 &&
+    typeof profile.emailVerified === "boolean" &&
+    typeof profile.hasPassword === "boolean" &&
+    Array.isArray(profile.providers) &&
+    profile.providers.every((provider) => typeof provider === "string" && provider.trim().length > 0) &&
+    typeof profile.planId === "string" &&
+    typeof profile.planName === "string" &&
+    typeof profile.createdAt === "string"
+  );
 }
 
 export interface AuthSessionInfo {
@@ -153,11 +183,13 @@ export interface ModelUsageItem {
 }
 
 export interface ServerUsageSummary {
-  planId: string;
-  planName: string;
-  periodDayUtc: string;
-  resetsAtUtc: string;
+  quotaConfigured: boolean;
+  planId: string | null;
+  planName: string | null;
+  periodDayUtc: string | null;
+  resetsAtUtc: string | null;
   models: ModelUsageItem[];
+  /** Retained for wire compatibility; offline responses are no longer fabricated. */
   offlineFallback?: boolean;
 }
 
@@ -167,6 +199,7 @@ export interface DeveloperDiagnostics {
   appVersion: string;
   credentialVault: string;
   authServiceUrl: string;
+  googleOauthConfigured?: boolean;
   cspEnforced: boolean;
   offlineCapable: boolean;
 }
@@ -314,57 +347,8 @@ export async function accountDelete(payload: DeleteAccountPayload): Promise<bool
 
 export async function billingListPlans(): Promise<PlanCatalog> {
   if (!isDesktopShell()) {
-    return {
-      paymentConfigured: false,
-      provider: "stripe",
-      plans: [
-        {
-          id: "free",
-          name: "Free",
-          description: "Daily local AI coding assistance with Nexora Mini and Sonnet.",
-          features: [
-            "Local GGUF inference on your hardware",
-            "25 Nexora Mini messages per day",
-            "5 Nexora Sonnet messages per day",
-            "Workspace context, symbol index & diff preview",
-          ],
-          modelQuotas: { "nexora-mini": 25, "nexora-sonnet": 5 },
-          prices: [{ id: "free_monthly", planId: "free", interval: "month", currency: "usd", amountMinor: 0 }],
-        },
-        {
-          id: "pro",
-          name: "Pro",
-          description: "Higher daily model quotas and priority updates for individual developers.",
-          features: [
-            "Everything in Free",
-            "300 Nexora Mini messages per day",
-            "100 Nexora Sonnet messages per day",
-            "Multi-file patch batches & verification workflows",
-          ],
-          modelQuotas: { "nexora-mini": 300, "nexora-sonnet": 100 },
-          prices: [
-            { id: "pro_monthly", planId: "pro", interval: "month", currency: "usd", amountMinor: 1900 },
-            { id: "pro_yearly", planId: "pro", interval: "year", currency: "usd", amountMinor: 19000 },
-          ],
-        },
-        {
-          id: "team",
-          name: "Team",
-          description: "High-volume daily quotas and commercial seat management for engineering teams.",
-          features: [
-            "Everything in Pro",
-            "1,000 Nexora Mini messages per day",
-            "400 Nexora Sonnet messages per day",
-            "Centralized billing & audit trail",
-          ],
-          modelQuotas: { "nexora-mini": 1000, "nexora-sonnet": 400 },
-          prices: [
-            { id: "team_monthly", planId: "team", interval: "month", currency: "usd", amountMinor: 3900 },
-            { id: "team_yearly", planId: "team", interval: "year", currency: "usd", amountMinor: 39000 },
-          ],
-        },
-      ],
-    };
+    // Browser previews must not invent prices, quotas, or entitlements.
+    return { paymentConfigured: false, provider: "unconfigured", plans: [] };
   }
   return await invoke<PlanCatalog>("billing_list_plans");
 }

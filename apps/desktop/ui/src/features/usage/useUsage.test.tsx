@@ -72,7 +72,12 @@ describe("Phase 7 — useUsage", () => {
     vi.setSystemTime(new Date("2026-10-20T23:50:00Z"));
 
     fetchUsageMock.mockResolvedValueOnce(
-      makeUsage({ used: 50, exhausted: true, resetAtMs: Date.UTC(2026, 9, 21) }),
+      makeUsage({
+        policyConfigured: true,
+        used: 50,
+        exhausted: true,
+        resetAtMs: Date.UTC(2026, 9, 21),
+      }),
     );
     fetchUsageMock.mockResolvedValueOnce(makeUsage({ used: 0 }));
 

@@ -23,16 +23,11 @@ pub mod registration;
 pub mod scrub;
 pub mod session;
 
-/// Apply all SQL migrations in `migrations/` idempotently against `pool`.
+/// Migrations are embedded in the service binary so startup is independent of
+/// the process working directory and deployment-time source files.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// Apply the package's embedded SQL migrations idempotently against `pool`.
 pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    let dir = [
-        std::path::Path::new("./migrations"),
-        std::path::Path::new("services/nexora-auth/migrations"),
-        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")),
-    ]
-    .into_iter()
-    .find(|candidate| candidate.is_dir())
-    .unwrap_or_else(|| std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")));
-    let migrator = sqlx::migrate::Migrator::new(dir).await?;
-    migrator.run(pool).await
+    MIGRATOR.run(pool).await
 }
