@@ -11,7 +11,7 @@
 //!   digests, single-use, short-lived (default 60 min — plan), revocable.
 //!   Requesting a newer recovery revokes outstanding reset tokens.
 //! - `reset_password` consumes the token and updates the password in ONE
-//!   transaction: consume (exactly-once) → account row lock → Argon2id hash
+//!   transaction: account row lock → consume (exactly-once) → Argon2id hash
 //!   (existing 23B policy) → **revokes every session of the account (all
 //!   families)** → invalidates all outstanding reset AND verification tokens.
 //!   A concurrent login cannot leave a stale session: `login` verifies the
@@ -40,10 +40,22 @@ pub const DEFAULT_RESET_TTL_SECS: u64 = 3_600;
 pub const MIN_RESET_TTL_SECS: u64 = 60;
 pub const MAX_RESET_TTL_SECS: u64 = 604_800;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+fn clamp_reset_ttl(secs: u64) -> u64 {
+    secs.clamp(MIN_RESET_TTL_SECS, MAX_RESET_TTL_SECS)
+}
+
+#[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecoveryRequest {
     pub email: String,
+}
+
+impl std::fmt::Debug for RecoveryRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecoveryRequest")
+            .field("email", &crate::scrub::REDACTED)
+            .finish()
+    }
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -199,56 +211,71 @@ pub async fn request_recovery(
     let email = validate_email(&request.email).map_err(RecoveryError::Validation)?;
     let pool = pool.ok_or(RecoveryError::DependencyUnavailable)?;
 
+    let mut pending_message = None;
     if let Some(user_id) = eligible_user_id(pool, &email).await? {
         let raw = generate_reset_token();
         let digest = hash_reset_token(&raw);
-        let ttl = reset_ttl_secs.max(60);
+        let ttl = clamp_reset_ttl(reset_ttl_secs);
 
         let mut tx = pool.begin().await.map_err(|_| RecoveryError::Internal)?;
-        // Revoke any outstanding tokens before minting a new one (plan:
-        // invalidation on use; also ensures at most one live reset token).
-        sqlx::query(
-            "UPDATE password_reset_tokens \
-             SET revoked_at = now() \
-             WHERE user_id = CAST($1 AS uuid) AND used_at IS NULL AND revoked_at IS NULL",
+        // Serialize token replacement with resets and password changes using
+        // the same account-first lock order.
+        let locked_user = sqlx::query_scalar::<_, String>(
+            "SELECT id::text FROM users \
+             WHERE id = CAST($1 AS uuid) AND status = 'active' FOR UPDATE",
         )
         .bind(&user_id)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|_| RecoveryError::Internal)?;
-        sqlx::query(
-            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
-             VALUES (CAST($1 AS uuid), $2, now() + make_interval(secs => $3))",
-        )
-        .bind(&user_id)
-        .bind(&digest)
-        .bind(ttl as f64)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| RecoveryError::Internal)?;
-        tx.commit().await.map_err(|_| RecoveryError::Internal)?;
+        if locked_user.is_some() {
+            // Revoke any outstanding tokens before minting a new one. The
+            // account lock guarantees only the latest request remains live.
+            sqlx::query(
+                "UPDATE password_reset_tokens \
+                 SET revoked_at = now() \
+                 WHERE user_id = CAST($1 AS uuid) AND used_at IS NULL AND revoked_at IS NULL",
+            )
+            .bind(&user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| RecoveryError::Internal)?;
+            sqlx::query(
+                "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
+                 VALUES (CAST($1 AS uuid), $2, now() + make_interval(secs => $3))",
+            )
+            .bind(&user_id)
+            .bind(&digest)
+            .bind(ttl as f64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| RecoveryError::Internal)?;
 
-        // Outbound email is the ONLY place the raw token appears; it is never
-        // stored, logged, or returned to the caller. The body carries the
-        // plan's deep-link fragment (`#/reset-password?token=…`) — composing
-        // an absolute origin is the future provider/deployment step; no URL
-        // origin is fabricated here.
-        let message = crate::email::EmailMessage {
-            to: email,
-            subject: "Reset your Nexora password".to_string(),
-            body: format!(
-                "A password reset was requested for your Nexora account.\n\n\
-                 Open the Nexora password-reset screen and use this reset link \
-                 within the reset window:\n\
-                 #/reset-password?token={raw}\n\n\
-                 If you did not request this, you can ignore this message — \
-                 your password has not changed.\n\n\
-                 This link can be used once and expires automatically.\n"
-            ),
-        };
-        // Delivery failures never change the response (enumeration) and are
-        // never logged (the message contains the raw token).
-        let _ = email_provider.send(message).await; // capability reported via `delivery`
+            // Outbound email is the ONLY place the raw token appears; it is
+            // never stored, logged, or returned. No origin is fabricated.
+            pending_message = Some(crate::email::EmailMessage {
+                to: email,
+                subject: "Reset your Nexora password".to_string(),
+                body: format!(
+                    "A password reset was requested for your Nexora account.\n\n\
+                     Open the Nexora password-reset screen and use this reset link \
+                     within the reset window:\n\
+                     #/reset-password?token={raw}\n\n\
+                     If you did not request this, you can ignore this message — \
+                     your password has not changed.\n\n\
+                     This link can be used once and expires automatically.\n"
+                ),
+            });
+        }
+        tx.commit().await.map_err(|_| RecoveryError::Internal)?;
+    }
+
+    if let Some(message) = pending_message {
+        // Delivery failures never change the enumeration-safe response. The
+        // diagnostic logs only a generic provider failure, never the message.
+        if let Err(error) = email_provider.send(message).await {
+            crate::email::report_delivery_failure("recovery", &error);
+        }
     }
 
     Ok(delivery)
@@ -267,26 +294,25 @@ pub async fn reset_password(
     let pool = pool.ok_or(RecoveryError::DependencyUnavailable)?;
     let digest = hash_reset_token(request.token.trim());
 
-    let mut tx = pool.begin().await.map_err(|_| RecoveryError::Internal)?;
-
-    // Atomic single-use consume: exactly one concurrent request flips used_at.
-    let consumed: Option<(String,)> = sqlx::query_as(
-        "UPDATE password_reset_tokens \
-         SET used_at = now() \
+    // Resolve the token owner without locking the token first. Password
+    // reset/change and verification/resend mutations lock the account row
+    // before updating token rows; using the same order avoids deadlocks.
+    let candidate_user_id = sqlx::query_scalar::<_, String>(
+        "SELECT user_id::text FROM password_reset_tokens \
          WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL \
-           AND expires_at > now() \
-         RETURNING user_id::text",
+           AND expires_at > now()",
     )
     .bind(&digest)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(pool)
     .await
     .map_err(|_| RecoveryError::Internal)?;
-    let Some((user_id,)) = consumed else {
+    let Some(user_id) = candidate_user_id else {
         return Err(RecoveryError::InvalidOrExpiredToken);
     };
 
-    // Account row lock — serializes against login/refresh session creation
-    // (see module docs). Eligibility re-checked under the lock.
+    let mut tx = pool.begin().await.map_err(|_| RecoveryError::Internal)?;
+
+    // Account row lock serializes against password change and session creation.
     let locked: Option<(String,)> = sqlx::query_as(
         "SELECT id::text FROM users WHERE id = CAST($1 AS uuid) AND status = 'active' FOR UPDATE",
     )
@@ -295,8 +321,28 @@ pub async fn reset_password(
     .await
     .map_err(|_| RecoveryError::Internal)?;
     let Some((user_id,)) = locked else {
+        let _ = tx.rollback().await;
         return Err(RecoveryError::InvalidOrExpiredToken);
     };
+
+    // Consume only after locking the owner. Recheck state/expiry so competing
+    // reset, resend, and password-change requests still have single-use
+    // semantics. Exactly one request can update this digest.
+    let consumed = sqlx::query(
+        "UPDATE password_reset_tokens \
+         SET used_at = now() \
+         WHERE token_hash = $1 AND user_id = CAST($2 AS uuid) \
+           AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(&digest)
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| RecoveryError::Internal)?;
+    if consumed.rows_affected() != 1 {
+        let _ = tx.rollback().await;
+        return Err(RecoveryError::InvalidOrExpiredToken);
+    }
 
     // Argon2id via the existing 23B implementation (policy enforced inside).
     let new_hash =
@@ -420,6 +466,28 @@ pub async fn change_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_request_debug_redacts_email_and_password_reset_debug_redacts_secrets() {
+        let recovery = RecoveryRequest {
+            email: "SENTINEL_email@example.test".to_string(),
+        };
+        assert!(!format!("{recovery:?}").contains("SENTINEL"));
+
+        let reset = ResetPasswordRequest {
+            token: "SENTINEL_reset_token".to_string(),
+            password: "SENTINEL_password".to_string(),
+        };
+        assert!(!format!("{reset:?}").contains("SENTINEL"));
+    }
+
+    #[test]
+    fn reset_ttl_is_bounded_even_for_direct_callers() {
+        assert_eq!(clamp_reset_ttl(0), MIN_RESET_TTL_SECS);
+        assert_eq!(clamp_reset_ttl(MIN_RESET_TTL_SECS), MIN_RESET_TTL_SECS);
+        assert_eq!(clamp_reset_ttl(MAX_RESET_TTL_SECS), MAX_RESET_TTL_SECS);
+        assert_eq!(clamp_reset_ttl(u64::MAX), MAX_RESET_TTL_SECS);
+    }
 
     #[test]
     fn reset_tokens_are_64_hex_like_other_token_families() {

@@ -53,7 +53,7 @@ describe("Floating Password Recovery & Reset Modal Flow", () => {
 
     await user.click(within(modal).getByRole("button", { name: "Forgot password?" }));
     await user.type(within(modal).getByLabelText("Email address"), "ada@example.com");
-    await user.click(within(modal).getByRole("button", { name: "Send reset token" }));
+    await user.click(within(modal).getByRole("button", { name: "Request password reset" }));
 
     expect(invokeMock).toHaveBeenCalledWith("auth_recover_password", {
       request: { email: "ada@example.com" },
@@ -61,12 +61,15 @@ describe("Floating Password Recovery & Reset Modal Flow", () => {
 
     // Transitions directly to reset token + new password step
     expect(await within(modal).findByLabelText("Reset token")).toBeTruthy();
-    await user.type(within(modal).getByLabelText("Reset token"), "reset-tok-999");
+    const resetToken = "b".repeat(64);
+    await user.type(within(modal).getByLabelText("Reset token"), resetToken);
     await user.type(within(modal).getByLabelText("New password"), "brandnewpassword99");
     await user.click(within(modal).getByRole("button", { name: "Update password" }));
 
     expect(invokeMock).toHaveBeenCalledWith("auth_reset_password", {
-      request: { token: "reset-tok-999", password: "brandnewpassword99" },
+      request: { token: resetToken, password: "brandnewpassword99" },
     });
+    expect(await within(modal).findByText("Password updated.")).toBeTruthy();
+    expect(within(modal).getByRole("tab", { name: "Sign in" }).getAttribute("aria-selected")).toBe("true");
   });
 });

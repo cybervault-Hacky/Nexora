@@ -24,6 +24,8 @@ use sqlx::PgPool;
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
 
+mod support;
+
 /// Provider that records delivered messages so tests can read the token
 /// exactly as the user would (the only place the raw token may appear).
 #[derive(Default)]
@@ -76,6 +78,7 @@ async fn test_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect to test database");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");

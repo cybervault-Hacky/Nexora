@@ -68,12 +68,13 @@ export function markDesktop(value = true): void {
 }
 
 export interface UsageOverrides {
-  allowance?: number;
-  used?: number;
-  remaining?: number;
+  policyConfigured?: boolean;
+  allowance?: number | null;
+  used?: number | null;
+  remaining?: number | null;
   day?: string;
-  resetAtMs?: number;
-  provisional?: boolean;
+  resetAtMs?: number | null;
+  policyId?: string | null;
   exhausted?: boolean;
   notice?: string | null;
   error?: string | null;
@@ -81,18 +82,38 @@ export interface UsageOverrides {
 
 /** Builds the exact `UsageStatus` shape the Rust core serialises. */
 export function makeUsage(overrides: UsageOverrides = {}): UsageStatus {
-  const allowance = overrides.allowance ?? 50;
-  const used = overrides.used ?? 0;
+  const policyConfigured = overrides.policyConfigured ?? false;
+  const allowance =
+    overrides.allowance !== undefined ? overrides.allowance : policyConfigured ? 50 : null;
+  const used = overrides.used !== undefined ? overrides.used : 0;
+  const remaining =
+    overrides.remaining !== undefined
+      ? overrides.remaining
+      : allowance !== null && used !== null
+        ? Math.max(0, allowance - used)
+        : null;
 
   return {
+    policyConfigured,
     allowance,
     used,
-    remaining: overrides.remaining ?? Math.max(0, allowance - used),
+    remaining,
     day: overrides.day ?? "2026-10-20",
-    resetAtMs: overrides.resetAtMs ?? Date.UTC(2026, 9, 21),
-    policyId: "nexora-mini-free-generations-v1",
-    provisional: overrides.provisional ?? true,
-    exhausted: overrides.exhausted ?? allowance - used <= 0,
+    resetAtMs:
+      overrides.resetAtMs !== undefined
+        ? overrides.resetAtMs
+        : policyConfigured
+          ? Date.UTC(2026, 9, 21)
+          : null,
+    policyId:
+      overrides.policyId !== undefined
+        ? overrides.policyId
+        : policyConfigured
+          ? "test-local-generation-policy"
+          : null,
+    exhausted:
+      overrides.exhausted ??
+      (allowance !== null && used !== null && used >= allowance),
     notice: overrides.notice ?? null,
     error: overrides.error ?? null,
   };

@@ -92,9 +92,12 @@ pub struct AppState {
     pub google_provider: Option<std::sync::Arc<dyn crate::oauth::GoogleProvider>>,
     /// Registered loopback redirect; exact-matched on every exchange.
     pub google_redirect_uri: Option<String>,
-    /// Modular payment provider (Stripe HTTP in production, honest unconfigured otherwise).
+    /// Injected payment seam. The service binary deliberately keeps this
+    /// unconfigured until provider and entitlement review is approved.
     pub payment_provider: std::sync::Arc<dyn crate::billing::PaymentProvider>,
-    /// Shared webhook signing secret (`STRIPE_WEBHOOK_SECRET`), never echoed.
+    /// Quota enforcement is fail-closed until an approved policy is supplied.
+    pub quota_policy: crate::quota::QuotaPolicy,
+    /// Optional test/provider webhook secret; current binary composition passes `None`.
     pub stripe_webhook_secret: Option<String>,
 }
 
@@ -117,6 +120,7 @@ impl AppState {
             google_provider: None,
             google_redirect_uri: None,
             payment_provider: std::sync::Arc::new(crate::billing::UnconfiguredPaymentProvider),
+            quota_policy: crate::quota::QuotaPolicy::unconfigured(),
             stripe_webhook_secret: None,
         }
     }
@@ -149,7 +153,7 @@ struct ResendResponse {
 fn delivery_message(delivery: EmailDelivery) -> &'static str {
     match delivery {
         EmailDelivery::Configured => {
-            "If this address can be registered, a verification email is on its way. Check your inbox."
+            "If this address can be registered and delivery succeeds, a verification email will be sent."
         }
         EmailDelivery::Unconfigured => {
             "Email delivery is not configured on this server; no verification email was sent."
@@ -175,32 +179,24 @@ async fn register_handler(
         Ok(Json(request)) => request,
         Err(rejection) => return validation_rejection(rejection),
     };
-    // DB-backed sliding window (plan §4 credential-stuffing control).
+    // DB-backed sliding windows cover both normalized address and peer IP.
     let register_key =
         crate::rate_limit::email_key(&crate::registration::normalize_email(&request.email));
-    if let Err(response) = rate_check(
+    let ip_key = client_ip(connect_info).map(|ip| crate::rate_limit::ip_key(&ip));
+    let mut keys = vec![register_key.as_str()];
+    if let Some(ip_key) = ip_key.as_deref() {
+        keys.push(ip_key);
+    }
+    if let Err(response) = rate_attempts(
         &state,
         "register",
-        &register_key,
+        &keys,
         state.rate_limit_register,
         crate::rate_limit::CountMode::AllAttempts,
     )
     .await
     {
         return response;
-    }
-    if let Some(ip) = client_ip(connect_info) {
-        if let Err(response) = rate_check(
-            &state,
-            "register",
-            &crate::rate_limit::ip_key(&ip),
-            state.rate_limit_register,
-            crate::rate_limit::CountMode::AllAttempts,
-        )
-        .await
-        {
-            return response;
-        }
     }
     let outcome = registration::register(
         state.pool.as_ref(),
@@ -210,10 +206,6 @@ async fn register_handler(
         &request,
     )
     .await;
-    match &outcome {
-        Ok(_) => rate_record(&state, "register", &register_key, "success").await,
-        Err(_) => rate_record(&state, "register", &register_key, "failure").await,
-    }
     match outcome {
         Ok(_) => (
             StatusCode::ACCEPTED,
@@ -259,32 +251,24 @@ async fn resend_verification_handler(
         Ok(Json(request)) => request,
         Err(rejection) => return validation_rejection(rejection),
     };
-    // Abuse control on resends (plan: resend is rate-limited).
+    // Abuse control on resends covers both normalized address and peer IP.
     let resend_key =
         crate::rate_limit::email_key(&crate::registration::normalize_email(&request.email));
-    if let Err(response) = rate_check(
+    let ip_key = client_ip(connect_info).map(|ip| crate::rate_limit::ip_key(&ip));
+    let mut keys = vec![resend_key.as_str()];
+    if let Some(ip_key) = ip_key.as_deref() {
+        keys.push(ip_key);
+    }
+    if let Err(response) = rate_attempts(
         &state,
         "resend",
-        &resend_key,
+        &keys,
         state.rate_limit_resend,
         crate::rate_limit::CountMode::AllAttempts,
     )
     .await
     {
         return response;
-    }
-    if let Some(ip) = client_ip(connect_info) {
-        if let Err(response) = rate_check(
-            &state,
-            "resend",
-            &crate::rate_limit::ip_key(&ip),
-            state.rate_limit_resend,
-            crate::rate_limit::CountMode::AllAttempts,
-        )
-        .await
-        {
-            return response;
-        }
     }
     match registration::resend_verification(
         state.pool.as_ref(),
@@ -296,7 +280,6 @@ async fn resend_verification_handler(
     .await
     {
         Ok(delivery) => {
-            rate_record(&state, "resend", &resend_key, "success").await;
             (
                 StatusCode::ACCEPTED,
                 Json(ResendResponse {
@@ -307,7 +290,6 @@ async fn resend_verification_handler(
                 .into_response()
         }
         Err(error) => {
-            rate_record(&state, "resend", &resend_key, "failure").await;
             error_response(
                 status_for(error.code()),
                 error.code(),
@@ -488,7 +470,21 @@ fn rate_limited_response(retry_after_secs: u64) -> Response {
         .into_response()
 }
 
-/// Pre-attempt window check for one hashed key. Only `Err` short-circuits.
+fn rate_error_response(error: crate::rate_limit::RateLimitError) -> Response {
+    match error {
+        crate::rate_limit::RateLimitError::Limited(retry_after) => {
+            rate_limited_response(retry_after)
+        }
+        crate::rate_limit::RateLimitError::StoreUnavailable => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "dependency_unavailable",
+            "Request protection is temporarily unavailable. Try again later.",
+        ),
+    }
+}
+
+/// Pre-attempt window check for one hashed key. Storage failures fail closed
+/// with 503; only an exhausted window becomes `429 rate_limited`.
 async fn rate_check(
     state: &std::sync::Arc<AppState>,
     scope: &str,
@@ -501,13 +497,40 @@ async fn rate_check(
     };
     crate::rate_limit::check(pool, scope, key, rule, mode)
         .await
-        .map_err(rate_limited_response)
+        .map_err(rate_error_response)
 }
 
-async fn rate_record(state: &std::sync::Arc<AppState>, scope: &str, key: &str, outcome: &str) {
+async fn rate_record(
+    state: &std::sync::Arc<AppState>,
+    scope: &str,
+    key: &str,
+    outcome: &str,
+) -> Result<(), Response> {
     if let Some(pool) = state.pool.as_ref() {
-        crate::rate_limit::record(pool, scope, key, outcome).await;
+        crate::rate_limit::record(pool, scope, key, outcome)
+            .await
+            .map_err(rate_error_response)?;
     }
+    Ok(())
+}
+
+/// Check every key before recording any, then persist all-attempt windows
+/// before the handler performs its database or email side effects. This makes
+/// a rate-store failure fail closed and keeps peer-IP limits effective.
+async fn rate_attempts(
+    state: &std::sync::Arc<AppState>,
+    scope: &str,
+    keys: &[&str],
+    rule: crate::rate_limit::RateLimitRule,
+    mode: crate::rate_limit::CountMode,
+) -> Result<(), Response> {
+    for key in keys {
+        rate_check(state, scope, key, rule, mode).await?;
+    }
+    for key in keys {
+        rate_record(state, scope, key, "attempt").await?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -582,7 +605,6 @@ async fn login_handler(
 
     let result = match outcome {
         Ok(outcome) => {
-            rate_record(&state, "login", &email_key, "success").await;
             (
                 StatusCode::OK,
                 Json(LoginResponse {
@@ -601,9 +623,17 @@ async fn login_handler(
         }
         Err(error) => {
             if error.code() == "invalid_credentials" {
-                rate_record(&state, "login", &email_key, "failure").await;
+                if let Err(response) =
+                    rate_record(&state, "login", &email_key, "failure").await
+                {
+                    return response;
+                }
                 if let Some(key) = &ip_key {
-                    rate_record(&state, "login", key, "failure").await;
+                    if let Err(response) =
+                        rate_record(&state, "login", key, "failure").await
+                    {
+                        return response;
+                    }
                 }
             }
             error_response(
@@ -724,7 +754,9 @@ struct RecoveryAcceptedBody {
 
 fn recovery_message(delivery: EmailDelivery) -> &'static str {
     match delivery {
-        EmailDelivery::Configured => "If that address has an account, a reset link is on its way.",
+        EmailDelivery::Configured => {
+            "If that address has an account and delivery succeeds, reset instructions will be sent."
+        },
         EmailDelivery::Unconfigured => {
             "Request accepted, but no email was sent: outgoing email is not configured in this build."
         }
@@ -752,29 +784,21 @@ async fn recovery_request_handler(
     };
 
     let key = crate::rate_limit::email_key(&crate::registration::normalize_email(&request.email));
-    if let Err(response) = rate_check(
+    let ip_key = client_ip(connect_info).map(|ip| crate::rate_limit::ip_key(&ip));
+    let mut keys = vec![key.as_str()];
+    if let Some(ip_key) = ip_key.as_deref() {
+        keys.push(ip_key);
+    }
+    if let Err(response) = rate_attempts(
         &state,
         "recovery",
-        &key,
+        &keys,
         state.rate_limit_recovery,
         crate::rate_limit::CountMode::AllAttempts,
     )
     .await
     {
         return response;
-    }
-    if let Some(ip) = client_ip(connect_info) {
-        if let Err(response) = rate_check(
-            &state,
-            "recovery",
-            &crate::rate_limit::ip_key(&ip),
-            state.rate_limit_recovery,
-            crate::rate_limit::CountMode::AllAttempts,
-        )
-        .await
-        {
-            return response;
-        }
     }
 
     match crate::recovery::request_recovery(
@@ -787,7 +811,6 @@ async fn recovery_request_handler(
     .await
     {
         Ok(delivery) => {
-            rate_record(&state, "recovery", &key, "success").await;
             (
                 StatusCode::ACCEPTED,
                 Json(RecoveryAcceptedBody {
@@ -798,10 +821,7 @@ async fn recovery_request_handler(
             )
                 .into_response()
         }
-        Err(error) => {
-            rate_record(&state, "recovery", &key, "failure").await;
-            recovery_error_response(error)
-        }
+        Err(error) => recovery_error_response(error),
     }
 }
 
@@ -817,26 +837,18 @@ async fn reset_password_handler(
         Err(rejection) => return validation_rejection(rejection),
     };
 
-    // Per-IP + per-token windows (plan §4/§5 keys: ip | email-hash | account-id).
+    // Per-IP + per-token windows count every attempt, including malformed or
+    // replayed tokens, before the password-reset transaction begins.
     let ip_key = client_ip(connect_info).map(|ip| crate::rate_limit::ip_key(&ip));
-    if let Some(key) = &ip_key {
-        if let Err(response) = rate_check(
-            &state,
-            "recovery",
-            key,
-            state.rate_limit_recovery,
-            crate::rate_limit::CountMode::AllAttempts,
-        )
-        .await
-        {
-            return response;
-        }
-    }
     let token_key = crate::rate_limit::token_key(request.token.trim());
-    if let Err(response) = rate_check(
+    let mut keys = vec![token_key.as_str()];
+    if let Some(ip_key) = ip_key.as_deref() {
+        keys.push(ip_key);
+    }
+    if let Err(response) = rate_attempts(
         &state,
         "recovery",
-        &token_key,
+        &keys,
         state.rate_limit_recovery,
         crate::rate_limit::CountMode::AllAttempts,
     )
@@ -847,13 +859,7 @@ async fn reset_password_handler(
 
     match crate::recovery::reset_password(state.pool.as_ref(), &request).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => {
-            rate_record(&state, "recovery", &token_key, "failure").await;
-            if let Some(key) = &ip_key {
-                rate_record(&state, "recovery", key, "failure").await;
-            }
-            recovery_error_response(error)
-        }
+        Err(error) => recovery_error_response(error),
     }
 }
 
@@ -904,11 +910,12 @@ async fn password_change_handler(
     {
         return response;
     }
-    if let Some(ip) = client_ip(connect_info) {
+    let ip_key = client_ip(connect_info).map(|ip| crate::rate_limit::ip_key(&ip));
+    if let Some(key) = &ip_key {
         if let Err(response) = rate_check(
             &state,
             "recovery",
-            &crate::rate_limit::ip_key(&ip),
+            key,
             state.rate_limit_recovery,
             crate::rate_limit::CountMode::FailuresOnly,
         )
@@ -927,7 +934,18 @@ async fn password_change_handler(
         }
         Err(error) => {
             if error.code() == "invalid_credentials" {
-                rate_record(&state, "recovery", &account_key, "failure").await;
+                if let Err(response) =
+                    rate_record(&state, "recovery", &account_key, "failure").await
+                {
+                    return response;
+                }
+                if let Some(key) = &ip_key {
+                    if let Err(response) =
+                        rate_record(&state, "recovery", key, "failure").await
+                    {
+                        return response;
+                    }
+                }
                 crate::scrub::audit("password_change", &context.user.id, "denied");
             }
             recovery_error_response(error)
@@ -1231,7 +1249,21 @@ async fn list_plans_handler(State(state): State<std::sync::Arc<AppState>>) -> Re
     match crate::billing::list_plans(state.pool.as_ref(), state.payment_provider.is_configured())
         .await
     {
-        Ok(catalogue) => (StatusCode::OK, Json(catalogue)).into_response(),
+        Ok(mut catalogue) => {
+            if !state.quota_policy.is_configured() {
+                // Database plan rows may contain historical or proposed terms;
+                // do not present them as an approved catalogue or entitlement.
+                catalogue.plans.clear();
+            } else if !catalogue.payment_configured {
+                // Quotas can be explicitly configured independently from a
+                // payment provider. Do not expose stored prices until payment
+                // configuration is present.
+                for plan in &mut catalogue.plans {
+                    plan.prices.clear();
+                }
+            }
+            (StatusCode::OK, Json(catalogue)).into_response()
+        }
         Err(err) => billing_error_response(err),
     }
 }
@@ -1448,7 +1480,13 @@ async fn usage_summary_handler(
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
-    match crate::quota::get_usage_summary(state.pool.as_ref(), &context.user.id).await {
+    match crate::quota::get_usage_summary(
+        state.pool.as_ref(),
+        &context.user.id,
+        state.quota_policy,
+    )
+    .await
+    {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(err) => quota_error_response(err),
     }
@@ -1475,7 +1513,14 @@ async fn usage_reserve_handler(
             Ok(ctx) => ctx,
             Err(err) => return session_error_response(err),
         };
-    match crate::quota::reserve_model_quota(Some(pool), &context.user.id, &request).await {
+    match crate::quota::reserve_model_quota(
+        Some(pool),
+        &context.user.id,
+        &request,
+        state.quota_policy,
+    )
+    .await
+    {
         Ok(reserved) => (StatusCode::OK, Json(reserved)).into_response(),
         Err(err) => quota_error_response(err),
     }
@@ -1507,6 +1552,7 @@ async fn usage_commit_handler(
         &context.user.id,
         &request.reservation_id,
         true,
+        state.quota_policy,
     )
     .await
     {
@@ -1541,10 +1587,57 @@ async fn usage_release_handler(
         &context.user.id,
         &request.reservation_id,
         false,
+        state.quota_policy,
     )
     .await
     {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(err) => quota_error_response(err),
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn rate_limit_store_failure_is_unavailable_not_zero_second_limit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("reserve an unused local port for the offline test");
+        let unused_addr = listener.local_addr().expect("local listener address");
+        drop(listener);
+        let database_url = format!(
+            "postgres://nexora_test:nexora_test@{unused_addr}/nexora_test"
+        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(250))
+            .connect_lazy(&database_url)
+            .expect("valid lazy PostgreSQL URL");
+        let mut app_state = AppState::unconfigured();
+        app_state.pool = Some(pool);
+        let state = std::sync::Arc::new(app_state);
+
+        let response = rate_check(
+            &state,
+            "register",
+            "e:hashed-test-key",
+            crate::rate_limit::RateLimitRule {
+                max_failures: 1,
+                window_secs: 60,
+            },
+            crate::rate_limit::CountMode::AllAttempts,
+        )
+        .await
+        .expect_err("unreachable limiter store must fail closed");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get("retry-after").is_none());
+
+        let write_error = rate_record(&state, "register", "e:hashed-test-key", "attempt")
+            .await
+            .expect_err("rate-limit write failure must be surfaced");
+        assert_eq!(write_error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(write_error.headers().get("retry-after").is_none());
     }
 }

@@ -6,21 +6,15 @@ interface UsageMeterProps {
   usage: UsageView;
 }
 
-/**
- * Daily free allowance, next to the composer.
- *
- * Renders only what the Rust core reported. There is no upsell, no "restore"
- * action and no suggestion that buying anything changes the allowance: Phase 7
- * enforces one free limit and nothing else.
- */
+/** Presents device-local accounting without inventing a quota or entitlement. */
 export function UsageMeter({ usage }: UsageMeterProps) {
   const { status, error, loading, now } = usage;
 
   if (loading && !status && !error) {
     return (
-      <section className="usage" aria-label="Daily free usage">
+      <section className="usage" aria-label="Local generation usage">
         <p className="usage__hint" role="status">
-          Checking daily usage…
+          Checking local usage…
         </p>
       </section>
     );
@@ -28,11 +22,64 @@ export function UsageMeter({ usage }: UsageMeterProps) {
 
   if (!status) {
     return (
-      <section className="usage usage--error" aria-label="Daily free usage">
+      <section className="usage usage--error" aria-label="Local generation usage">
         <p className="usage__hint" role="alert">
           <Icon name="alert" size={12} />
-          Daily usage is unavailable: {error ?? "the desktop core did not answer."}
+          Local usage is unavailable: {error ?? "the desktop core did not answer."}
         </p>
+      </section>
+    );
+  }
+
+  if (!status.policyConfigured) {
+    return (
+      <section className={`usage ${status.used === null ? "usage--error" : ""}`} aria-label="Local generation usage">
+        <div className="usage__head">
+          <span className="usage__label">
+            <Icon name="activity" size={12} />
+            Local generation usage
+          </span>
+          <span className="usage__value">
+            {status.used === null ? "Count unknown" : `${status.used} recorded today`}
+          </span>
+        </div>
+
+        <p className="usage__hint">
+          {status.used === null
+            ? "The local count could not be verified. Local inference remains available while no local policy is configured."
+            : "This device-local count is informational; no local daily limit is configured."}
+        </p>
+
+        {status.error ? (
+          <p className="usage__hint usage__hint--error" role="alert">
+            <Icon name="alert" size={12} />
+            The usage record could not be updated: {status.error}
+          </p>
+        ) : null}
+
+        {status.notice ? (
+          <p className="usage__hint" role="status">
+            {status.notice}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  if (
+    status.allowance === null ||
+    status.used === null ||
+    status.remaining === null ||
+    status.resetAtMs === null
+  ) {
+    return (
+      <section className="usage usage--error" aria-label="Local generation usage">
+        <p className="usage__hint" role="alert">
+          <Icon name="alert" size={12} />
+          Usage could not be verified against the configured local limit. New generations are unavailable until the usage record can be checked.
+        </p>
+        {status.error ? <p className="usage__hint usage__hint--error">{status.error}</p> : null}
+        {status.notice ? <p className="usage__hint">{status.notice}</p> : null}
       </section>
     );
   }
@@ -45,12 +92,12 @@ export function UsageMeter({ usage }: UsageMeterProps) {
   return (
     <section
       className={`usage ${status.exhausted ? "usage--exhausted" : ""}`}
-      aria-label="Daily free usage"
+      aria-label="Local generation usage"
     >
       <div className="usage__head">
         <span className="usage__label">
           <Icon name="activity" size={12} />
-          Daily free usage
+          Configured local daily limit
         </span>
         <span className="usage__value">
           {status.exhausted
@@ -62,7 +109,7 @@ export function UsageMeter({ usage }: UsageMeterProps) {
       <div
         className="usage__bar"
         role="progressbar"
-        aria-label="Daily generations used"
+        aria-label="Local generations used"
         aria-valuemin={0}
         aria-valuemax={status.allowance}
         aria-valuenow={Math.min(status.used, status.allowance)}
@@ -73,9 +120,8 @@ export function UsageMeter({ usage }: UsageMeterProps) {
 
       <p className="usage__hint">
         {status.exhausted
-          ? `Daily free allowance reached. It resets in ${resets}.`
+          ? `Configured local allowance reached. It resets in ${resets}.`
           : `Resets in ${resets}.`}
-        {status.provisional ? " The allowance is provisional." : ""}
       </p>
 
       <p className="usage__policy">Resets at 00:00 UTC each day.</p>

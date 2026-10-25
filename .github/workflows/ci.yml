@@ -39,15 +39,20 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+        with:
+          version: 9.15.4
 
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: pnpm
 
       - name: Install dependencies from the lockfile
         run: pnpm install --frozen-lockfile
+
+      - name: Audit the locked JavaScript dependency graph
+        run: pnpm audit
 
       - name: Typecheck
         run: pnpm typecheck
@@ -88,17 +93,17 @@ jobs:
 
       - name: Check formatting
         working-directory: services/nexora-auth
-        run: cargo fmt --all -- --check
+        run: cargo --locked fmt --all -- --check
 
       - name: Lint with warnings denied
         working-directory: services/nexora-auth
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo --locked clippy --all-targets -- -D warnings
 
       - name: Run unit, HTTP, property & PostgreSQL integration suites
         working-directory: services/nexora-auth
         env:
-          NEXORA_AUTH_TEST_DATABASE_URL: postgres://postgres:postgres_ci_test_only@127.0.0.1:5432/nexora_test
-        run: cargo test -- --include-ignored --test-threads=1
+          NEXORA_AUTH_TEST_DATABASE_URL: postgres://postgres:postgres_ci_test_only@127.0.0.1:5432/nexora_test?sslmode=disable
+        run: cargo --locked test -- --include-ignored --test-threads=1
 
   rust:
     name: Rust Desktop Core — fmt, check, clippy, tests (Linux)
@@ -123,11 +128,13 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+        with:
+          version: 9.15.4
 
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: pnpm
 
       - name: Build the frontend the crate embeds
@@ -140,18 +147,18 @@ jobs:
 
       - name: Check formatting
         working-directory: apps/desktop/src-tauri
-        run: cargo fmt --all -- --check
+        run: cargo --locked fmt --all -- --check
 
       - name: Type-check every target
         working-directory: apps/desktop/src-tauri
-        run: cargo check --all-targets
+        run: cargo --locked check --all-targets
 
       - name: Run Rust tests
         working-directory: apps/desktop/src-tauri
         shell: bash
         run: |
           set -o pipefail
-          cargo test 2>&1 | tee rust-test.log
+          cargo --locked test 2>&1 | tee rust-test.log
           exit "${PIPESTATUS[0]}"
 
       - name: Report failing tests
@@ -171,7 +178,7 @@ jobs:
 
       - name: Lint with warnings denied
         working-directory: apps/desktop/src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo --locked clippy --all-targets -- -D warnings
 
   windows:
     name: Windows — compile, Rust tests & NSIS installer verification
@@ -186,11 +193,13 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+        with:
+          version: 9.15.4
 
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: pnpm
 
       - name: Build the frontend the crate embeds
@@ -201,16 +210,69 @@ jobs:
       - name: Install the pinned Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
+      - name: Configure the hosted x64 MSVC and Windows SDK environment
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "The Windows runner image does not contain Visual Studio Installer's vswhere.exe."
+          }
+
+          $installationPath = [string](& $vswhere -latest -products '*' -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' -property installationPath | Select-Object -First 1)
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installationPath)) {
+            throw "No Visual Studio 2022 installation with the x86/x64 C++ tools was found."
+          }
+          $installationPath = $installationPath.Trim()
+          $developerCommand = Join-Path $installationPath 'Common7\Tools\VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $developerCommand)) {
+            throw "Visual Studio's x64 developer command script is missing."
+          }
+
+          $commandLine = 'call "' + $developerCommand + '" -no_logo -arch=x64 -host_arch=x64 && set'
+          $environmentLines = & $env:ComSpec /d /s /c $commandLine
+          if ($LASTEXITCODE -ne 0 -or -not $environmentLines) {
+            throw "VsDevCmd.bat failed to initialize the x64 MSVC environment."
+          }
+
+          $windowsSdkPathEntries = @()
+          foreach ($line in $environmentLines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              $name = $Matches[1]
+              $value = $Matches[2]
+              if ($name -ieq 'PATH') {
+                $env:PATH = $value
+                $windowsSdkPathEntries = @($value -split ';' | Where-Object {
+                  $_ -and ($_ -like '*\Microsoft Visual Studio\*' -or $_ -like '*\Windows Kits\*')
+                })
+              } elseif ($name -notmatch '^(GITHUB_|RUNNER_)') {
+                [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+                Add-Content -LiteralPath $env:GITHUB_ENV -Value "$name=$value" -Encoding utf8
+              }
+            }
+          }
+
+          foreach ($requiredTool in @('cl.exe', 'link.exe', 'rc.exe')) {
+            if (-not (Get-Command $requiredTool -ErrorAction SilentlyContinue)) {
+              throw "The initialized x64 developer environment does not expose $requiredTool."
+            }
+          }
+          if ($windowsSdkPathEntries.Count -eq 0) {
+            throw "VsDevCmd.bat did not expose Visual Studio or Windows SDK tools on PATH."
+          }
+          foreach ($pathEntry in $windowsSdkPathEntries) {
+            Add-Content -LiteralPath $env:GITHUB_PATH -Value $pathEntry -Encoding utf8
+          }
+
       - name: Type-check every target on Windows
         working-directory: apps/desktop/src-tauri
-        run: cargo check --all-targets
+        run: cargo --locked check --all-targets
 
       - name: Run Rust tests on Windows
         working-directory: apps/desktop/src-tauri
         shell: bash
         run: |
           set -o pipefail
-          cargo test 2>&1 | tee windows-test.log
+          cargo --locked test 2>&1 | tee windows-test.log
           exit "${PIPESTATUS[0]}"
 
       - name: Report failing Windows tests
@@ -232,6 +294,6 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/build-installer.ps1
 
-      - name: Verify silent NSIS install, WebView2, launch, restart, upgrade & uninstall
+      - name: Verify NSIS install, WebView2, shortcuts, reinstall and uninstall (headless GUI launch skipped)
         shell: pwsh
         run: ./scripts/windows/smoke-verify.ps1

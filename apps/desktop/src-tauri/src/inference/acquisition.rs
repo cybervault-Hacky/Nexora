@@ -1,17 +1,17 @@
 //! Verified acquisition of the approved model artefact.
 //!
 //! Nexora never downloads anything on its own. A download starts only when the
-//! user asks for it, writes into a private `.part` file inside a validated
-//! destination folder, hashes the bytes while receiving them, and renames into
-//! place only after the count and the SHA-256 match the registry. A failed,
-//! cancelled, or interrupted download therefore never leaves a file that looks
-//! installed.
+//! user asks for it, writes into an exclusively created `.part` file inside a
+//! validated destination folder, hashes the bytes while receiving them, and
+//! publishes without replacement only after the count and SHA-256 match the
+//! registry. A failed, cancelled, or interrupted download therefore never
+//! leaves a file that looks installed.
 //!
 //! Nothing here launches a process, touches runtime settings, or rewrites the
 //! user's configured model path. Publishing a file is the end of this module's
 //! responsibility; choosing it is still an explicit user action.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -23,6 +23,7 @@ use tauri::ipc::Channel;
 use tokio::io::AsyncWriteExt;
 
 use super::error::{InferenceError, InferenceResult};
+use super::models::LockedFile;
 use super::registry::{self, ArtifactState, ModelProfile};
 
 /// At most one progress event per interval, plus one on the final byte.
@@ -150,7 +151,9 @@ fn has_unsafe_segment_chars(segment: &str) -> bool {
     segment.is_empty()
         || segment.ends_with(' ')
         || segment.ends_with('.')
-        || segment.chars().any(|ch| ch.is_control() || ch == '\0')
+        || segment
+            .chars()
+            .any(|ch| ch.is_control() || ch == '\0' || ch == ':')
         || is_windows_reserved_segment(segment)
 }
 
@@ -469,12 +472,26 @@ pub async fn download_with_policy(
 
     let part_path = directory.join(format!(".{}.{}.part", plan.file_name, random_suffix()?));
 
-    let completed = match receive(plan, &part_path, cancel, verifying, on_event, policy).await {
+    let mut owns_part = false;
+    let completed = match receive(
+        plan,
+        &part_path,
+        cancel,
+        verifying,
+        on_event,
+        policy,
+        &mut owns_part,
+    )
+    .await
+    {
         Ok(completed) => completed,
         Err(error) => {
             verifying.store(false, Ordering::SeqCst);
-            // A failed download must not leave a partial file behind.
-            let _ = tokio::fs::remove_file(&part_path).await;
+            // Remove only a temporary file this invocation created. Never
+            // delete a pre-existing path after a create/open failure.
+            if owns_part {
+                let _ = tokio::fs::remove_file(&part_path).await;
+            }
             return Err(error);
         }
     };
@@ -486,7 +503,9 @@ pub async fn download_with_policy(
     // final digest must not install it anyway: the UI would then report a
     // cancelled download for a file that exists.
     if !completed || cancel.load(Ordering::SeqCst) {
-        let _ = tokio::fs::remove_file(&part_path).await;
+        if owns_part {
+            let _ = tokio::fs::remove_file(&part_path).await;
+        }
 
         return Ok(DownloadOutcome {
             path: None,
@@ -497,8 +516,10 @@ pub async fn download_with_policy(
         });
     }
 
-    if let Err(error) = publish(&part_path, &final_path, plan.size_bytes) {
-        let _ = tokio::fs::remove_file(&part_path).await;
+    if let Err(error) = publish(&part_path, &final_path, plan.size_bytes, &plan.sha256) {
+        if owns_part {
+            let _ = tokio::fs::remove_file(&part_path).await;
+        }
         return Err(error);
     }
 
@@ -519,6 +540,7 @@ async fn receive(
     verifying: &AtomicBool,
     on_event: &Channel<DownloadEvent>,
     policy: DownloadPolicy,
+    owns_part: &mut bool,
 ) -> InferenceResult<bool> {
     if policy.require_https && !plan.url.starts_with("https://") {
         return Err(InferenceError::network(
@@ -541,23 +563,48 @@ async fn receive(
             ))
         })?;
 
-    // The request itself is bounded. `stall_timeout` below covers both header
-    // arrival and inter-chunk silence so a silent server can never stall the
-    // UI or the Cancel button indefinitely.
-    let response = tokio::time::timeout(policy.stall_timeout, client.get(&plan.url).send())
-        .await
-        .map_err(|_| {
-            InferenceError::network(format!(
-                "The model host did not answer within {} seconds. Nothing was installed.",
-                policy.stall_timeout.as_secs().max(1)
-            ))
-        })?
-        .map_err(|error| {
-            InferenceError::network(format!(
-                "The model could not be downloaded: {}",
-                sanitize_reqwest_error(error)
-            ))
-        })?;
+    // Poll while waiting for response headers so Cancel is honoured during
+    // connection/TLS/server delays too, not only after the first body chunk.
+    // The same total deadline bounds this loop; it cannot reset on a poll.
+    let request_started = Instant::now();
+    let request = client.get(&plan.url).send();
+    tokio::pin!(request);
+    let response = loop {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+
+        let remaining = policy
+            .stall_timeout
+            .checked_sub(request_started.elapsed())
+            .ok_or_else(|| {
+                InferenceError::network(format!(
+                    "The model host did not answer within {} seconds. Nothing was installed.",
+                    policy.stall_timeout.as_secs().max(1)
+                ))
+            })?;
+        let poll = policy
+            .cancel_poll
+            .max(Duration::from_millis(1))
+            .min(remaining);
+
+        match tokio::time::timeout(poll, &mut request).await {
+            Ok(Ok(response)) => break response,
+            Ok(Err(error)) => {
+                return Err(InferenceError::network(format!(
+                    "The model could not be downloaded: {}",
+                    sanitize_reqwest_error(error)
+                )));
+            }
+            Err(_) if request_started.elapsed() >= policy.stall_timeout => {
+                return Err(InferenceError::network(format!(
+                    "The model host did not answer within {} seconds. Nothing was installed.",
+                    policy.stall_timeout.as_secs().max(1)
+                )));
+            }
+            Err(_) => {}
+        }
+    };
 
     // A redirect that leaves TLS is refused before any body byte is written.
     // The digest would catch tampering later, but there is no reason to accept
@@ -591,9 +638,17 @@ async fn receive(
         None => 0,
     };
 
-    let mut file = tokio::fs::File::create(part_path).await.map_err(|error| {
-        InferenceError::storage(format!("The download file could not be created: {error}"))
-    })?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part_path)
+        .await
+        .map_err(|error| {
+            InferenceError::storage(format!(
+                "The temporary download file could not be created exclusively: {error}"
+            ))
+        })?;
+    *owns_part = true;
 
     let mut hasher = Sha256::new();
     let mut received = 0u64;
@@ -610,13 +665,14 @@ async fn receive(
 
         // Poll in short slices so cancellation responds promptly while the host
         // is silent, and so a dead connection fails instead of hanging forever.
-        let next = match tokio::time::timeout(policy.cancel_poll, stream.next()).await {
+        let poll = policy.cancel_poll.max(Duration::from_millis(1));
+        let next = match tokio::time::timeout(poll, stream.next()).await {
             Ok(next) => {
                 stalled = Duration::ZERO;
                 next
             }
             Err(_) => {
-                stalled += policy.cancel_poll;
+                stalled += poll;
 
                 if stalled >= policy.stall_timeout {
                     return Err(InferenceError::network(format!(
@@ -667,8 +723,8 @@ async fn receive(
         InferenceError::storage(format!("The download could not be flushed: {error}"))
     })?;
 
-    // Force the bytes to the device before the rename. An OS crash after the
-    // rename must not leave a correct-looking file with an empty tail.
+    // Force the bytes to the device before no-replace publication. An OS crash
+    // after publication must not leave a correct-looking file with an empty tail.
     file.sync_all().await.map_err(|error| {
         InferenceError::storage(format!("The download could not be completed: {error}"))
     })?;
@@ -699,21 +755,39 @@ async fn receive(
     Ok(true)
 }
 
-/// Moves a fully received file into place, refusing to overwrite anything
-/// (including broken symbolic links).
+/// Publishes a fully received file without replacing anything (including a
+/// file or broken symbolic link created after the caller's initial check).
 ///
-/// Split from the network loop so the rule that matters — never publish a file
-/// of the wrong length, never replace an existing model — can be tested without
-/// a network.
-pub fn publish(part: &Path, final_path: &Path, expected_size: u64) -> InferenceResult<()> {
-    let metadata = std::fs::symlink_metadata(part).map_err(|error| {
-        InferenceError::storage(format!("The download file is missing: {error}"))
+/// A same-directory hard link is an atomic no-replace operation on supported
+/// filesystems. If it is unavailable, publication fails closed rather than
+/// falling back to an overwrite-prone rename.
+pub fn publish(
+    part: &Path,
+    final_path: &Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> InferenceResult<()> {
+    // Re-open and hash the staged bytes from disk immediately before creating
+    // the final name. The transfer-time digest alone cannot prove that the
+    // `.part` file was not changed after the network stream closed.
+    let mut locked = LockedFile::open(part).map_err(|error| {
+        InferenceError::storage(format!("The download file could not be opened safely: {error}"))
+    })?;
+    let metadata = locked.file().metadata().map_err(|error| {
+        InferenceError::storage(format!("The download file could not be inspected: {error}"))
     })?;
 
-    if !metadata.file_type().is_file() || metadata.len() != expected_size {
+    if metadata.len() != expected_size {
         return Err(InferenceError::integrity_failed(
             "The download is not the expected size. Nothing was installed.",
         ));
+    }
+
+    let digest = hash_open_file(locked.file_mut(), &AtomicBool::new(false))?;
+    if !digest.eq_ignore_ascii_case(expected_sha256) {
+        return Err(InferenceError::integrity_failed(format!(
+            "The staged download did not match the approved SHA-256 (expected {expected_sha256}, received {digest}). Nothing was installed."
+        )));
     }
 
     if std::fs::symlink_metadata(final_path).is_ok() {
@@ -723,8 +797,24 @@ pub fn publish(part: &Path, final_path: &Path, expected_size: u64) -> InferenceR
         )));
     }
 
-    std::fs::rename(part, final_path)
-        .map_err(|error| InferenceError::storage(format!("The model could not be placed: {error}")))
+    match std::fs::hard_link(locked.path(), final_path) {
+        Ok(()) => {
+            // The final link names the same locked inode that was just hashed.
+            // Drop the read guard before removing the private `.part` name.
+            drop(locked);
+            let _ = std::fs::remove_file(part);
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(InferenceError::already_exists(format!(
+                "{} already exists. Nexora never overwrites a model file.",
+                final_path.display()
+            )))
+        }
+        Err(error) => Err(InferenceError::storage(format!(
+            "The verified model could not be published without replacing an existing file: {error}"
+        ))),
+    }
 }
 
 /// Hashes a file the user already has, and compares it with the profile.
@@ -746,24 +836,40 @@ pub fn verify_file(path: &str, profile: &ModelProfile) -> InferenceResult<Integr
     }
 
     let file_path = Path::new(trimmed);
+    let mut locked = LockedFile::open(file_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            InferenceError::not_configured(format!("No file exists at {trimmed}."))
+        } else {
+            InferenceError::not_configured(format!(
+                "No regular model file exists at {trimmed}: {error}"
+            ))
+        }
+    })?;
 
-    let metadata = std::fs::symlink_metadata(file_path)
-        .map_err(|_| InferenceError::not_configured(format!("No file exists at {trimmed}.")))?;
+    verify_locked_file(trimmed, file_path, &mut locked, profile, source.size_bytes, source.sha256)
+}
 
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(InferenceError::not_configured(format!(
-            "No regular model file exists at {trimmed}."
-        )));
-    }
-
-    let size_bytes = metadata.len();
-
-    let sha256 = hash_file(file_path, &AtomicBool::new(false))?;
-    let expected = source.sha256;
-    let digest_matches = sha256.eq_ignore_ascii_case(expected);
+/// Hashes the exact opened file and compares it to an expected length and digest.
+/// Used by load-time revalidation while the resulting file guard is retained by
+/// the supervised runtime.
+pub fn verify_locked_file(
+    display_path: &str,
+    file_path: &Path,
+    locked: &mut LockedFile,
+    profile: &ModelProfile,
+    expected_size_bytes: u64,
+    expected_sha256: &'static str,
+) -> InferenceResult<IntegrityReport> {
+    let size_bytes = locked
+        .file()
+        .metadata()
+        .map_err(|error| InferenceError::invalid_model(format!("The file could not be inspected: {error}")))?
+        .len();
+    let sha256 = hash_open_file(locked.file_mut(), &AtomicBool::new(false))?;
+    let digest_matches = sha256.eq_ignore_ascii_case(expected_sha256);
 
     Ok(IntegrityReport {
-        path: trimmed.to_string(),
+        path: display_path.to_string(),
         file_name: file_path
             .file_name()
             .and_then(|value| value.to_str())
@@ -771,18 +877,40 @@ pub fn verify_file(path: &str, profile: &ModelProfile) -> InferenceResult<Integr
             .to_string(),
         profile_id: profile.id,
         size_bytes,
-        size_matches: size_bytes == source.size_bytes,
+        size_matches: size_bytes == expected_size_bytes,
         sha256,
-        expected_size_bytes: source.size_bytes,
-        expected_sha256: expected,
+        expected_size_bytes,
+        expected_sha256,
         digest_matches,
     })
 }
 
 /// Streaming SHA-256 of a file on disk using a bounded 1 MiB heap buffer.
 pub fn hash_file(path: &Path, cancel: &AtomicBool) -> InferenceResult<String> {
-    let mut file = std::fs::File::open(path).map_err(|error| {
+    hash_file_with_size(path, cancel).map(|(_, digest)| digest)
+}
+
+/// Reads the size and streaming SHA-256 through one locked file handle.
+pub fn hash_file_with_size(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> InferenceResult<(u64, String)> {
+    let mut locked = LockedFile::open(path).map_err(|error| {
         InferenceError::invalid_model(format!("The file could not be opened: {error}"))
+    })?;
+    let size = locked
+        .file()
+        .metadata()
+        .map_err(|error| InferenceError::invalid_model(format!("The file could not be inspected: {error}")))?
+        .len();
+    let digest = hash_open_file(locked.file_mut(), cancel)?;
+    Ok((size, digest))
+}
+
+/// Hashes an already-open file handle without reopening its path.
+pub fn hash_open_file(file: &mut std::fs::File, cancel: &AtomicBool) -> InferenceResult<String> {
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        InferenceError::invalid_model(format!("The file could not be read: {error}"))
     })?;
 
     let mut hasher = Sha256::new();
@@ -828,7 +956,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::net::TcpListener;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::{Arc, Barrier, Mutex as StdMutex};
     use tauri::ipc::InvokeResponseBody;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -842,6 +970,10 @@ mod tests {
     fn write_file(path: &Path, bytes: &[u8]) {
         let mut file = std::fs::File::create(path).expect("create");
         file.write_all(bytes).expect("write");
+    }
+
+    fn digest(bytes: &[u8]) -> String {
+        hex_digest(&Sha256::digest(bytes))
     }
 
     fn sha256_of(bytes: &[u8]) -> String {
@@ -920,7 +1052,7 @@ mod tests {
         let part = dir.join("model.part");
         write_file(&part, b"short");
 
-        let error = publish(&part, &dir.join("model.gguf"), 4096).unwrap_err();
+        let error = publish(&part, &dir.join("model.gguf"), 4096, &"00".repeat(32)).unwrap_err();
 
         assert_eq!(error.code, "integrity_failed");
         assert!(part.exists(), "the caller removes the partial file");
@@ -935,7 +1067,7 @@ mod tests {
         write_file(&part, b"new");
         write_file(&final_path, b"old");
 
-        let error = publish(&part, &final_path, 3).unwrap_err();
+        let error = publish(&part, &final_path, 3, &digest(b"new")).unwrap_err();
 
         assert_eq!(error.code, "already_exists");
 
@@ -951,10 +1083,65 @@ mod tests {
         let final_path = dir.join("model.gguf");
         write_file(&part, b"complete");
 
-        publish(&part, &final_path, 8).expect("publish");
+        publish(&part, &final_path, 8, &digest(b"complete")).expect("publish");
 
         assert!(final_path.exists());
         assert!(!part.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publication_rehashes_staged_bytes_before_creating_the_final_name() {
+        let dir = temp_dir("publish-tampered");
+        let part = dir.join("model.part");
+        let final_path = dir.join("model.gguf");
+        write_file(&part, b"tampered");
+
+        let error = publish(&part, &final_path, 8, &digest(b"approved")).unwrap_err();
+
+        assert_eq!(error.code, "integrity_failed");
+        assert!(!final_path.exists(), "unverified bytes are never published");
+        assert!(part.exists(), "the caller retains ownership of cleanup");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_publication_never_replaces_the_winner() {
+        let dir = temp_dir("publish-race");
+        let first_part = dir.join("first.part");
+        let second_part = dir.join("second.part");
+        let final_path = dir.join("model.gguf");
+        write_file(&first_part, b"first---");
+        write_file(&second_part, b"second--");
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_barrier = Arc::clone(&barrier);
+        let first_final = final_path.clone();
+        let first = std::thread::spawn(move || {
+            first_barrier.wait();
+            publish(&first_part, &first_final, 8, &digest(b"first---"))
+        });
+        let second_barrier = Arc::clone(&barrier);
+        let second_final = final_path.clone();
+        let second = std::thread::spawn(move || {
+            second_barrier.wait();
+            publish(&second_part, &second_final, 8, &digest(b"second--"))
+        });
+
+        barrier.wait();
+        let first_result = first.join().expect("first publisher thread");
+        let second_result = second.join().expect("second publisher thread");
+
+        assert_ne!(first_result.is_ok(), second_result.is_ok());
+        let contents = std::fs::read(&final_path).expect("winning model");
+        assert!(contents == b"first---" || contents == b"second--");
+        let losing_error = if first_result.is_err() {
+            first_result.unwrap_err()
+        } else {
+            second_result.unwrap_err()
+        };
+        assert_eq!(losing_error.code, "already_exists");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1118,6 +1305,13 @@ mod tests {
                 .unwrap_err()
                 .code,
             "invalid_request"
+        );
+        assert_eq!(
+            validate_download_directory(&dir.join("bad:name"))
+                .unwrap_err()
+                .code,
+            "invalid_request",
+            "colon-containing path segments can be Windows alternate data streams"
         );
         assert_eq!(
             validate_download_directory(&regular_file).unwrap_err().code,
@@ -1476,6 +1670,55 @@ mod tests {
         assert!(!redirect_err.message.contains("HF_PRIV_TOK"));
         assert!(!redirect_err.message.contains("cdn_pass"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cancellation_while_waiting_for_response_headers_leaves_no_partial_file() {
+        let dir = temp_dir("cancel-headers");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stalled header server");
+        let port = listener.local_addr().expect("server address").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                // Deliberately never send response headers before cancellation.
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_after_delay = Arc::clone(&cancel);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_after_delay.store(true, Ordering::SeqCst);
+        });
+        let (channel, _) = event_sink();
+        let started = Instant::now();
+        let outcome = download_with_policy(
+            &DownloadPlan {
+                url: format!("http://127.0.0.1:{port}/m.gguf"),
+                file_name: "m.gguf".into(),
+                size_bytes: 8,
+                sha256: sha256_of(b"complete"),
+            },
+            &dir,
+            &cancel,
+            &AtomicBool::new(false),
+            &channel,
+            DownloadPolicy::loopback_for_tests(Duration::from_secs(2)),
+        )
+        .await
+        .expect("header wait should be cancellable");
+
+        assert!(outcome.cancelled);
+        assert!(outcome.path.is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("read destination").count(),
+            0
+        );
+        server.join().expect("header server thread");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

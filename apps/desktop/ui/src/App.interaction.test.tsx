@@ -18,6 +18,7 @@ vi.mock("./lib/inference", async (importOriginal) => {
       availableRamGib: 20.5,
       platform: "windows",
     }),
+    fetchModelCatalog: vi.fn(),
     generate: vi.fn(),
     cancelGeneration: vi.fn().mockResolvedValue(true),
     unloadModel: vi.fn(),
@@ -40,15 +41,18 @@ import {
   fetchSettings,
   fetchStatus,
   fetchSystemInfo,
+  fetchModelCatalog,
   generate,
   unloadModel,
 } from "./lib/inference";
 import type { GenerationEvent, GenerationOutcome } from "./lib/ipc";
 import { makeStatus, markDesktop } from "./test/fixtures";
+import { makeMiniModelCatalog } from "./test/modelFixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const settingsMock = vi.mocked(fetchSettings);
 const systemMock = vi.mocked(fetchSystemInfo);
+const catalogMock = vi.mocked(fetchModelCatalog);
 const generateMock = vi.mocked(generate);
 const cancelMock = vi.mocked(cancelGeneration);
 const unloadMock = vi.mocked(unloadModel);
@@ -78,7 +82,7 @@ function streamHarness() {
   return {
     push: (text: string) => emit({ type: "delta", requestId, text }),
     settle: (overrides: Partial<GenerationOutcome> = {}) =>
-      resolve({ requestId, finishReason: "stop", cancelled: false, ...overrides }),
+      resolve({ requestId, finishReason: "stop", cancelled: false, usageWarnings: [], ...overrides }),
     fail: (cause: unknown) => reject(cause),
     requestId: () => requestId,
   };
@@ -95,6 +99,8 @@ beforeEach(() => {
     availableRamGib: 20.5,
     platform: "windows",
   });
+  catalogMock.mockReset();
+  catalogMock.mockResolvedValue(makeMiniModelCatalog());
   generateMock.mockReset();
   cancelMock.mockReset();
   cancelMock.mockResolvedValue(true);

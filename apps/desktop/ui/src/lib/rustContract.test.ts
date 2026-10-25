@@ -335,8 +335,9 @@ const STRUCTS: StructFixture[] = [
     rust: "GenerationOutcome",
     file: "mod",
     ts: "GenerationOutcome",
-    wire: ["requestId", "finishReason", "cancelled"],
+    wire: ["requestId", "finishReason", "cancelled", "usageWarnings"],
   },
+  { rust: "UsageWarning", file: "mod", ts: "UsageWarning", wire: ["code", "message"] },
   {
     rust: "ModelInfo",
     file: "models",
@@ -425,13 +426,13 @@ const STRUCTS: StructFixture[] = [
     file: "usageMod",
     ts: "UsageStatus",
     wire: [
+      "policyConfigured",
       "allowance",
       "used",
       "remaining",
       "day",
       "resetAtMs",
       "policyId",
-      "provisional",
       "exhausted",
       "notice",
       "error",
@@ -774,7 +775,7 @@ describe("Tauri command surface", () => {
     expect(byName.get("cancel_generation")).toEqual(["requestId"]);
     expect(byName.get("validate_model")).toEqual(["contextSize", "path"]);
     expect(byName.get("save_settings")).toEqual(["settings"]);
-    expect(byName.get("start_model_download")).toEqual(["onEvent", "profileId", "targetDir"]);
+    expect(byName.get("start_model_download")).toEqual(["onEvent", "profileId"]);
     expect(byName.get("verify_model")).toEqual(["path", "profileId"]);
     expect(byName.get("get_disk_space")).toEqual(["targetDir"]);
     expect(byName.get("select_model")).toEqual(["id"]);
@@ -786,35 +787,28 @@ describe("Tauri command surface", () => {
 });
 
 // --------------------------------------------------------------------------
-// Phase 7: the daily allowance must be the same number on both sides
+// Phase 16: local usage stays informational until policy is approved
 // --------------------------------------------------------------------------
 
-describe("daily usage policy", () => {
-  it("publishes the allowance the backend enforces", () => {
-    const constant = /pub const DAILY_ALLOWANCE: u32 = (\d+);/.exec(sources.usageMod);
-    const published = /PUBLISHED_DAILY_ALLOWANCE = (\d+);/.exec(usageSource);
-
-    expect(constant).not.toBeNull();
-    expect(published).not.toBeNull();
-    expect(group(published as RegExpExecArray, 1)).toBe(group(constant as RegExpExecArray, 1));
+describe("local usage accounting policy", () => {
+  it("makes the production local quota explicitly unconfigured", () => {
+    expect(sources.usageMod).toContain("Self::load_inner(config_dir, now, None)");
+    expect(sources.usageMod).toContain("pub policy_configured: bool");
+    expect(sources.usageMod).toContain("pub allowance: Option<u32>");
+    expect(sources.usageMod).toContain("fn load_with_policy_at");
+    expect(sources.usageMod).not.toMatch(/pub const DAILY_ALLOWANCE/);
+    expect(usageSource).not.toContain("PUBLISHED_DAILY_ALLOWANCE");
   });
 
-  it("marks the allowance as provisional in the core", () => {
-    expect(sources.usageMod).toContain("pub const ALLOWANCE_IS_PROVISIONAL: bool = true;");
-  });
-
-  it("enforces the allowance inside the only command that can start a model", () => {
-    // Every `generate()` in the UI funnels through `start_generation`; the
-    // allowance is reserved there, before the engine is asked to work.
+  it("reserves local usage in the only command that starts a model", () => {
+    // This is informational in production, but a future explicitly configured
+    // local policy must still be checked before the engine is asked to work.
     expect(sources.commands).toContain("usage.reserve(");
     expect(sources.commands).toContain("charge.commit()");
     expect(sources.commands).toContain("if accepted.load(");
   });
 
   it("has exactly one caller of the streaming client in the whole core", () => {
-    // A second entry point that posted to the engine directly would bypass the
-    // allowance. The client module defines `stream_chat`; only the generation
-    // command may call it.
     const files = ["inference/client.rs", "inference/commands.rs", "inference/mod.rs"];
     const callers = files.filter((file) => {
       const source = readFileSync(join(rustSrcDir, file), "utf8");
@@ -974,6 +968,7 @@ describe("Auth, session, and diagnostics wire contract", () => {
         "appVersion",
         "credentialVault",
         "authServiceUrl",
+        "googleOauthConfigured",
         "cspEnforced",
         "offlineCapable",
       ],

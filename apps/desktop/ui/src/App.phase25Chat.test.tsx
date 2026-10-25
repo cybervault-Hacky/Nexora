@@ -23,6 +23,7 @@ vi.mock("./lib/inference", async (importOriginal) => {
       availableRamGib: 20.5,
       platform: "windows",
     }),
+    fetchModelCatalog: vi.fn(),
     generate: vi.fn(),
     cancelGeneration: vi.fn().mockResolvedValue(true),
     unloadModel: vi.fn(),
@@ -78,12 +79,14 @@ vi.mock("./lib/history", () => ({
 }));
 
 import App from "./App";
-import { cancelGeneration, fetchStatus, fetchSystemInfo, generate } from "./lib/inference";
+import { cancelGeneration, fetchModelCatalog, fetchStatus, fetchSystemInfo, generate } from "./lib/inference";
 import type { GenerationEvent, GenerationOutcome } from "./lib/ipc";
 import { makeStatus, markDesktop, makeUsage } from "./test/fixtures";
+import { makeMiniModelCatalog } from "./test/modelFixtures";
 
 const statusMock = vi.mocked(fetchStatus);
 const systemMock = vi.mocked(fetchSystemInfo);
+const catalogMock = vi.mocked(fetchModelCatalog);
 const generateMock = vi.mocked(generate);
 const cancelMock = vi.mocked(cancelGeneration);
 
@@ -107,7 +110,7 @@ function streamHarness() {
   return {
     push: (text: string) => emit({ type: "delta", requestId, text }),
     settle: (overrides: Partial<GenerationOutcome> = {}) =>
-      resolve({ requestId, finishReason: "stop", cancelled: false, ...overrides }),
+      resolve({ requestId, finishReason: "stop", cancelled: false, usageWarnings: [], ...overrides }),
     fail: (cause: unknown) => reject(cause),
     requestId: () => requestId,
   };
@@ -141,6 +144,8 @@ beforeEach(() => {
     availableRamGib: 20.5,
     platform: "windows",
   });
+  catalogMock.mockReset();
+  catalogMock.mockResolvedValue(makeMiniModelCatalog());
   generateMock.mockReset();
   cancelMock.mockReset();
   cancelMock.mockResolvedValue(true);
@@ -230,34 +235,54 @@ describe("Phase 25 — AI Chat Integration", () => {
     );
   });
 
-  it("blocks sending and explains the exhausted daily allowance", async () => {
-    usageStatus = makeUsage({ used: 50, exhausted: true, remaining: 0 });
+  it("keeps local chat available when no local allowance is configured", async () => {
+    usageStatus = makeUsage({ used: 50, exhausted: false, allowance: null, remaining: null });
+    generateMock.mockImplementation(async (request, onEvent) => {
+      onEvent({ type: "delta", requestId: request.requestId, text: "Still available locally." });
+      return {
+        requestId: request.requestId,
+        finishReason: "stop",
+        cancelled: false,
+        usageWarnings: [],
+      };
+    });
     const user = userEvent.setup();
 
     render(<App />);
 
     const input = await screen.findByRole("textbox", { name: "Message Nexora" });
 
-    expect(screen.getByText("50 of 50 used")).toBeTruthy();
-    expect(screen.getAllByText(/Daily free allowance reached/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Load a model to send/i)).toBeNull();
+    expect(screen.getByText("50 recorded today")).toBeTruthy();
+    expect(screen.getByText(/no local daily limit is configured/i)).toBeTruthy();
+    expect(screen.queryByText(/50 of 50 used|daily free allowance reached/i)).toBeNull();
 
+    await user.type(input, "hello");
     const send = screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
+    expect(send.disabled).toBe(false);
+    await user.keyboard("{Enter}");
 
-    await user.type(input, "hello{Enter}");
-
-    expect(generateMock).not.toHaveBeenCalled();
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(await within(screen.getByRole("log", { name: "Conversation" })).findByText("Still available locally.")).toBeTruthy();
     expect(screen.queryByText(/upgrade|buy|purchase|subscribe/i)).toBeNull();
   });
 
-  it("reports a backend refusal at exhaustion instead of a fake reply", async () => {
+  it("surfaces an account quota warning without blocking the local reply", async () => {
     const user = userEvent.setup();
 
-    generateMock.mockRejectedValue({
-      code: "quota_exhausted",
-      message:
-        "The daily free allowance is used up (50 of 50 generations today). It resets at 2026-10-21 00:00 UTC.",
+    generateMock.mockImplementation(async (request, onEvent) => {
+      onEvent({ type: "delta", requestId: request.requestId, text: "Local reply is complete." });
+      return {
+        requestId: request.requestId,
+        finishReason: "stop",
+        cancelled: false,
+        usageWarnings: [
+          {
+            code: "account_usage_reservation_failed",
+            message:
+              "Account usage could not be reserved (quota_exceeded): the account policy refused this reservation. Local inference and conversation history are unaffected.",
+          },
+        ],
+      };
     });
 
     render(<App />);
@@ -265,7 +290,10 @@ describe("Phase 25 — AI Chat Integration", () => {
     const input = await screen.findByRole("textbox", { name: "Message Nexora" });
     await user.type(input, "hello{Enter}");
 
-    expect(await screen.findByText(/daily free allowance is used up/i)).toBeTruthy();
+    expect(
+      await within(screen.getByRole("log", { name: "Conversation" })).findByText("Local reply is complete."),
+    ).toBeTruthy();
+    expect(await screen.findByText(/account usage could not be reserved \(quota_exceeded\)/i)).toBeTruthy();
     expect(generateMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Generating")).toBeNull();
   });

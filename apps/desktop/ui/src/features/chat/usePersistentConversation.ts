@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelGeneration, generate, toInferenceError } from "../../lib/inference";
 import type { GenerationOutcome } from "../../lib/ipc";
+import { isApprovedProfileId } from "../models/readiness";
 import {
   BUSY_ERROR,
   createAssistantMessage,
@@ -417,6 +418,10 @@ export function usePersistentConversation({
           return;
         }
 
+        if (outcome.usageWarnings.length > 0) {
+          setRuntimeError(outcome.usageWarnings.map((warning) => warning.message).join(" "));
+        }
+
         if (outcome.cancelled || session.cancelled) {
           // Never invent an assistant turn: an empty stop stays empty so it is
           // excluded from the next request and shown as a system note instead.
@@ -527,6 +532,10 @@ export function usePersistentConversation({
   const submit = useCallback(
     (options?: { contextBlock?: string }) => {
       if (loadingRef.current) return;
+      if (!isApprovedProfileId(profileRef.current)) {
+        setRuntimeError("Select an approved local model before sending.");
+        return;
+      }
       if (!activeRef.current) {
         const now = Date.now();
         const conv: PersistedConversation = {
@@ -572,6 +581,10 @@ export function usePersistentConversation({
   const retry = useCallback(
     (options?: { contextBlock?: string }) => {
       if (loadingRef.current) return;
+      if (!isApprovedProfileId(profileRef.current)) {
+        setRuntimeError("Select an approved local model before retrying.");
+        return;
+      }
       if (sessionRef.current) {
         setError(BUSY_ERROR);
         return;

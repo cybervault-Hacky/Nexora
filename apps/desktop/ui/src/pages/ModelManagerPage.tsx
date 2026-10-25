@@ -30,7 +30,7 @@ export interface ModelManagerPageProps {
 /**
  * Local Model Manager: the ModelSetup flow (runtime probe, GGUF
  * validation, load) plus live engine state and hardware capabilities.
- * Nexora never downloads a runtime or model — both paths come from the machine.
+ * Model weights may be explicitly acquired; the runtime remains machine-provided.
  */
 export function ModelManagerPage({
   profileId = null,

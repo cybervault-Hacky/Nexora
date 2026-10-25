@@ -31,7 +31,7 @@ pub struct EmailMessage {
 impl std::fmt::Debug for EmailMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EmailMessage")
-            .field("to", &self.to)
+            .field("to", &crate::scrub::REDACTED)
             .field("subject", &self.subject)
             .field("body", &crate::scrub::REDACTED)
             .finish()
@@ -101,6 +101,20 @@ impl EmailDelivery {
             EmailDelivery::Unconfigured
         }
     }
+}
+
+/// Log only transport-level failures. Provider error text is deliberately
+/// generic; no recipient, message body, token, or credential is included.
+pub(crate) fn report_delivery_failure(flow: &'static str, error: &EmailError) {
+    if matches!(error, EmailError::NotConfigured) {
+        return;
+    }
+    eprintln!(
+        "{}",
+        crate::scrub::scrub(&format!(
+            "nexora-auth: {flow} email delivery failed ({error}); message details withheld."
+        ))
+    );
 }
 
 #[cfg(test)]

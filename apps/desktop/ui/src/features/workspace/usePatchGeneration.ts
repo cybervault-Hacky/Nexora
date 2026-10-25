@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelGeneration, generate } from "../../lib/inference";
 import { isDesktopShell, type AppStatus, type ChatTurn } from "../../lib/ipc";
+import { isApprovedProfileId } from "../models/readiness";
 import {
   createPatchProposal,
   validatePatchProposal,
@@ -110,6 +111,11 @@ export function usePatchGeneration({ workspacePath, engineStatus, profileId }: U
       setState({ status: "error", message: `Model unavailable — ${detail} Load a GGUF model in Settings.` });
       return;
     }
+    const selectedProfile = profileRef.current;
+    if (!isApprovedProfileId(selectedProfile)) {
+      setState({ status: "error", message: "Select an approved local model before generating a patch." });
+      return;
+    }
 
     // Step 2: workspace selected
     if (!workspacePath) {
@@ -213,7 +219,7 @@ export function usePatchGeneration({ workspacePath, engineStatus, profileId }: U
           messages,
           maxTokens: 4096,
           temperature: 0.2,
-          profileId: profileRef.current,
+          profileId: selectedProfile,
         },
         (event) => {
           if (event.requestId !== requestId) return;

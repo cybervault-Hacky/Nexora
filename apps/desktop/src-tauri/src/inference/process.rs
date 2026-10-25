@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -284,6 +284,8 @@ struct RunningServer {
     stderr: Arc<Mutex<String>>,
     /// Signals once the stderr pipe reaches EOF so crash output is captured reliably.
     stderr_done: Option<mpsc::Receiver<()>>,
+    /// Keeps the verified model file unchanged while the child may still open it.
+    _model_file: models::LockedFile,
 }
 
 /// Owns the single `llama-server` child process.
@@ -337,18 +339,33 @@ impl Supervisor {
             Ok(Some(exit)) => {
                 self.flush_exited_stderr();
                 let tail = self.stderr_tail();
-                self.last_error = Some(format!(
-                    "The local engine stopped unexpectedly ({exit}).{tail}"
-                ));
-                self.stop();
+                let reason = format!("The local engine stopped unexpectedly ({exit}).{tail}");
+                self.last_error = Some(reason.clone());
+                if let Err(stop_error) = self.stop() {
+                    self.last_error = Some(format!(
+                        "{reason} Shutdown was not confirmed: {}",
+                        stop_error.message
+                    ));
+                }
                 false
             }
             Err(error) => {
-                self.last_error = Some(format!(
-                    "The local engine could not be checked and was stopped: {error}"
-                ));
-                self.stop();
-                false
+                let reason = format!(
+                    "The local engine could not be checked; shutdown confirmation is required: {error}"
+                );
+                self.last_error = Some(reason.clone());
+                if let Err(stop_error) = self.stop() {
+                    self.last_error = Some(format!(
+                        "{reason} Shutdown was not confirmed: {}",
+                        stop_error.message
+                    ));
+                    // An inaccessible child is treated as possibly alive. This
+                    // keeps loaded attribution and the file guard from being
+                    // discarded based on an unverified status read.
+                    true
+                } else {
+                    false
+                }
             }
         }
     }
@@ -357,18 +374,38 @@ impl Supervisor {
     ///
     /// No shell is involved, no argument is interpolated into a command line,
     /// and the API key is passed through a file rather than argv.
+    /// Stops any prior child before starting the runtime with a retained model
+    /// file guard. A failed stop returns without spawning a replacement.
     pub fn start(
         &mut self,
         runtime_path: &str,
-        model_path: &str,
+        model_file: models::LockedFile,
         context_size: u32,
         config_dir: &Path,
     ) -> InferenceResult<()> {
-        self.stop();
-        self.last_error = None;
+        self.stop()?;
+        self.start_stopped(runtime_path, model_file, context_size, config_dir)
+    }
 
+    /// Starts a new child after the caller has already confirmed the old child
+    /// is reaped. The file guard is retained until `stop` confirms child exit.
+    pub fn start_stopped(
+        &mut self,
+        runtime_path: &str,
+        model_file: models::LockedFile,
+        context_size: u32,
+        config_dir: &Path,
+    ) -> InferenceResult<()> {
+        if self.running.is_some() {
+            return Err(InferenceError::new(
+                "runtime_stop_failed",
+                "The previous local engine is still tracked. Nexora will not start a replacement.",
+            ));
+        }
+
+        self.last_error = None;
         models::looks_like_executable(runtime_path)?;
-        models::inspect(model_path, context_size, None)?;
+        let model_path = model_file.path().to_string_lossy().into_owned();
 
         let port = free_loopback_port()?;
         let raw_key = session_key()?;
@@ -377,7 +414,7 @@ impl Supervisor {
 
         let mut command = Command::new(runtime_path);
         command
-            .args(build_launch_args(model_path, port, context_size, &key_path))
+            .args(build_launch_args(&model_path, port, context_size, &key_path))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -396,14 +433,25 @@ impl Supervisor {
         })?;
 
         let stderr = Arc::new(Mutex::new(String::new()));
-        let stderr_done = if let Some(mut pipe) = child.stderr.take() {
+        let stderr_pipe = child.stderr.take();
+        self.running = Some(RunningServer {
+            child,
+            port,
+            key: RuntimeSecret::new(raw_key),
+            key_path,
+            stderr: Arc::clone(&stderr),
+            stderr_done: None,
+            _model_file: model_file,
+        });
+
+        if let Some(mut pipe) = stderr_pipe {
             let sink = Arc::clone(&stderr);
             let (done_tx, done_rx) = mpsc::channel::<()>();
 
             // Drain continuously and retain only the tail. Stopping the read
             // early would let the child block forever once the OS pipe buffer
             // filled, which looks exactly like a hung model load.
-            std::thread::spawn(move || {
+            let drain = move || {
                 let mut chunk = [0u8; 4096];
                 let mut retained: Vec<u8> = Vec::new();
 
@@ -427,44 +475,71 @@ impl Supervisor {
                 }
 
                 let _ = done_tx.send(());
-            });
+            };
 
-            Some(done_rx)
-        } else {
-            None
-        };
-
-        self.running = Some(RunningServer {
-            child,
-            port,
-            key: RuntimeSecret::new(raw_key),
-            key_path,
-            stderr,
-            stderr_done,
-        });
+            match std::thread::Builder::new()
+                .name("nexora-runtime-stderr".to_string())
+                .spawn(drain)
+            {
+                Ok(_reader) => {
+                    if let Some(server) = self.running.as_mut() {
+                        server.stderr_done = Some(done_rx);
+                    }
+                }
+                Err(error) => {
+                    let primary =
+                        format!("The local engine output reader could not be started: {error}");
+                    let stop_error = self.stop().err().map(|stop| stop.message);
+                    let message = match stop_error {
+                        Some(stop_error) => {
+                            format!("{primary} Shutdown was not confirmed: {stop_error}")
+                        }
+                        None => primary,
+                    };
+                    self.last_error = Some(message.clone());
+                    return Err(InferenceError::spawn_failed(message));
+                }
+            }
+        }
 
         Ok(())
     }
 
     /// Stops and reaps the child, without ever blocking indefinitely.
     ///
-    /// `Child::wait()` blocks until the process exits. If `kill()` fails — an
-    /// access-denied `TerminateProcess` on Windows, for example — waiting would
-    /// hang the caller while it holds the supervisor mutex, and the window
-    /// close handler takes the same mutex. Polling with a deadline keeps
-    /// shutdown bounded and reports the failure instead of pretending success.
-    pub fn stop(&mut self) {
-        let Some(mut server) = self.running.take() else {
-            return;
+    /// The child handle, session key, and model-file guard remain in the
+    /// supervisor unless process exit is confirmed. Callers must not replace
+    /// the runtime or clear loaded state after an error.
+    pub fn stop(&mut self) -> InferenceResult<()> {
+        self.stop_with_timeout(SHUTDOWN_TIMEOUT, true)
+    }
+
+    fn stop_with_timeout(
+        &mut self,
+        timeout: Duration,
+        request_termination: bool,
+    ) -> InferenceResult<()> {
+        let Some(server) = self.running.as_mut() else {
+            return Ok(());
         };
 
-        let _ = server.child.kill();
-
-        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let kill_error = if request_termination {
+            server.child.kill().err()
+        } else {
+            None
+        };
+        let deadline = Instant::now() + timeout;
         let mut reaped = false;
+        let mut wait_error = None;
 
         loop {
-            match server.child.try_wait() {
+            match self
+                .running
+                .as_mut()
+                .expect("the running child remains owned until reaped")
+                .child
+                .try_wait()
+            {
                 Ok(Some(_)) => {
                     reaped = true;
                     break;
@@ -472,9 +547,15 @@ impl Supervisor {
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                Ok(None) => break,
+                Ok(None) => {
+                    wait_error = Some(
+                        "The local engine did not exit after being asked to stop; it may still be running."
+                            .to_string(),
+                    );
+                    break;
+                }
                 Err(error) => {
-                    self.last_error = Some(format!(
+                    wait_error = Some(format!(
                         "The local engine could not be confirmed stopped: {error}"
                     ));
                     break;
@@ -482,19 +563,28 @@ impl Supervisor {
             }
         }
 
-        if reaped {
-            if let Some(rx) = server.stderr_done.take() {
-                let _ = rx.recv_timeout(STDERR_FLUSH_TIMEOUT);
-            }
-        } else if self.last_error.is_none() {
-            self.last_error = Some(
-                "The local engine did not exit after being asked to stop; it may still be running."
-                    .to_string(),
-            );
+        if !reaped {
+            let detail = wait_error
+                .unwrap_or_else(|| "The local engine could not be confirmed stopped.".to_string());
+            let message = match kill_error {
+                Some(error) => format!("{detail} Termination request failed: {error}"),
+                None => detail,
+            };
+            self.last_error = Some(message.clone());
+            return Err(InferenceError::new("runtime_stop_failed", message));
         }
 
-        // The key is useless without the process that was given it.
+        let mut server = self
+            .running
+            .take()
+            .expect("the reaped child remains owned until cleanup");
+        if let Some(rx) = server.stderr_done.take() {
+            let _ = rx.recv_timeout(STDERR_FLUSH_TIMEOUT);
+        }
+
+        // The key is useless once the process that was given it is reaped.
         let _ = std::fs::remove_file(&server.key_path);
+        Ok(())
     }
 
     /// `Some(reason)` once the engine is no longer running.
@@ -557,7 +647,55 @@ impl Supervisor {
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
-        self.stop();
+        if self.stop().is_err() {
+            // The owner is going away, but the child must not be detached from
+            // its model-file guard. The shared slot preserves ownership even
+            // if the operating system cannot create a reaper thread.
+            if let Some(server) = self.running.take() {
+                let retained = Arc::new(Mutex::new(Some(server)));
+                let reaper = Arc::clone(&retained);
+                let result = std::thread::Builder::new()
+                    .name("nexora-runtime-reaper".to_string())
+                    .spawn(move || {
+                        let server = reaper
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take();
+                        if let Some(server) = server {
+                            reap_until_stopped(server);
+                        }
+                    });
+
+                if result.is_err() {
+                    // Thread creation is best-effort, but dropping a live
+                    // child's file guard is not. Retry synchronously rather
+                    // than allowing the process to outlive its locked model.
+                    let server = retained
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take();
+                    if let Some(server) = server {
+                        reap_until_stopped(server);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn reap_until_stopped(mut server: RunningServer) {
+    loop {
+        let _ = server.child.kill();
+        match server.child.try_wait() {
+            Ok(Some(_)) => {
+                if let Some(rx) = server.stderr_done.take() {
+                    let _ = rx.recv_timeout(STDERR_FLUSH_TIMEOUT);
+                }
+                let _ = std::fs::remove_file(&server.key_path);
+                return;
+            }
+            Ok(None) | Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
     }
 }
 
@@ -586,21 +724,65 @@ fn session_key() -> InferenceResult<String> {
 }
 
 fn write_key_file(path: &Path, key: &str) -> InferenceResult<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| InferenceError::storage(error.to_string()))?;
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(InferenceError::storage(
+            "The local runtime session key is malformed and was not written.",
+        ));
     }
 
-    std::fs::write(path, format!("{key}\n")).map_err(|error| {
-        InferenceError::storage(format!(
-            "The session key file could not be written: {error}"
-        ))
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| {
+            InferenceError::storage("The local runtime key directory could not be prepared.")
+        })?;
+    }
+
+    // `create_new` prevents following/replacing a pre-existing path. Unix
+    // permissions are set atomically at creation; Windows inherits the ACL of
+    // Tauri's per-user application data directory.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            InferenceError::storage(
+                "A previous local runtime key file still exists; the new key was not written.",
+            )
+        } else {
+            InferenceError::storage("The local runtime key file could not be created.")
+        }
     })?;
+
+    if file.write_all(format!("{key}\n").as_bytes()).is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(InferenceError::storage(
+            "The local runtime key file could not be written safely.",
+        ));
+    }
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let permissions = file
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o777)
+            .unwrap_or(0);
+        if permissions & 0o077 != 0 || permissions & 0o400 == 0 {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(InferenceError::storage(
+                "The local runtime key file permissions are not private enough.",
+            ));
+        }
     }
 
     Ok(())
@@ -813,6 +995,45 @@ pub async fn health_ok_with_key(port: u16, key: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn failed_stop_retains_the_child_key_and_model_guard_until_reaped() {
+        let directory = tempfile::tempdir().expect("temporary runtime directory");
+        let model_path = directory.path().join("model.gguf");
+        std::fs::write(&model_path, b"model bytes").expect("write model file");
+        let model_file = models::LockedFile::open(&model_path).expect("open model guard");
+        let key_path = directory.path().join(SESSION_KEY_FILE);
+        std::fs::write(&key_path, b"test session key").expect("write key fixture");
+        let child = Command::new("sleep")
+            .arg("30")
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn child fixture");
+
+        let mut supervisor = Supervisor::new();
+        supervisor.running = Some(RunningServer {
+            child,
+            port: 0,
+            key: RuntimeSecret::new("test-key"),
+            key_path: key_path.clone(),
+            stderr: Arc::new(Mutex::new(String::new())),
+            stderr_done: None,
+            _model_file: model_file,
+        });
+
+        let error = supervisor
+            .stop_with_timeout(Duration::ZERO, false)
+            .expect_err("unconfirmed child must not be forgotten");
+        assert_eq!(error.code, "runtime_stop_failed");
+        let running = supervisor.running.as_ref().expect("child retained");
+        assert!(running._model_file.path().exists(), "file guard is retained");
+        assert!(key_path.exists(), "session key remains while the child may use it");
+
+        supervisor.stop().expect("termination is confirmed");
+        assert!(supervisor.running.is_none());
+        assert!(!key_path.exists(), "key is removed only after confirmed exit");
+    }
+
     #[test]
     fn recognises_the_pinned_build_number() {
         assert!(reports_pinned_build("version: 11714 (c0ffee)"));
@@ -904,6 +1125,38 @@ mod tests {
         let leaked = format!("fatal: key={secret} Authorization: Bearer {secret}");
         let scrubbed = scrub_runtime_secret(&leaked, Some(secret));
         assert!(!scrubbed.contains(secret));
+    }
+
+    #[test]
+    fn session_key_file_is_private_and_never_overwrites_an_existing_path() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join(SESSION_KEY_FILE);
+        let key = "a".repeat(64);
+
+        write_key_file(&path, &key).expect("create private runtime key");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{key}\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode & 0o077, 0, "group/other access must be denied");
+            assert_ne!(mode & 0o400, 0, "the owner must be able to read the key");
+        }
+
+        let replacement = "b".repeat(64);
+        let error = write_key_file(&path, &replacement).unwrap_err();
+        assert_eq!(error.code, "storage");
+        assert!(!error.message.contains(&replacement));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{key}\n"));
+    }
+
+    #[test]
+    fn malformed_session_key_is_rejected_before_any_file_is_created() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join(SESSION_KEY_FILE);
+        let error = write_key_file(&path, "not-a-session-key").unwrap_err();
+        assert_eq!(error.code, "storage");
+        assert!(!path.exists());
     }
 
     #[test]

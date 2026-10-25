@@ -2,12 +2,12 @@
 //!
 //! Design constraints (brief §4 + plan): the store is the shared PostgreSQL
 //! `login_attempts` table, so counts hold **across multiple backend
-//! instances** — no in-memory counters. Limits are sliding **windows** over
-//! failed attempts only; there is no permanent account lockout (which would
-//! let attackers deny service to users). The plan notes this table "can move
-//! to Redis without contract changes" — that remains the step-6 hardening
-//! track alongside per-IP proxies/`X-Forwarded-For` trust and the
-//! secret-leakage test suite.
+//! instances** — no in-memory counters. Login and password-change windows
+//! count failures; registration, resend, and recovery windows count all
+//! attempts. There is no permanent account lockout (which would let attackers
+//! deny service to users). Forwarding headers remain untrusted: peer IPs come
+//! from the socket unless a separately reviewed trusted-proxy configuration
+//! is introduced.
 //!
 //! Keys are hashed (`e:` + sha256(email), `i:` + sha256(ip)) — never raw
 //! emails, IPs, or credentials. `Retry-After` (seconds) is derived from the
@@ -17,19 +17,42 @@
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
+/// Configuration bounds prevent accidental effectively-disabled or
+/// unreasonable rate-limit windows from being accepted at startup.
+pub const MAX_RATE_LIMIT_ATTEMPTS: u32 = 10_000;
+pub const MAX_RATE_LIMIT_WINDOW_SECS: u64 = 31_536_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitRule {
     pub max_failures: u32,
     pub window_secs: u64,
 }
 
-/// What a window counts: login brute-force defence counts failures only (a
-/// legitimate user signing in repeatedly must never be locked out), while
-/// register/resend volume abuse counts every attempt.
+/// What a window counts: login/password-change brute-force defence counts
+/// failures only, while register/resend/recovery volume abuse counts every
+/// attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CountMode {
     FailuresOnly,
     AllAttempts,
+}
+
+/// Distinguishes an actual exhausted window from a rate-limit store failure.
+/// A database outage must fail closed with a service error, not emit a
+/// misleading `429 Retry-After: 0` response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitError {
+    Limited(u64),
+    StoreUnavailable,
+}
+
+impl RateLimitError {
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Self::Limited(seconds) => Some(*seconds),
+            Self::StoreUnavailable => None,
+        }
+    }
 }
 
 /// Plan §7 window syntax: `5/15m`, `3/60m`. Also accepts `s`/`h` suffixes.
@@ -42,7 +65,7 @@ pub fn parse_rate_limit(raw: &str) -> Result<RateLimitRule, String> {
         .trim()
         .parse()
         .map_err(|_| format!("{RATE_SYNTAX_HINT} (Value withheld.)"))?;
-    if max_failures == 0 {
+    if !(1..=MAX_RATE_LIMIT_ATTEMPTS).contains(&max_failures) {
         return Err(format!("{RATE_SYNTAX_HINT} (Value withheld.)"));
     }
     let window_part = window_part.trim();
@@ -61,6 +84,9 @@ pub fn parse_rate_limit(raw: &str) -> Result<RateLimitRule, String> {
     let window_secs = amount
         .checked_mul(multiplier)
         .ok_or_else(|| format!("{RATE_SYNTAX_HINT} (Value withheld.)"))?;
+    if !(1..=MAX_RATE_LIMIT_WINDOW_SECS).contains(&window_secs) {
+        return Err(format!("{RATE_SYNTAX_HINT} (Value withheld.)"));
+    }
     Ok(RateLimitRule {
         max_failures,
         window_secs,
@@ -129,12 +155,11 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Plan §4: `429` + `Retry-After`, with **exponential lockout backoff** for
-/// keys that keep failing across windows (threat row: "lockout backoff").
-/// Each additional full window of failures beyond the limit doubles the block
-/// time; it is capped (never an indefinite lockout — an attacker must not be
-/// able to deny service to a user forever) and decays with the sliding
-/// windows themselves.
+/// Plan §4: `429` + `Retry-After`, with **exponential backoff** for keys
+/// that keep producing qualifying events across windows (login/password
+/// change count failures; volume-abuse scopes count all attempts). Each
+/// additional exhausted window doubles the block time; it is capped (never an
+/// indefinite lockout) and decays with the sliding windows themselves.
 pub const MAX_BACKOFF_SECS: u64 = 86_400;
 
 /// Retry-After for `excess_windows` additional exhausted windows on top of
@@ -150,16 +175,16 @@ pub fn escalated_retry_after(base_window_secs: u64, excess_windows: u64) -> u64 
         .max(base_window_secs)
 }
 
-/// Check one key against its rule WITHOUT recording. Returns
-/// `Err(retry_after_secs)` when the window is exhausted; the retry value
-/// escalates exponentially for keys failing repeatedly (plan §4 backoff).
+/// Check one key against its rule WITHOUT recording. A full window returns
+/// `RateLimitError::Limited`; database failures return `StoreUnavailable` so
+/// the HTTP layer can fail closed without inventing a zero-second retry.
 pub async fn check(
     pool: &PgPool,
     scope: &str,
     key: &str,
     rule: RateLimitRule,
     mode: CountMode,
-) -> Result<(), u64> {
+) -> Result<(), RateLimitError> {
     let count_sql = match mode {
         CountMode::FailuresOnly => {
             "SELECT count(*) FROM login_attempts \
@@ -178,11 +203,11 @@ pub async fn check(
         .bind(rule.window_secs as f64)
         .fetch_one(pool)
         .await
-        .map_err(|_| 0_u64)?;
+        .map_err(|_| RateLimitError::StoreUnavailable)?;
 
     if attempts >= i64::from(rule.max_failures) {
         // Escalation horizon: 10× the window (bounded by the cap) — how many
-        // full windows' worth of failures this key has piled up recently.
+        // full windows' worth of qualifying events this key has accumulated.
         let horizon_secs = (rule.window_secs.saturating_mul(10))
             .min(MAX_BACKOFF_SECS)
             .max(rule.window_secs);
@@ -192,21 +217,32 @@ pub async fn check(
             .bind(horizon_secs as f64)
             .fetch_one(pool)
             .await
-            .map_err(|_| 0_u64)?;
-        let windows_failed = (recent / i64::from(rule.max_failures).max(1)).max(1) as u64;
-        return Err(escalated_retry_after(rule.window_secs, windows_failed));
+            .map_err(|_| RateLimitError::StoreUnavailable)?;
+        let exhausted_windows = (recent / i64::from(rule.max_failures).max(1)).max(1) as u64;
+        return Err(RateLimitError::Limited(escalated_retry_after(
+            rule.window_secs,
+            exhausted_windows,
+        )));
     }
     Ok(())
 }
 
-/// Record one attempt outcome (`success` | `failure`) for the sliding window.
-pub async fn record(pool: &PgPool, scope: &str, key: &str, outcome: &str) {
-    let _ = sqlx::query("INSERT INTO login_attempts (scope, key, outcome) VALUES ($1, $2, $3)")
+/// Record one attempt outcome (`attempt` | `success` | `failure`) for the
+/// sliding window. Storage errors are returned so callers can fail closed.
+pub async fn record(
+    pool: &PgPool,
+    scope: &str,
+    key: &str,
+    outcome: &str,
+) -> Result<(), RateLimitError> {
+    sqlx::query("INSERT INTO login_attempts (scope, key, outcome) VALUES ($1, $2, $3)")
         .bind(scope)
         .bind(key)
         .bind(outcome)
         .execute(pool)
-        .await;
+        .await
+        .map_err(|_| RateLimitError::StoreUnavailable)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -251,6 +287,16 @@ mod tests {
         for bad in ["", "5", "5/15", "x/15m", "0/15m", "5/0m", "5/15x"] {
             let error = parse_rate_limit(bad).unwrap_err();
             assert!(error.contains("withheld"), "{bad:?} → {error}");
+        }
+    }
+
+    #[test]
+    fn rate_limit_configuration_has_finite_attempt_and_window_bounds() {
+        assert!(parse_rate_limit("10000/8760h").is_ok());
+        for bad in ["10001/15m", "1/8761h", "4294967295/15m"] {
+            let error = parse_rate_limit(bad).unwrap_err();
+            assert!(error.contains("withheld"));
+            assert!(!error.contains(bad));
         }
     }
 

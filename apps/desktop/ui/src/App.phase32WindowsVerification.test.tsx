@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { markDesktop, makeUsage } from "./test/fixtures";
+import { makeMiniModelCatalog } from "./test/modelFixtures";
 
 // Mock Tauri invoke IPC
 vi.mock("@tauri-apps/api/core", () => ({
@@ -94,6 +95,9 @@ function installWindowsMocks() {
           runtimePath: mockEngineRuntime,
           contextSize: 32768,
         };
+
+      case "get_model_catalog":
+        return makeMiniModelCatalog();
 
       case "get_system_info":
         return {

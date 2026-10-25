@@ -13,7 +13,14 @@ vi.mock("../../lib/inference", async (importOriginal) => {
 });
 
 import { cancelGeneration, generate } from "../../lib/inference";
-import { useConversation } from "./useConversation";
+import { useConversation as useConversationImpl } from "./useConversation";
+
+const MINI_ID = "nexora-mini-qwen2.5-coder-7b-instruct-q4-k-m";
+const useConversation = (options?: Parameters<typeof useConversationImpl>[0]) =>
+  useConversationImpl({
+    ...options,
+    profileId: options?.profileId === undefined ? MINI_ID : options.profileId,
+  });
 
 const generateMock = vi.mocked(generate);
 const cancelMock = vi.mocked(cancelGeneration);
@@ -45,7 +52,7 @@ function session() {
     send: (text: string) =>
       emit({ type: "delta", requestId, text }),
     settle: (overrides: Partial<GenerationOutcome> = {}) =>
-      resolve({ requestId, finishReason: "stop", cancelled: false, ...overrides }),
+      resolve({ requestId, finishReason: "stop", cancelled: false, usageWarnings: [], ...overrides }),
     fail: (cause: unknown) => reject(cause),
   };
 }
@@ -73,6 +80,19 @@ describe("useConversation", () => {
     expect(result.current.messages).toHaveLength(0);
     expect(result.current.error?.code).toBe("empty");
     expect(generateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to submit when no approved profile is available", () => {
+    const { result } = renderHook(() => useConversation({ profileId: null }));
+
+    act(() => result.current.setDraft("hello"));
+    act(() => result.current.submit());
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.runtimeError).toBe(
+      "Select an approved local model before sending.",
+    );
   });
 
   it("adds the user turn and streams text into a single reply", async () => {

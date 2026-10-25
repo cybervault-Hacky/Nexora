@@ -68,6 +68,33 @@ pub async fn record_event(
     .await;
 }
 
+/// Persists an audit record inside a caller-owned transaction. Unlike
+/// `record_event`, this does not emit a success log before commit and does not
+/// swallow storage errors; callers can make the audited mutation atomic.
+pub async fn record_event_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_user_id: Option<&str>,
+    subject_id: &str,
+    action: &str,
+    outcome: &str,
+    metadata: Value,
+) -> Result<(), sqlx::Error> {
+    let sanitized = sanitize_metadata(metadata);
+    sqlx::query(
+        "INSERT INTO audit_logs (actor_user_id, subject_id, action, outcome, metadata)
+         VALUES ($1::uuid, $2, $3, $4, $5)",
+    )
+    .bind(actor_user_id)
+    .bind(subject_id)
+    .bind(action)
+    .bind(outcome)
+    .bind(sanitized)
+    .execute(&mut **transaction)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

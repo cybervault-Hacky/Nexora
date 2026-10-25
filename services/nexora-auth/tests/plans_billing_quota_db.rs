@@ -1,7 +1,8 @@
 //! End-to-end PostgreSQL + Axum HTTP integration tests for:
 //! - Plans, versioned pricing, subscriptions, checkout idempotency
 //! - Signed Stripe HMAC-SHA256 webhook verification, replay protection, deduplication
-//! - Activation, renewal, failed payment, upgrade/downgrade, cancellation, refund revocation
+//! - Trusted activation/renewal, failed payment, fail-closed client mutations,
+//!   and refund revocation
 //! - Backend-authoritative daily per-model quota reservations, concurrency safety,
 //!   idempotent retries, release on failed local inference, and stale reservation sweep
 //! - Account profile update, safe Google OAuth linking, GDPR data export, account deletion
@@ -24,14 +25,31 @@ use nexora_auth::session;
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 const TEST_URL_VAR: &str = "NEXORA_AUTH_TEST_DATABASE_URL";
+
+mod support;
+
 const WEBHOOK_SECRET: &str = "whsec_integration_fixture_secret";
 const PASSWORD: &str = "correct horse battery staple";
+static TEST_WEBHOOK_EVENT_SEQUENCE: AtomicI64 = AtomicI64::new(0);
+
+fn test_unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+fn test_future_unix(days: i64) -> i64 {
+    test_unix_now() + days * 24 * 60 * 60
+}
 
 #[derive(Default)]
 struct CaptureEmail {
@@ -60,9 +78,26 @@ impl CaptureEmail {
     }
 }
 
+#[derive(Clone, Default)]
+struct ProviderVerificationOverrides {
+    checkout_session_id: Option<String>,
+    order_id: Option<String>,
+    user_id: Option<String>,
+    client_reference_id: Option<String>,
+    subscription_status: Option<String>,
+    subscription_id: Option<String>,
+    session_created_at_unix: Option<i64>,
+    current_period_end_unix: Option<i64>,
+    amount_total_minor: Option<i64>,
+    currency: Option<String>,
+    omit_payment_intent_id: bool,
+}
+
 struct StubPaymentProvider {
     calls: Mutex<usize>,
     paid_on_verify: bool,
+    sessions: Mutex<HashMap<String, (String, String)>>,
+    verification_overrides: Mutex<ProviderVerificationOverrides>,
 }
 
 impl StubPaymentProvider {
@@ -70,6 +105,8 @@ impl StubPaymentProvider {
         Self {
             calls: Mutex::new(0),
             paid_on_verify,
+            sessions: Mutex::new(HashMap::new()),
+            verification_overrides: Mutex::new(ProviderVerificationOverrides::default()),
         }
     }
 }
@@ -90,6 +127,10 @@ impl PaymentProvider for StubPaymentProvider {
             *guard
         };
         let session_id = format!("cs_test_{n}_{}", input.order_id);
+        self.sessions.lock().unwrap().insert(
+            session_id.clone(),
+            (input.order_id.clone(), input.user_id.clone()),
+        );
         let checkout_url = format!("https://checkout.stripe.test/pay/{session_id}");
         Box::pin(async move {
             Ok(ProviderCheckoutSession {
@@ -101,18 +142,64 @@ impl PaymentProvider for StubPaymentProvider {
 
     fn verify_checkout<'a>(
         &'a self,
-        _session_id: &'a str,
+        session_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderOrderVerification, BillingError>> + Send + 'a>>
     {
         let paid = self.paid_on_verify;
+        let identity = self.sessions.lock().unwrap().get(session_id).cloned();
+        let overrides = self.verification_overrides.lock().unwrap().clone();
         Box::pin(async move {
-            Ok(ProviderOrderVerification {
-                paid,
-                customer_id: Some("cus_test_verified".to_string()),
-                subscription_id: Some("sub_test_verified".to_string()),
-                payment_intent_id: Some("pi_test_verified".to_string()),
-                current_period_end_unix: None,
-            })
+            let now = test_unix_now();
+            let (order_id, user_id) = identity.unwrap_or_default();
+            let mut verification = ProviderOrderVerification {
+                paid: paid && !order_id.is_empty(),
+                checkout_session_id: (!order_id.is_empty()).then(|| session_id.to_string()),
+                order_id: (!order_id.is_empty()).then_some(order_id.clone()),
+                user_id: (!user_id.is_empty()).then_some(user_id.clone()),
+                client_reference_id: (!user_id.is_empty()).then_some(user_id),
+                session_created_at_unix: (!order_id.is_empty()).then_some(now),
+                subscription_status: (!order_id.is_empty()).then(|| "active".to_string()),
+                customer_id: (!order_id.is_empty()).then(|| "cus_test_verified".to_string()),
+                subscription_id: (!order_id.is_empty()).then(|| format!("sub_test_{order_id}")),
+                payment_intent_id: (!order_id.is_empty()).then(|| format!("pi_test_{order_id}")),
+                amount_total_minor: (!order_id.is_empty()).then_some(1_900),
+                currency: (!order_id.is_empty()).then(|| "usd".to_string()),
+                current_period_end_unix: (!order_id.is_empty()).then(|| now + 60 * 24 * 60 * 60),
+            };
+            if let Some(value) = overrides.checkout_session_id {
+                verification.checkout_session_id = Some(value);
+            }
+            if let Some(value) = overrides.order_id {
+                verification.order_id = Some(value);
+            }
+            if let Some(value) = overrides.user_id {
+                verification.user_id = Some(value);
+            }
+            if let Some(value) = overrides.client_reference_id {
+                verification.client_reference_id = Some(value);
+            }
+            if let Some(value) = overrides.subscription_status {
+                verification.subscription_status = Some(value);
+            }
+            if let Some(value) = overrides.subscription_id {
+                verification.subscription_id = Some(value);
+            }
+            if let Some(value) = overrides.session_created_at_unix {
+                verification.session_created_at_unix = Some(value);
+            }
+            if let Some(value) = overrides.current_period_end_unix {
+                verification.current_period_end_unix = Some(value);
+            }
+            if let Some(value) = overrides.amount_total_minor {
+                verification.amount_total_minor = Some(value);
+            }
+            if let Some(value) = overrides.currency {
+                verification.currency = Some(value);
+            }
+            if overrides.omit_payment_intent_id {
+                verification.payment_intent_id = None;
+            }
+            Ok(verification)
         })
     }
 
@@ -146,7 +233,7 @@ impl GoogleProvider for StubGoogleProvider {
                 email,
                 email_verified: true,
                 name: Some("Ada Linked".to_string()),
-                nonce: None,
+                nonce: Some("google-test-nonce-0001".to_string()),
             })
         })
     }
@@ -159,6 +246,7 @@ async fn setup_pool() -> PgPool {
         .connect(&url)
         .await
         .expect("connect test pg");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("run migrations");
@@ -175,8 +263,23 @@ async fn setup_pool() -> PgPool {
 }
 
 fn make_router(pool: PgPool, payment_provider: Arc<dyn PaymentProvider>) -> axum::Router {
+    make_router_with_quota_policy(
+        pool,
+        payment_provider,
+        nexora_auth::quota::QuotaPolicy::configured(),
+    )
+}
+
+fn make_router_with_quota_policy(
+    pool: PgPool,
+    payment_provider: Arc<dyn PaymentProvider>,
+    quota_policy: nexora_auth::quota::QuotaPolicy,
+) -> axum::Router {
     let mut state = AppState::unconfigured();
     state.pool = Some(pool);
+    // Tests opt in explicitly using isolated fixture values; this is not
+    // production quota or entitlement approval.
+    state.quota_policy = quota_policy;
     state.payment_provider = payment_provider;
     state.stripe_webhook_secret = Some(WEBHOOK_SECRET.to_string());
     state.google_provider = Some(Arc::new(StubGoogleProvider {
@@ -225,6 +328,42 @@ async fn create_logged_in_user(pool: &PgPool, tag: &str) -> (String, String, Str
     (logged.user_id, email, logged.session.raw_token)
 }
 
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn unconfigured_policy_hides_catalogue_and_returns_no_account_quota_claims() {
+    let pool = setup_pool().await;
+    let app = make_router_with_quota_policy(
+        pool.clone(),
+        Arc::new(StubPaymentProvider::new(false)),
+        nexora_auth::quota::QuotaPolicy::unconfigured(),
+    );
+    let (user_id, _email, token) = create_logged_in_user(&pool, "unconfigured-quota").await;
+    assert!(!user_id.is_empty());
+
+    let (plans_status, plans) = call_json(&app, "GET", "/v1/plans", None, None).await;
+    assert_eq!(plans_status, StatusCode::OK);
+    assert!(plans["plans"].as_array().unwrap().is_empty());
+
+    let (summary_status, summary) = call_json(&app, "GET", "/v1/usage", Some(&token), None).await;
+    assert_eq!(summary_status, StatusCode::OK);
+    assert_eq!(summary["quotaConfigured"], false);
+    assert!(summary["planId"].is_null());
+    assert!(summary["planName"].is_null());
+    assert!(summary["resetAt"].is_null());
+    assert!(summary["models"].as_array().unwrap().is_empty());
+
+    let (reserve_status, reserve) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/reserve",
+        Some(&token),
+        Some(json!({ "modelId": "nexora-mini", "requestId": "unconfigured-usage-01" })),
+    )
+    .await;
+    assert_eq!(reserve_status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(reserve["error"]["code"], "quota_policy_unconfigured");
+}
+
 async fn call_json(
     app: &axum::Router,
     method: &str,
@@ -255,14 +394,18 @@ async fn call_json(
 
 async fn send_webhook(
     app: &axum::Router,
-    event: Value,
+    mut event: Value,
     sig_override: Option<String>,
 ) -> (StatusCode, Value) {
+    let now = test_unix_now();
+    if let Some(object) = event.as_object_mut() {
+        object.entry("created").or_insert_with(|| {
+            json!(now.saturating_add(
+                TEST_WEBHOOK_EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst)
+            ))
+        });
+    }
     let raw = serde_json::to_vec(&event).unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
     let sig =
         sig_override.unwrap_or_else(|| compute_stripe_signature_header(WEBHOOK_SECRET, now, &raw));
     let resp = app
@@ -336,7 +479,7 @@ fn production_startup_validation_refuses_missing_or_placeholder_secrets() {
 async fn full_billing_webhook_subscription_and_portal_lifecycle() {
     let pool = setup_pool().await;
     let app = make_router(pool.clone(), Arc::new(StubPaymentProvider::new(false)));
-    let (_user_id, _email, token) = create_logged_in_user(&pool, "billing").await;
+    let (user_id, _email, token) = create_logged_in_user(&pool, "billing").await;
 
     // 1. Catalogue lists Free, Pro, Team with server prices and model quotas.
     let (status, cat) = call_json(&app, "GET", "/v1/plans", None, None).await;
@@ -382,12 +525,25 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
     let complete_evt = json!({
         "id": "evt_checkout_001",
         "type": "checkout.session.completed",
+        // Keep the signed event body byte-identical across duplicate deliveries.
+        "created": test_unix_now(),
         "data": {
             "object": {
+                "id": co1["providerSessionId"],
+                "client_reference_id": user_id,
+                "mode": "subscription",
+                "status": "complete",
+                "payment_status": "paid",
+                "amount_total": 1900,
+                "currency": "usd",
                 "customer": "cus_live_001",
-                "subscription": "sub_live_001",
+                "subscription": {
+                    "id": "sub_live_001",
+                    "status": "active",
+                    "current_period_end": test_future_unix(30)
+                },
                 "payment_intent": "pi_live_001",
-                "metadata": { "order_id": order_id }
+                "metadata": { "order_id": order_id, "user_id": user_id }
             }
         }
     });
@@ -400,10 +556,18 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
     assert_eq!(ok_wh, StatusCode::OK);
     assert_eq!(ack1["deduplicated"], false);
 
-    // Duplicate delivery of the exact same event ID is deduplicated cleanly.
-    let (dup_wh, ack2) = send_webhook(&app, complete_evt, None).await;
+    // Duplicate delivery of the exact same event ID and payload is idempotent.
+    let (dup_wh, ack2) = send_webhook(&app, complete_evt.clone(), None).await;
     assert_eq!(dup_wh, StatusCode::OK);
     assert_eq!(ack2["deduplicated"], true);
+
+    // A validly signed but conflicting payload under an already-seen event ID
+    // is not silently acknowledged as a normal duplicate.
+    let mut conflicting_evt = complete_evt;
+    conflicting_evt["data"]["object"]["amount_total"] = json!(1);
+    let (conflict_status, conflict_body) = send_webhook(&app, conflicting_evt, None).await;
+    assert_eq!(conflict_status, StatusCode::CONFLICT);
+    assert_eq!(conflict_body["error"]["code"], "billing_conflict");
 
     let (sub_st, billing_now) =
         call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
@@ -415,7 +579,8 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
     assert_eq!(usage_pro["planId"], "pro");
     assert_eq!(usage_pro["models"][1]["dailyLimit"], 100); // nexora-sonnet = 100/day on Pro
 
-    // 5. Billing portal, upgrade to Team, cancel at period end, and refund revocation.
+    // 5. The customer portal remains provider-backed, but this provider trait
+    // has no verified plan-change or cancellation operation (G-01 regression).
     let (portal_st, portal) =
         call_json(&app, "POST", "/v1/billing/portal", Some(&token), None).await;
     assert_eq!(portal_st, StatusCode::OK);
@@ -424,37 +589,74 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
         .unwrap()
         .contains("cus_live_001"));
 
-    let (up_st, upgraded) = call_json(
-        &app,
-        "POST",
-        "/v1/billing/change-plan",
-        Some(&token),
-        Some(json!({ "planId": "team", "interval": "month" })),
-    )
-    .await;
-    assert_eq!(up_st, StatusCode::OK);
-    assert_eq!(upgraded["effectivePlanId"], "team");
+    for body in [
+        json!({ "planId": "team", "interval": "month" }),
+        json!({ "planId": "free", "interval": "month" }),
+    ] {
+        let (status, error) = call_json(
+            &app,
+            "POST",
+            "/v1/billing/change-plan",
+            Some(&token),
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            error["error"]["code"],
+            "payment_provider_operation_unsupported"
+        );
+    }
 
-    let (can_st, canceled_period_end) = call_json(
-        &app,
-        "POST",
-        "/v1/billing/cancel",
-        Some(&token),
-        Some(json!({ "immediate": false })),
-    )
-    .await;
-    assert_eq!(can_st, StatusCode::OK);
-    assert_eq!(
-        canceled_period_end["subscription"]["cancelAtPeriodEnd"],
-        true
-    );
-    assert_eq!(canceled_period_end["effectivePlanId"], "team");
+    for immediate in [false, true] {
+        let (status, error) = call_json(
+            &app,
+            "POST",
+            "/v1/billing/cancel",
+            Some(&token),
+            Some(json!({ "immediate": immediate })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            error["error"]["code"],
+            "payment_provider_operation_unsupported"
+        );
+    }
+
+    for (uri, body) in [
+        (
+            "/v1/billing/change-plan",
+            json!({ "planId": "team", "interval": "month", "status": "active" }),
+        ),
+        (
+            "/v1/billing/change-plan",
+            json!({ "planId": "team", "interval": "month", "status": "trialing", "paymentStatus": "paid" }),
+        ),
+        (
+            "/v1/billing/cancel",
+            json!({ "immediate": true, "status": "active" }),
+        ),
+        (
+            "/v1/billing/cancel",
+            json!({ "immediate": true, "paymentStatus": "paid" }),
+        ),
+    ] {
+        let (status, _) = call_json(&app, "POST", uri, Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    let (_, unchanged) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(unchanged["effectivePlanId"], "pro");
+    assert_eq!(unchanged["subscription"]["status"], "active");
+    assert_eq!(unchanged["subscription"]["cancelAtPeriodEnd"], false);
 
     // Charge refund immediately revokes entitlement back to Free.
     let refund_evt = json!({
         "id": "evt_refund_001",
         "type": "charge.refunded",
-        "data": { "object": { "payment_intent": "pi_live_001" } }
+        "data": { "object": { "payment_intent": "pi_live_001", "refunded": true } }
     });
     let (ref_st, _) = send_webhook(&app, refund_evt, None).await;
     assert_eq!(ref_st, StatusCode::OK);
@@ -464,6 +666,561 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
     assert_eq!(after_refund["effectivePlanId"], "free");
     assert_eq!(after_refund["subscription"]["status"], "revoked");
     assert_eq!(after_refund["recentOrders"][0]["status"], "refunded");
+
+    // A late/replayed completion for a refunded order is authenticated but no
+    // longer in a valid activation state, so it must not restore Pro.
+    let late_complete_evt = json!({
+        "id": "evt_checkout_late_after_refund_002",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": co1["providerSessionId"],
+                "client_reference_id": user_id,
+                "mode": "subscription",
+                "status": "complete",
+                "payment_status": "paid",
+                "amount_total": 1900,
+                "currency": "usd",
+                "customer": "cus_live_001",
+                "subscription": {
+                    "id": "sub_live_001",
+                    "status": "active",
+                    "current_period_end": test_future_unix(30)
+                },
+                "payment_intent": "pi_live_001",
+                "metadata": { "order_id": order_id, "user_id": user_id }
+            }
+        }
+    });
+    let (late_st, late_ack) = send_webhook(&app, late_complete_evt, None).await;
+    assert_eq!(late_st, StatusCode::OK);
+    assert_eq!(late_ack["deduplicated"], false);
+    let (_, after_late_completion) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_late_completion["effectivePlanId"], "free");
+    assert_eq!(after_late_completion["subscription"]["status"], "revoked");
+    assert_eq!(after_late_completion["recentOrders"][0]["status"], "refunded");
+
+    // Even a later signed paid invoice cannot reactivate a refund-revoked
+    // subscription; terminal lifecycle states are one-way.
+    let late_paid_evt = json!({
+        "id": "evt_paid_after_refund_003",
+        "type": "invoice.paid",
+        "data": {
+            "object": {
+                "subscription": "sub_live_001",
+                "status": "paid",
+                "paid": true,
+                "period_end": test_future_unix(60)
+            }
+        }
+    });
+    let (late_paid_status, _) = send_webhook(&app, late_paid_evt, None).await;
+    assert_eq!(late_paid_status, StatusCode::OK);
+    let (_, after_late_paid) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_late_paid["effectivePlanId"], "free");
+    assert_eq!(after_late_paid["subscription"]["status"], "revoked");
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn provider_verified_checkout_activates_pending_order_but_client_plan_change_is_rejected() {
+    let pool = setup_pool().await;
+    let app = make_router(pool.clone(), Arc::new(StubPaymentProvider::new(true)));
+    let (_, _, token) = create_logged_in_user(&pool, "verified-checkout").await;
+
+    let (checkout_status, checkout) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-verified-checkout-01"
+        })),
+    )
+    .await;
+    assert_eq!(checkout_status, StatusCode::OK);
+
+    let (verify_status, verified) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&token),
+        Some(json!({ "orderId": checkout["orderId"] })),
+    )
+    .await;
+    assert_eq!(verify_status, StatusCode::OK);
+    assert_eq!(verified["effectivePlanId"], "pro");
+    assert_eq!(verified["subscription"]["status"], "active");
+
+    let (change_status, error) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/change-plan",
+        Some(&token),
+        Some(json!({ "planId": "team", "interval": "month" })),
+    )
+    .await;
+    assert_eq!(change_status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        error["error"]["code"],
+        "payment_provider_operation_unsupported"
+    );
+    let (_, unchanged) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(unchanged["effectivePlanId"], "pro");
+    assert_eq!(unchanged["subscription"]["status"], "active");
+}
+
+#[tokio::test]
+#[ignore = "needs an isolated PostgreSQL (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn checkout_activation_rejects_untrusted_identity_provider_and_lifecycle_state() {
+    let pool = setup_pool().await;
+    let provider = Arc::new(StubPaymentProvider::new(true));
+    let app = make_router(pool.clone(), provider.clone());
+    let (owner_id, _owner_email, owner_token) = create_logged_in_user(&pool, "billing-owner").await;
+    let (other_id, _other_email, other_token) = create_logged_in_user(&pool, "billing-other").await;
+
+    // Unauthenticated attempts cannot invoke billing mutations.
+    for (uri, body) in [
+        (
+            "/v1/billing/change-plan",
+            json!({ "planId": "team", "interval": "month", "status": "active" }),
+        ),
+        (
+            "/v1/billing/cancel",
+            json!({ "immediate": true, "status": "active" }),
+        ),
+    ] {
+        let (status, _) = call_json(&app, "POST", uri, None, Some(body)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    // The client cannot submit a paid status, trial status, or payment claim
+    // through any checkout/verify/plan/cancel request shape.
+    let (forged_checkout_status, _) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&owner_token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-forged-status-001",
+            "status": "active",
+            "paymentStatus": "paid"
+        })),
+    )
+    .await;
+    assert_eq!(forged_checkout_status, StatusCode::BAD_REQUEST);
+
+    let (owner_checkout_status, owner_checkout) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&owner_token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-identity-owner-001"
+        })),
+    )
+    .await;
+    assert_eq!(owner_checkout_status, StatusCode::OK);
+    let owner_order_id = owner_checkout["orderId"].as_str().unwrap().to_string();
+    let owner_session_id = owner_checkout["providerSessionId"].as_str().unwrap().to_string();
+    let (forged_verify_status, _) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&owner_token),
+        Some(json!({
+            "orderId": owner_order_id,
+            "status": "active",
+            "paymentStatus": "paid"
+        })),
+    )
+    .await;
+    assert_eq!(forged_verify_status, StatusCode::BAD_REQUEST);
+
+    let (other_checkout_status, other_checkout) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&other_token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-identity-other-001"
+        })),
+    )
+    .await;
+    assert_eq!(other_checkout_status, StatusCode::OK);
+    let other_order_id = other_checkout["orderId"].as_str().unwrap().to_string();
+
+    let (terminal_checkout_status, terminal_checkout) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&owner_token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-terminal-event-001"
+        })),
+    )
+    .await;
+    assert_eq!(terminal_checkout_status, StatusCode::OK);
+    let terminal_order_id = terminal_checkout["orderId"].as_str().unwrap().to_string();
+    let terminal_subscription_id = format!("sub_test_{terminal_order_id}");
+
+    // A signed subscription-deleted event may arrive before the checkout
+    // completion/verification path. Its terminal provider identity must be
+    // retained so delayed paid evidence cannot recreate that subscription.
+    let early_deleted = json!({
+        "id": "evt_subscription_deleted_before_activation_001",
+        "type": "customer.subscription.deleted",
+        "data": { "object": { "id": terminal_subscription_id } }
+    });
+    let (early_deleted_status, _) = send_webhook(&app, early_deleted, None).await;
+    assert_eq!(early_deleted_status, StatusCode::OK);
+    let (terminal_verify_status, terminal_verify) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&owner_token),
+        Some(json!({ "orderId": terminal_order_id })),
+    )
+    .await;
+    assert_eq!(terminal_verify_status, StatusCode::OK);
+    assert_eq!(terminal_verify["effectivePlanId"], "free");
+    let terminal_order_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&terminal_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(terminal_order_status, "pending");
+    let owner_subscriptions_before_activation: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM subscriptions WHERE user_id = $1::uuid",
+    )
+    .bind(&owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(owner_subscriptions_before_activation, 0);
+
+    // Orders are owner-scoped even when another authenticated account knows
+    // the order UUID. The failed lookup leaves the pending order untouched.
+    let (wrong_owner_status, _) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&other_token),
+        Some(json!({ "orderId": owner_order_id })),
+    )
+    .await;
+    assert_eq!(wrong_owner_status, StatusCode::NOT_FOUND);
+
+    let invalid_evidence_cases = vec![
+        ProviderVerificationOverrides {
+            checkout_session_id: Some("cs_test_wrong_session".to_string()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            order_id: Some(other_order_id.clone()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            user_id: Some(other_id.clone()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            client_reference_id: Some(other_id.clone()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            subscription_status: Some("trialing".to_string()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            session_created_at_unix: Some(0),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            current_period_end_unix: Some(test_unix_now() - 60),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            amount_total_minor: Some(1),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            currency: Some("eur".to_string()),
+            ..ProviderVerificationOverrides::default()
+        },
+        ProviderVerificationOverrides {
+            omit_payment_intent_id: true,
+            ..ProviderVerificationOverrides::default()
+        },
+    ];
+    for overrides in invalid_evidence_cases {
+        *provider.verification_overrides.lock().unwrap() = overrides;
+        let (verify_status, status) = call_json(
+            &app,
+            "POST",
+            "/v1/billing/verify",
+            Some(&owner_token),
+            Some(json!({ "orderId": owner_order_id })),
+        )
+        .await;
+        assert_eq!(verify_status, StatusCode::OK);
+        assert_eq!(status["effectivePlanId"], "free");
+
+        let (order_status, stored_session_id): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, provider_checkout_session_id FROM payment_orders WHERE id = $1::uuid",
+        )
+        .bind(&owner_order_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(order_status, "pending");
+        assert_eq!(stored_session_id.as_deref(), Some(owner_session_id.as_str()));
+        let subscriptions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM subscriptions WHERE user_id = $1::uuid",
+        )
+        .bind(&owner_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(subscriptions, 0);
+    }
+
+    // A full refund can arrive before the checkout/verification event. Its
+    // signed payment-intent evidence is retained so a later successful-looking
+    // verification cannot activate the refunded pending order.
+    *provider.verification_overrides.lock().unwrap() =
+        ProviderVerificationOverrides::default();
+    let refunded_payment_intent = format!("pi_test_{other_order_id}");
+    let early_refund = json!({
+        "id": "evt_refund_before_activation_001",
+        "type": "charge.refunded",
+        "data": {
+            "object": {
+                "payment_intent": refunded_payment_intent,
+                "refunded": true
+            }
+        }
+    });
+    let (early_refund_status, _) = send_webhook(&app, early_refund, None).await;
+    assert_eq!(early_refund_status, StatusCode::OK);
+    let (refunded_verify_status, refunded_verify) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&other_token),
+        Some(json!({ "orderId": other_order_id })),
+    )
+    .await;
+    assert_eq!(refunded_verify_status, StatusCode::OK);
+    assert_eq!(refunded_verify["effectivePlanId"], "free");
+    let refunded_order_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&other_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(refunded_order_status, "pending");
+    let other_subscriptions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM subscriptions WHERE user_id = $1::uuid",
+    )
+    .bind(&other_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(other_subscriptions, 0);
+
+    // A checkout row naming a different provider is not verified by Stripe
+    // and cannot transition, even with an otherwise valid provider response.
+    *provider.verification_overrides.lock().unwrap() =
+        ProviderVerificationOverrides::default();
+    sqlx::query("UPDATE payment_orders SET provider = 'wrong_provider' WHERE id = $1::uuid")
+        .bind(&owner_order_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (wrong_provider_status, wrong_provider_body) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&owner_token),
+        Some(json!({ "orderId": owner_order_id })),
+    )
+    .await;
+    assert_eq!(wrong_provider_status, StatusCode::OK);
+    assert_eq!(wrong_provider_body["effectivePlanId"], "free");
+    let stored_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&owner_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_status, "pending");
+
+    // A trusted provider response for the exact pending owner/session/order,
+    // with a paid active subscription and provider period end, is the sole
+    // positive path in this fixture.
+    sqlx::query("UPDATE payment_orders SET provider = 'stripe' WHERE id = $1::uuid")
+        .bind(&owner_order_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mismatched_amount_event = json!({
+        "id": "evt_checkout_wrong_amount_001",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": owner_session_id,
+                "client_reference_id": owner_id.clone(),
+                "mode": "subscription",
+                "status": "complete",
+                "payment_status": "paid",
+                "amount_total": 1,
+                "currency": "usd",
+                "payment_intent": format!("pi_test_{owner_order_id}"),
+                "subscription": {
+                    "id": format!("sub_test_{owner_order_id}"),
+                    "status": "active",
+                    "current_period_end": test_future_unix(30)
+                },
+                "metadata": {
+                    "order_id": owner_order_id,
+                    "user_id": owner_id.clone()
+                }
+            }
+        }
+    });
+    let (wrong_amount_webhook_status, _) = send_webhook(&app, mismatched_amount_event, None).await;
+    assert_eq!(wrong_amount_webhook_status, StatusCode::OK);
+    let wrong_amount_order_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&owner_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(wrong_amount_order_status, "pending");
+    let subscriptions_after_wrong_amount: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM subscriptions WHERE user_id = $1::uuid",
+    )
+    .bind(&owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(subscriptions_after_wrong_amount, 0);
+
+    let (trusted_status, trusted_body) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&owner_token),
+        Some(json!({ "orderId": owner_order_id })),
+    )
+    .await;
+    assert_eq!(trusted_status, StatusCode::OK);
+    assert_eq!(trusted_body["effectivePlanId"], "pro");
+    assert_eq!(trusted_body["subscription"]["status"], "active");
+
+    let (order_status, linked_subscription_id): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, provider_subscription_id FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&owner_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(order_status, "completed");
+    let linked_subscription_id = linked_subscription_id.expect("trusted transition links subscription");
+    let stored_subscription: (String, String, Option<i64>) = sqlx::query_as(
+        "SELECT user_id::text, status, last_provider_event_created_at
+         FROM subscriptions WHERE provider_subscription_id = $1",
+    )
+    .bind(&linked_subscription_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_subscription.0, owner_id);
+    assert_eq!(stored_subscription.1, "active");
+    assert!(stored_subscription.2.is_some());
+
+    let (collision_checkout_status, collision_checkout) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/checkout",
+        Some(&other_token),
+        Some(json!({
+            "planId": "pro",
+            "interval": "month",
+            "idempotencyKey": "idem-subscription-collision-001"
+        })),
+    )
+    .await;
+    assert_eq!(collision_checkout_status, StatusCode::OK);
+    let collision_order_id = collision_checkout["orderId"].as_str().unwrap().to_string();
+    *provider.verification_overrides.lock().unwrap() = ProviderVerificationOverrides {
+        subscription_id: Some(linked_subscription_id.clone()),
+        ..ProviderVerificationOverrides::default()
+    };
+    let (collision_verify_status, collision_verify) = call_json(
+        &app,
+        "POST",
+        "/v1/billing/verify",
+        Some(&other_token),
+        Some(json!({ "orderId": collision_order_id })),
+    )
+    .await;
+    assert_eq!(collision_verify_status, StatusCode::OK);
+    assert_eq!(collision_verify["effectivePlanId"], "free");
+    let collision_order_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(&collision_order_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(collision_order_status, "pending");
+    let original_subscription: (String, String, String) = sqlx::query_as(
+        "SELECT user_id::text, status, plan_id FROM subscriptions WHERE provider_subscription_id = $1",
+    )
+    .bind(&linked_subscription_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(original_subscription, (owner_id.clone(), "active".to_string(), "pro".to_string()));
+    let other_subscription_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM subscriptions WHERE user_id = $1::uuid",
+    )
+    .bind(&other_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(other_subscription_count, 0);
+
+    *provider.verification_overrides.lock().unwrap() =
+        ProviderVerificationOverrides::default();
+    let other_order_status: String = sqlx::query_scalar(
+        "SELECT status FROM payment_orders WHERE id = $1::uuid",
+    )
+    .bind(other_checkout["orderId"].as_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(other_order_status, "pending");
 }
 
 #[tokio::test]
@@ -471,7 +1228,7 @@ async fn full_billing_webhook_subscription_and_portal_lifecycle() {
 async fn concurrent_quota_reservations_release_on_failure_and_account_privacy_controls() {
     let pool = setup_pool().await;
     let app = make_router(pool.clone(), Arc::new(StubPaymentProvider::new(true)));
-    let (_user_id, email, token) = create_logged_in_user(&pool, "quota").await;
+    let (user_id, email, token) = create_logged_in_user(&pool, "quota").await;
 
     // 1. Concurrent burst of 10 reservations against Free plan's 5/day Sonnet cap -> exactly 5 succeed, 5 return 429!
     let mut handles = Vec::new();
@@ -526,29 +1283,151 @@ async fn concurrent_quota_reservations_release_on_failure_and_account_privacy_co
         winner_res_id.as_str()
     );
 
-    // 3. Releasing one reservation (e.g. cancelled local generation) immediately frees 1 slot; committing records usage.
+    // 3. Releasing one reservation (e.g. cancelled local generation) frees a slot;
+    // the same outcome is idempotent and the opposite outcome conflicts.
     let (_, released_id) = accepted.pop().unwrap();
     let (rel_st, after_rel) = call_json(
         &app,
         "POST",
         "/v1/usage/release",
         Some(&token),
-        Some(json!({ "reservationId": released_id })),
+        Some(json!({ "reservationId": released_id.clone() })),
     )
     .await;
     assert_eq!(rel_st, StatusCode::OK);
+    assert_eq!(after_rel["quotaConfigured"], true);
+    assert_eq!(after_rel["resetTimezone"], "UTC");
     assert_eq!(after_rel["models"][1]["remaining"], 1);
+    assert!(after_rel["periodDayUtc"].as_str().unwrap().len() == 10);
+    assert!(after_rel["resetsAtUtc"].as_str().unwrap().ends_with("T00:00:00Z"));
 
-    let (_, committed_id) = accepted.pop().unwrap();
+    let (repeat_release_st, _) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/release",
+        Some(&token),
+        Some(json!({ "reservationId": released_id.clone() })),
+    )
+    .await;
+    assert_eq!(repeat_release_st, StatusCode::OK);
+    let (release_as_commit_st, release_as_commit) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/commit",
+        Some(&token),
+        Some(json!({ "reservationId": released_id })),
+    )
+    .await;
+    assert_eq!(release_as_commit_st, StatusCode::CONFLICT);
+    assert_eq!(release_as_commit["error"]["code"], "reservation_conflict");
+
+    // Commit increments the counter once, repeats idempotently, and cannot be
+    // replayed through the reservation endpoint as a fresh generation.
+    let (committed_req_id, committed_id) = accepted.pop().unwrap();
     let (com_st, _) = call_json(
         &app,
         "POST",
         "/v1/usage/commit",
         Some(&token),
-        Some(json!({ "reservationId": committed_id })),
+        Some(json!({ "reservationId": committed_id.clone() })),
     )
     .await;
     assert_eq!(com_st, StatusCode::OK);
+    let (repeat_commit_st, _) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/commit",
+        Some(&token),
+        Some(json!({ "reservationId": committed_id.clone() })),
+    )
+    .await;
+    assert_eq!(repeat_commit_st, StatusCode::OK);
+    let (commit_as_release_st, commit_as_release) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/release",
+        Some(&token),
+        Some(json!({ "reservationId": committed_id })),
+    )
+    .await;
+    assert_eq!(commit_as_release_st, StatusCode::CONFLICT);
+    assert_eq!(commit_as_release["error"]["code"], "reservation_conflict");
+    let (replay_settled_st, replay_settled) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/reserve",
+        Some(&token),
+        Some(json!({ "modelId": "nexora-sonnet", "requestId": committed_req_id })),
+    )
+    .await;
+    assert_eq!(replay_settled_st, StatusCode::CONFLICT);
+    assert_eq!(replay_settled["error"]["code"], "reservation_conflict");
+
+    // An expired reservation is swept before settlement: it cannot commit,
+    // its slot is released once, and repeated release remains idempotent.
+    let (stale_st, stale) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/reserve",
+        Some(&token),
+        Some(json!({ "modelId": "nexora-mini", "requestId": "req-expire-0001" })),
+    )
+    .await;
+    assert_eq!(stale_st, StatusCode::OK);
+    let stale_id = stale["reservationId"].as_str().unwrap().to_string();
+    sqlx::query(
+        "UPDATE quota_reservations
+         SET expires_at = now() - interval '1 second'
+         WHERE id = $1::uuid",
+    )
+    .bind(&stale_id)
+    .execute(&pool)
+    .await
+    .expect("expire isolated fixture reservation");
+
+    let (stale_commit_st, stale_commit) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/commit",
+        Some(&token),
+        Some(json!({ "reservationId": stale_id.clone() })),
+    )
+    .await;
+    assert_eq!(stale_commit_st, StatusCode::CONFLICT);
+    assert_eq!(stale_commit["error"]["code"], "reservation_expired");
+    let (stale_release_st, _) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/release",
+        Some(&token),
+        Some(json!({ "reservationId": stale_id.clone() })),
+    )
+    .await;
+    assert_eq!(stale_release_st, StatusCode::OK);
+    let (stale_replay_st, stale_replay) = call_json(
+        &app,
+        "POST",
+        "/v1/usage/reserve",
+        Some(&token),
+        Some(json!({ "modelId": "nexora-mini", "requestId": "req-expire-0001" })),
+    )
+    .await;
+    assert_eq!(stale_replay_st, StatusCode::CONFLICT);
+    assert_eq!(stale_replay["error"]["code"], "reservation_expired");
+    let (mini_reserved, mini_committed): (i32, i32) = sqlx::query_as(
+        "SELECT reserved_count, committed_count FROM daily_usage_counters
+         WHERE user_id = $1::uuid
+           AND period_day = (now() AT TIME ZONE 'UTC')::date
+           AND model_id = 'nexora-mini'",
+    )
+    .bind(&user_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("query isolated mini counter")
+    .unwrap_or((0, 0));
+    // The stale reservation must be expired and its reserved count released.
+    assert_eq!(mini_reserved, 0);
+    assert_eq!(mini_committed, 0);
 
     // 4. Profile update + safe Google linking (dynamic loopback port!) + GDPR export + account deletion.
     let (prof_st, prof) = call_json(
@@ -571,7 +1450,8 @@ async fn concurrent_quota_reservations_release_on_failure_and_account_privacy_co
             "code": "valid-oauth-authz-code",
             "codeVerifier": "a_valid_rfc7636_pkce_verifier_with_more_than_43_chars",
             "state": "1111111111111111111111111111111111111111111111111111111111111111",
-            "redirectUri": "http://127.0.0.1:54321/callback"
+            "redirectUri": "http://127.0.0.1:54321/callback",
+            "nonce": "google-test-nonce-0001"
         })),
     )
     .await;
@@ -745,13 +1625,14 @@ async fn unpaid_verification_expired_and_failed_renewals_and_desktop_profile_ids
     assert_eq!(ver_unpaid["effectivePlanId"], "free");
     assert_eq!(ver_unpaid["portalAvailable"], false);
 
-    // 2. Signed checkout completion activates Pro; failed renewal (`invoice.payment_failed`) drops to Free;
-    //    paid invoice (`invoice.paid`) restores Pro; elapsed `current_period_end` auto-expires back to Free.
-    let activate_evt = json!({
-        "id": "evt_exp_001",
+    let unpaid_complete_evt = json!({
+        "id": "evt_exp_checkout_unpaid_000",
         "type": "checkout.session.completed",
         "data": {
             "object": {
+                "mode": "subscription",
+                "status": "complete",
+                "payment_status": "unpaid",
                 "customer": "cus_exp_001",
                 "subscription": "sub_exp_001",
                 "payment_intent": "pi_exp_001",
@@ -759,13 +1640,66 @@ async fn unpaid_verification_expired_and_failed_renewals_and_desktop_profile_ids
             }
         }
     });
+    let (unpaid_wh, _) = send_webhook(&app, unpaid_complete_evt, None).await;
+    assert_eq!(unpaid_wh, StatusCode::OK);
+    let (_, after_unpaid_webhook) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_unpaid_webhook["effectivePlanId"], "free");
+    assert_eq!(after_unpaid_webhook["recentOrders"][0]["status"], "pending");
+
+    // 2. A signed paid completion activates Pro. Failed renewal
+    // (`invoice.payment_failed`) drops to Free; paid invoice (`invoice.paid`)
+    // restores Pro; elapsed `current_period_end` auto-expires back to Free.
+    let activate_evt = json!({
+        "id": "evt_exp_001",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": co["providerSessionId"],
+                "client_reference_id": user_id,
+                "mode": "subscription",
+                "status": "complete",
+                "payment_status": "paid",
+                "amount_total": 1900,
+                "currency": "usd",
+                "customer": "cus_exp_001",
+                "subscription": {
+                    "id": "sub_exp_001",
+                    "status": "active",
+                    "current_period_end": test_future_unix(30)
+                },
+                "payment_intent": "pi_exp_001",
+                "metadata": { "order_id": order_id, "user_id": user_id }
+            }
+        }
+    });
     let (wh1, _) = send_webhook(&app, activate_evt, None).await;
     assert_eq!(wh1, StatusCode::OK);
+
+    // A signed provider transition to `unpaid` must remove a previously active
+    // entitlement even though Stripe's raw state is not a DB enum value.
+    let subscription_unpaid_evt = json!({
+        "id": "evt_exp_subscription_unpaid_002",
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": {
+                "id": "sub_exp_001",
+                "status": "unpaid",
+                "current_period_end": test_future_unix(30)
+            }
+        }
+    });
+    let (unpaid_transition_status, _) = send_webhook(&app, subscription_unpaid_evt, None).await;
+    assert_eq!(unpaid_transition_status, StatusCode::OK);
+    let (_, after_unpaid_transition) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_unpaid_transition["subscription"]["status"], "past_due");
+    assert_eq!(after_unpaid_transition["effectivePlanId"], "free");
 
     let fail_evt = json!({
         "id": "evt_exp_fail_002",
         "type": "invoice.payment_failed",
-        "data": { "object": { "subscription": "sub_exp_001" } }
+        "data": { "object": { "subscription": "sub_exp_001", "status": "open", "paid": false } }
     });
     let (wh2, _) = send_webhook(&app, fail_evt, None).await;
     assert_eq!(wh2, StatusCode::OK);
@@ -778,7 +1712,15 @@ async fn unpaid_verification_expired_and_failed_renewals_and_desktop_profile_ids
     let renew_evt = json!({
         "id": "evt_exp_paid_003",
         "type": "invoice.paid",
-        "data": { "object": { "subscription": "sub_exp_001" } }
+        "data": {
+            "object": {
+                "subscription": "sub_exp_001",
+                "payment_intent": "pi_exp_renewal_001",
+                "status": "paid",
+                "paid": true,
+                "lines": { "data": [{ "period": { "end": test_future_unix(60) } }] }
+            }
+        }
     });
     let (wh3, _) = send_webhook(&app, renew_evt, None).await;
     assert_eq!(wh3, StatusCode::OK);
@@ -786,6 +1728,36 @@ async fn unpaid_verification_expired_and_failed_renewals_and_desktop_profile_ids
         call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
     assert_eq!(after_renew["effectivePlanId"], "pro");
     assert_eq!(after_renew["portalAvailable"], true);
+
+    // A correctly signed but older payment-failed event arriving after the
+    // successful renewal cannot roll the newer active state back to past_due.
+    let stale_fail_evt = json!({
+        "id": "evt_exp_stale_fail_004",
+        "created": test_unix_now() - 60,
+        "type": "invoice.payment_failed",
+        "data": { "object": { "subscription": "sub_exp_001", "status": "open", "paid": false } }
+    });
+    let (stale_fail_status, _) = send_webhook(&app, stale_fail_evt, None).await;
+    assert_eq!(stale_fail_status, StatusCode::OK);
+    let (_, after_stale_fail) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_stale_fail["subscription"]["status"], "active");
+    assert_eq!(after_stale_fail["effectivePlanId"], "pro");
+
+    // Even a validly signed payload cannot supply an event timestamp far in
+    // the future to bypass lifecycle ordering or extend an entitlement.
+    let future_fail_evt = json!({
+        "id": "evt_exp_future_fail_005",
+        "created": test_unix_now() + 3_600,
+        "type": "invoice.payment_failed",
+        "data": { "object": { "subscription": "sub_exp_001", "status": "open", "paid": false } }
+    });
+    let (future_fail_status, _) = send_webhook(&app, future_fail_evt, None).await;
+    assert_eq!(future_fail_status, StatusCode::OK);
+    let (_, after_future_fail) =
+        call_json(&app, "GET", "/v1/billing/subscription", Some(&token), None).await;
+    assert_eq!(after_future_fail["subscription"]["status"], "active");
+    assert_eq!(after_future_fail["effectivePlanId"], "pro");
 
     // Backdate billing period (`current_period_start` and `current_period_end`) into the past
     // to verify automatic time-based expiration enforcement (`CHECK (current_period_end >= current_period_start)`).

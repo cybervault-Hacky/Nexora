@@ -36,7 +36,6 @@ import { AssistantContent } from "./components/MessageContent";
 import { searchLocalConversations } from "./features/chat/searchConversations";
 import type { ConversationSummary, PersistedConversation } from "./lib/history";
 import { fetchStatus, generate } from "./lib/inference";
-import { PlansPage } from "./pages/PlansPage";
 import { makeStatus, makeUsage, markDesktop } from "./test/fixtures";
 
 const statusMock = vi.mocked(fetchStatus);
@@ -182,11 +181,6 @@ describe("Phase 07 — Complete ChatGPT-Inspired UI Redesign Acceptance Suite", 
           else storedConversations.unshift(conv);
           return conv;
         }
-        case "billing_list_plans":
-          throw {
-            code: "backend_unconfigured",
-            message: "Account service URL is not configured in this local build.",
-          };
         default:
           return null;
       }
@@ -391,50 +385,27 @@ describe("Phase 07 — Complete ChatGPT-Inspired UI Redesign Acceptance Suite", 
     );
   });
 
-  it("displays honest unconfigured Plans state with zero invented prices and explains protected auth reason when signing in", async () => {
+  it("keeps signed-out local access and explains that sign-in only views account status", async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // Open Plans from Primary sidebar navigation
     const nav = await screen.findByRole("navigation", { name: "Primary" });
-    await user.click(within(nav).getByRole("link", { name: "Plans" }));
+    await user.click(within(nav).getByRole("link", { name: /Plans/ }));
 
-    const unconfiguredCard = await screen.findByTestId("plans-unconfigured-state");
-    expect(unconfiguredCard.textContent).toContain("never invents subscription prices");
+    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Local workspace" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open AI Chat" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("No account is signed in");
+    expect(invokeMock.mock.calls.some(([command]) => command === "billing_get_status")).toBe(false);
+    expect(
+      invokeMock.mock.calls.some(([command]) => command === "billing_create_checkout"),
+    ).toBe(false);
 
-    // Clicking Sign in inside Plans opens floating AuthModal with protected-action explanation
-    await user.click(within(unconfiguredCard).getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "Sign in to view account status" }));
     const modal = await screen.findByTestId("auth-modal");
     expect(within(modal).getByTestId("auth-modal-reason").textContent).toContain(
       "Local AI chat remains available without signing in",
     );
     expect(within(modal).getByTestId("auth-backend-note")).toBeTruthy();
-  });
-
-  it("never fabricates $0 when a server plan omits price entries", async () => {
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "billing_list_plans") {
-        return {
-          paymentConfigured: false,
-          provider: "unconfigured",
-          plans: [
-            {
-              id: "pro",
-              name: "Pro",
-              description: "Server-defined tier awaiting final pricing.",
-              features: ["Expanded daily local allowance"],
-              modelQuotas: {},
-              prices: [],
-            },
-          ],
-        };
-      }
-      return undefined;
-    });
-
-    render(<PlansPage isAuthenticated={false} onRequestSignIn={vi.fn()} />);
-    const card = await screen.findByTestId("plan-card-pro");
-    expect(within(card).getByText("Pricing unavailable")).toBeTruthy();
-    expect(card.textContent).not.toContain("$0");
   });
 });

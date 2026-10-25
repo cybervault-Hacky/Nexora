@@ -2,26 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { isDesktopShell, type UsageStatus } from "./ipc";
 
 /**
- * Daily free usage IPC.
+ * Device-local generation usage IPC.
  *
  * The browser preview has no engine and no usage record, so it reports nothing
- * rather than inventing a friendly-looking counter. The real numbers only ever
- * come from the Rust command.
+ * rather than inventing a counter. The Rust command is the sole source of local
+ * accounting data. An absent policy is represented explicitly as unconfigured.
  */
 
 export interface UsageError {
   code: string;
   message: string;
 }
-
-/**
- * Mirrors `DAILY_ALLOWANCE` in `src-tauri/src/usage/mod.rs`.
- *
- * It is only used for copy (the pricing/plan text) and for the progress bar's
- * maximum; every enforced number comes from the backend. `rustContract.test.ts`
- * fails if the two constants drift apart.
- */
-export const PUBLISHED_DAILY_ALLOWANCE = 50;
 
 export function toUsageError(cause: unknown): UsageError {
   if (
@@ -53,25 +44,46 @@ export function isUsageStatus(value: unknown): value is UsageStatus {
   }
 
   const candidate = value as Record<string, unknown>;
-  const numbers = ["allowance", "used", "remaining", "resetAtMs"];
+  const nullableNumbers = ["allowance", "used", "remaining", "resetAtMs"];
+  const validNullableNumber = (entry: unknown) =>
+    entry === null || (typeof entry === "number" && Number.isFinite(entry));
 
-  if (!numbers.every((key) => typeof candidate[key] === "number")) {
+  if (!nullableNumbers.every((key) => validNullableNumber(candidate[key]))) {
     return false;
   }
 
+  if (
+    typeof candidate.policyConfigured !== "boolean" ||
+    typeof candidate.day !== "string" ||
+    !(candidate.policyId === null || typeof candidate.policyId === "string") ||
+    typeof candidate.exhausted !== "boolean" ||
+    !(candidate.notice === null || typeof candidate.notice === "string") ||
+    !(candidate.error === null || typeof candidate.error === "string")
+  ) {
+    return false;
+  }
+
+  if (candidate.policyConfigured) {
+    return (
+      typeof candidate.allowance === "number" &&
+      candidate.allowance > 0 &&
+      typeof candidate.resetAtMs === "number" &&
+      typeof candidate.policyId === "string"
+    );
+  }
+
   return (
-    typeof candidate.day === "string" &&
-    typeof candidate.policyId === "string" &&
-    typeof candidate.provisional === "boolean" &&
-    typeof candidate.exhausted === "boolean" &&
-    (candidate.notice === null || typeof candidate.notice === "string") &&
-    (candidate.error === null || typeof candidate.error === "string")
+    candidate.allowance === null &&
+    candidate.remaining === null &&
+    candidate.resetAtMs === null &&
+    candidate.policyId === null &&
+    candidate.exhausted === false
   );
 }
 
 /**
- * Reads the allowance. Returns `null` outside the desktop shell, where there is
- * no record to report and nothing to enforce.
+ * Reads device-local accounting. Returns `null` outside the desktop shell,
+ * where there is no record to report.
  */
 export async function fetchUsage(): Promise<UsageStatus | null> {
   if (!isDesktopShell()) {
@@ -132,9 +144,13 @@ export function formatResetClock(resetAtMs: number): string {
   });
 }
 
-/** Share of the allowance already used, clamped for the progress bar. */
+/** Share of a configured local allowance already used; unknown stays empty. */
 export function usedPercent(status: UsageStatus): number {
-  if (status.allowance <= 0) {
+  if (
+    status.allowance === null ||
+    status.allowance <= 0 ||
+    status.used === null
+  ) {
     return 0;
   }
 

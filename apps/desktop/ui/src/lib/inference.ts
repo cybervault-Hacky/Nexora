@@ -135,7 +135,6 @@ export function selectModel(id: string): Promise<Settings> {
  * A profile whose artefact is `pending` is refused by the core.
  */
 export async function startModelDownload(
-  targetDir: string | null,
   profileId: string,
   onEvent: (event: ModelDownloadEvent) => void,
 ): Promise<ModelDownloadOutcome> {
@@ -153,7 +152,6 @@ export async function startModelDownload(
 
   try {
     return await invoke<ModelDownloadOutcome>("start_model_download", {
-      targetDir,
       profileId,
       onEvent: channel,
     });

@@ -50,8 +50,8 @@ pub struct RegisterRequest {
 impl std::fmt::Debug for RegisterRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegisterRequest")
-            .field("name", &self.name)
-            .field("email", &self.email)
+            .field("name", &crate::scrub::REDACTED)
+            .field("email", &crate::scrub::REDACTED)
             .field("password", &crate::scrub::REDACTED)
             .finish()
     }
@@ -72,10 +72,18 @@ impl std::fmt::Debug for VerifyEmailRequest {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResendVerificationRequest {
     pub email: String,
+}
+
+impl std::fmt::Debug for ResendVerificationRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResendVerificationRequest")
+            .field("email", &crate::scrub::REDACTED)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +203,9 @@ pub fn validate_email(raw: &str) -> Result<String, String> {
     if normalized.is_empty() {
         return Err("Email is required.".to_string());
     }
+    if normalized.chars().any(char::is_control) {
+        return Err("Email must not contain control characters.".to_string());
+    }
     if normalized.chars().count() > MAX_EMAIL_CHARS {
         return Err("Email is too long.".to_string());
     }
@@ -217,6 +228,9 @@ pub fn validate_name(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("Name is required.".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("Name must not contain control characters.".to_string());
     }
     if trimmed.chars().count() > MAX_NAME_CHARS {
         return Err("Name is too long (max 128 characters).".to_string());
@@ -261,9 +275,24 @@ pub fn hash_verification_token(raw: &str) -> Vec<u8> {
 // Service functions
 // ---------------------------------------------------------------------------
 
+/// Format an integral TTL without rounding down or claiming the default when
+/// deployments choose a shorter or longer verification window.
+fn duration_label(secs: u64) -> String {
+    if secs % 3_600 == 0 {
+        let hours = secs / 3_600;
+        format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+    } else if secs % 60 == 0 {
+        let minutes = secs / 60;
+        format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+    } else {
+        format!("{secs} second{}", if secs == 1 { "" } else { "s" })
+    }
+}
+
 /// Build the verification email. The raw token appears ONLY here (body), never
-/// in logs, errors, URLs-in-logs, or database rows.
-fn verification_message(to: &str, name: &str, token: &str) -> EmailMessage {
+/// in logs, errors, URLs-in-logs, or database rows. The displayed lifetime is
+/// the same clamped TTL persisted with the token.
+fn verification_message(to: &str, name: &str, token: &str, ttl_secs: u64) -> EmailMessage {
     EmailMessage {
         to: to.to_string(),
         subject: "Verify your email for Nexora".to_string(),
@@ -271,9 +300,10 @@ fn verification_message(to: &str, name: &str, token: &str) -> EmailMessage {
             "Hi {name},\n\n\
              Use this code to verify your email address for Nexora:\n\n\
              {token}\n\n\
-             The code can be used once and expires in 24 hours. If you did not \
+             The code can be used once and expires in {}. If you did not \
              create a Nexora account, you can ignore this message — nothing has \
-             been verified.\n"
+             been verified.\n",
+            duration_label(ttl_secs)
         ),
     }
 }
@@ -295,11 +325,16 @@ pub async fn register(
 ) -> Result<RegisterOutcome, RegisterError> {
     let name = validate_name(&request.name).map_err(RegisterError::Validation)?;
     let email = validate_email(&request.email).map_err(RegisterError::Validation)?;
+    password::validate_new_password(&request.password)
+        .map_err(|error| RegisterError::Validation(error.to_string()))?;
+
+    // Check service availability before the intentionally expensive Argon2id
+    // work, while preserving validation-before-dependency error precedence.
+    let pool = pool.ok_or(RegisterError::DependencyUnavailable)?;
     let password_hash = password::hash_password(&request.password)
         .map_err(|error| RegisterError::Validation(error.to_string()))?;
 
-    let pool = pool.ok_or(RegisterError::DependencyUnavailable)?;
-
+    let mut transaction = pool.begin().await.map_err(|_| RegisterError::Internal)?;
     let inserted = sqlx::query(
         "INSERT INTO users (display_name, email, password_hash) \
          VALUES ($1, $2, $3) RETURNING id::text",
@@ -307,52 +342,65 @@ pub async fn register(
     .bind(&name)
     .bind(&email)
     .bind(&password_hash)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await;
 
-    let user_id: Option<String> = match inserted {
-        Ok(row) => row.map(|row: sqlx::postgres::PgRow| {
+    let user_id = match inserted {
+        Ok(Some(row)) => {
             use sqlx::Row;
-            row.get("id")
-        }),
+            row.get::<String, _>("id")
+        }
+        Ok(None) => {
+            let _ = transaction.rollback().await;
+            return Err(RegisterError::Internal);
+        }
         Err(error) if is_unique_violation(&error) => {
             // Address already registered: return the identical generic outcome
             // and create nothing (no token, no email).
+            let _ = transaction.rollback().await;
             return Ok(RegisterOutcome {
                 email_delivery: delivery,
             });
         }
-        Err(_) => return Err(RegisterError::Internal),
+        Err(_) => {
+            let _ = transaction.rollback().await;
+            return Err(RegisterError::Internal);
+        }
     };
 
-    let Some(user_id) = user_id else {
-        return Err(RegisterError::Internal);
-    };
-
-    // Fresh token for the new account. Raw token goes to the email only.
+    // Fresh token for the new account. Raw token goes to the email only. The
+    // user row and token digest commit together, so a token-store error cannot
+    // leave an unusable unverified account behind.
     let raw_token = generate_verification_token();
     let token_digest = hash_verification_token(&raw_token);
     let ttl = clamp_verification_ttl(verification_ttl_secs);
 
-    let stored = sqlx::query(
+    if sqlx::query(
         "INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) \
          VALUES (CAST($1 AS uuid), $2, now() + make_interval(secs => $3))",
     )
     .bind(&user_id)
     .bind(&token_digest)
     .bind(ttl as f64)
-    .execute(pool)
-    .await;
-
-    if stored.is_err() {
+    .execute(&mut *transaction)
+    .await
+    .is_err()
+    {
+        let _ = transaction.rollback().await;
         return Err(RegisterError::Internal);
     }
 
-    // Attempt delivery for the new account only. Failures are honest: the
-    // response reports capability (identical for every account), never a send
-    // receipt, so a failed send cannot leak account existence.
-    let message = verification_message(&email, &name, &raw_token);
-    let _ = provider.send(message).await;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| RegisterError::Internal)?;
+
+    // Attempt delivery after the database transaction commits. The response
+    // reports only configured capability, never a per-account send receipt.
+    let message = verification_message(&email, &name, &raw_token, ttl);
+    if let Err(error) = provider.send(message).await {
+        crate::email::report_delivery_failure("verification", &error);
+    }
 
     Ok(RegisterOutcome {
         email_delivery: delivery,
@@ -373,28 +421,53 @@ pub async fn verify_email(pool: Option<&PgPool>, raw_token: &str) -> Result<(), 
     let pool = pool.ok_or(VerifyError::DependencyUnavailable)?;
     let digest = hash_verification_token(raw_token.trim());
 
-    let mut transaction = pool.begin().await.map_err(|_| VerifyError::Internal)?;
-
-    // Atomic consume: only one concurrent request can flip used_at.
-    let consumed = sqlx::query_scalar::<_, String>(
-        "UPDATE email_verification_tokens \
-         SET used_at = now() \
-         WHERE token_hash = $1 \
-           AND used_at IS NULL \
-           AND revoked_at IS NULL \
-           AND expires_at > now() \
-         RETURNING user_id::text",
+    // Resolve the owner without locking the token first. Resend, password
+    // reset, and password change all lock the account row before touching its
+    // verification tokens; using the same lock order avoids deadlocks.
+    let candidate_user_id = sqlx::query_scalar::<_, String>(
+        "SELECT user_id::text FROM email_verification_tokens \
+         WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL \
+           AND expires_at > now()",
     )
     .bind(&digest)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| VerifyError::Internal)?;
+    let Some(user_id) = candidate_user_id else {
+        return Err(VerifyError::InvalidOrExpired);
+    };
+
+    let mut transaction = pool.begin().await.map_err(|_| VerifyError::Internal)?;
+    let locked_user = sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM users WHERE id = CAST($1 AS uuid) FOR UPDATE",
+    )
+    .bind(&user_id)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|_| VerifyError::Internal)?;
-
-    let Some(user_id) = consumed else {
-        // Roll back (no writes happened) and report one generic failure.
+    if locked_user.is_none() {
         let _ = transaction.rollback().await;
         return Err(VerifyError::InvalidOrExpired);
-    };
+    }
+
+    // Consume only after obtaining the account lock. Concurrent verification
+    // or resend can win, but exactly one request can consume this digest.
+    let consumed = sqlx::query_scalar::<_, String>(
+        "UPDATE email_verification_tokens \
+         SET used_at = now() \
+         WHERE token_hash = $1 AND user_id = CAST($2 AS uuid) \
+           AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() \
+         RETURNING user_id::text",
+    )
+    .bind(&digest)
+    .bind(&user_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|_| VerifyError::Internal)?;
+    if consumed.is_none() {
+        let _ = transaction.rollback().await;
+        return Err(VerifyError::InvalidOrExpired);
+    }
 
     let marked = sqlx::query(
         "UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) \
@@ -431,24 +504,29 @@ pub async fn resend_verification(
     let email = validate_email(raw_email).map_err(ResendError::Validation)?;
     let pool = pool.ok_or(ResendError::DependencyUnavailable)?;
 
+    let mut transaction = pool.begin().await.map_err(|_| ResendError::Internal)?;
     let existing = sqlx::query_scalar::<_, String>(
         "SELECT id::text FROM users \
-         WHERE email = $1 AND email_verified_at IS NULL AND status = 'active'",
+         WHERE email = $1 AND email_verified_at IS NULL AND status = 'active' \
+         FOR UPDATE",
     )
     .bind(&email)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await
     .map_err(|_| ResendError::Internal)?;
 
+    let mut pending_email = None;
     if let Some(user_id) = existing {
-        // Invalidate earlier live tokens (resend invalidation).
+        // Revoke the old token and insert its replacement in one transaction.
+        // A failed insert therefore cannot strand the account without its
+        // previously valid verification link.
         sqlx::query(
             "UPDATE email_verification_tokens \
              SET revoked_at = now() \
              WHERE user_id = CAST($1 AS uuid) AND used_at IS NULL AND revoked_at IS NULL",
         )
         .bind(&user_id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| ResendError::Internal)?;
 
@@ -462,12 +540,22 @@ pub async fn resend_verification(
         .bind(&user_id)
         .bind(&token_digest)
         .bind(ttl as f64)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| ResendError::Internal)?;
 
-        let message = verification_message(&email, "there", &raw_token);
-        let _ = provider.send(message).await;
+        pending_email = Some(verification_message(&email, "there", &raw_token, ttl));
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ResendError::Internal)?;
+
+    if let Some(message) = pending_email {
+        if let Err(error) = provider.send(message).await {
+            crate::email::report_delivery_failure("verification", &error);
+        }
     }
 
     Ok(delivery)
@@ -515,6 +603,7 @@ mod tests {
             "@b.com",
             "a@.com",
             "a@b.",
+            "a\0@b.com",
         ] {
             assert!(validate_email(bad).is_err(), "{bad:?} should fail");
         }
@@ -530,6 +619,7 @@ mod tests {
         assert!(validate_name("   ").is_err());
         assert!(validate_name(&"x".repeat(MAX_NAME_CHARS)).is_ok());
         assert!(validate_name(&"x".repeat(MAX_NAME_CHARS + 1)).is_err());
+        assert!(validate_name("Ada\nExample").is_err());
     }
 
     #[test]
@@ -584,10 +674,14 @@ mod tests {
     }
 
     #[test]
-    fn verification_message_contains_token_only_in_body() {
-        let message = verification_message("ada@example.test", "Ada", "deadbeef");
+    fn verification_message_uses_the_actual_shortened_ttl() {
+        let message = verification_message("ada@example.test", "Ada", "deadbeef", 300);
         assert_eq!(message.to, "ada@example.test");
         assert!(message.body.contains("deadbeef"));
+        assert!(message.body.contains("expires in 5 minutes"));
         assert!(!message.subject.contains("deadbeef"));
+
+        let default_message = verification_message("ada@example.test", "Ada", "deadbeef", 86_400);
+        assert!(default_message.body.contains("expires in 24 hours"));
     }
 }

@@ -8,24 +8,22 @@
 //!   PKCE verifier; this service performs the code exchange and **refuses any
 //!   `redirectUri` that is not an exact match** for the configured one.
 //! - **State:** 128-bit random, generated with the PKCE verifier in the
-//!   desktop process and mirrored here **hashed** — single-use (replays are
-//!   refused), 10-minute window (plan §2.5).
-//! - **Nonce:** validated against the OIDC ID token whenever the client
-//!   supplies one (request field `nonce` — documented contract clarification;
-//!   the desktop generates it with the authorization request).
+//!   desktop process, validated on the loopback callback, and mirrored here
+//!   **hashed** — single-use (replays are refused), 10-minute window.
+//! - **Nonce:** required on every exchange and compared to the verified OIDC
+//!   ID token claim; the desktop generates it with the authorization request.
 //! - **Code exchange runs on the server** (plan §2.5: client secret lives only
 //!   in the server secret store; even secret-less desktop clients route the
 //!   exchange through the server for uniform auditing and linking). The
 //!   provider seam ([`GoogleProvider`]) is the same honesty pattern as
 //!   [`crate::email::EmailProvider`]: [`UnconfiguredGoogleProvider`] never
 //!   invents identities, and tests inject a real-logic fake at this boundary.
-//! - **Linking / takeover rules (plan §2.5):** identity is keyed by the
-//!   immutable Google `sub` (`oauth_accounts (provider, provider_subject)`),
-//!   NEVER by email. Auto-link only when the **Google-verified** email exactly
-//!   matches an **already-verified** account email; unverified matches are
-//!   refused (`409 email_conflict` → the plan's guided linking message);
-//!   provider emails that Google itself has not verified are refused outright;
-//!   no auto-link ever happens on unverified provider emails.
+//! - **Identity/linking rules:** sign-in is keyed by the immutable Google
+//!   `sub` (`oauth_accounts (provider, provider_subject)`), never by email.
+//!   A verified Google email may create a new account only when no Nexora
+//!   account already uses it. Existing-email matches require the user to
+//!   authenticate to Nexora and link explicitly; email equality alone never
+//!   links accounts. Unverified provider emails are refused outright.
 //! - Tokens (authorization codes, access/ID tokens, PKCE verifiers, states)
 //!   are never stored, never logged, and never returned in API responses.
 
@@ -41,7 +39,7 @@ pub const STATE_WINDOW_SECS: u64 = 600;
 
 /// Identity claims taken from Google's ID token (OIDC). Access/refresh tokens
 /// are deliberately NOT part of this struct and must never be stored.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GoogleIdentity {
     /// Google `sub` — immutable provider subject (the linking key).
     pub subject: String,
@@ -53,6 +51,21 @@ pub struct GoogleIdentity {
     pub nonce: Option<String>,
     /// Optional display name claim.
     pub name: Option<String>,
+}
+
+impl std::fmt::Debug for GoogleIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleIdentity")
+            .field("subject", &crate::scrub::REDACTED)
+            .field("email", &crate::scrub::REDACTED)
+            .field("email_verified", &self.email_verified)
+            .field(
+                "nonce",
+                &self.nonce.as_ref().map(|_| crate::scrub::REDACTED),
+            )
+            .field("name", &self.name.as_ref().map(|_| crate::scrub::REDACTED))
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -104,11 +117,9 @@ impl GoogleProvider for UnconfiguredGoogleProvider {
 
 /// Real server-side exchange against Google's token endpoint
 /// (`https://oauth2.googleapis.com/token` — Google's documented OAuth 2.0
-/// endpoint, not an invented value). The response is received directly from
-/// Google's token endpoint over TLS with client authentication, so per OIDC
-/// core the ID token's signature MAY be skipped at this hop (documented; JWKS
-/// verification is step-6 hardening) — the payload claims are still decoded
-/// and validated (sub/email/email_verified/nonce).
+/// endpoint, not an invented value). The response is received over TLS, and
+/// the returned ID token is verified locally against Google's JWKS plus the
+/// expected issuer, audience, expiry, nonce, and identity claims.
 pub struct HttpGoogleProvider {
     client_id: String,
     /// Client secret — **server secret store only** (plan §8). Absent for the
@@ -126,13 +137,23 @@ const JWKS_TTL: std::time::Duration = std::time::Duration::from_secs(3_600);
 const GOOGLE_JWKS_URI: &str = "https://www.googleapis.com/oauth2/v3/certs";
 
 impl HttpGoogleProvider {
-    pub fn new(client_id: String, client_secret: Option<String>) -> Self {
-        Self {
+    pub fn new(
+        client_id: String,
+        client_secret: Option<String>,
+    ) -> Result<Self, reqwest::Error> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
+            // OAuth tokens and authorization codes must never be forwarded to
+            // a redirect target if Google's endpoint responds unexpectedly.
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Self {
             client_id,
             client_secret,
-            client: reqwest::Client::new(),
+            client,
             jwks_cache: std::sync::Mutex::new(None),
-        }
+        })
     }
 
     /// Fetch (or reuse) the JWKS document. `force` bypasses the cache — used
@@ -164,11 +185,40 @@ impl HttpGoogleProvider {
     }
 }
 
+/// OIDC permits a single audience string or a list of audiences.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AudienceClaim {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl AudienceClaim {
+    fn contains(&self, expected: &str) -> bool {
+        match self {
+            Self::Single(audience) => audience == expected,
+            Self::Multiple(audiences) => audiences.iter().any(|audience| audience == expected),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Single(_) => 1,
+            Self::Multiple(audiences) => audiences.len(),
+        }
+    }
+}
+
 /// ID-token claims payload (deserialized only AFTER the RS256 signature and
-/// registered claims — iss/aud/exp — are verified; Phase 23G step 6).
+/// registered claims — iss/aud/exp — are verified).
 #[derive(serde::Deserialize)]
 struct IdTokenClaims {
     sub: String,
+    iss: String,
+    aud: AudienceClaim,
+    exp: u64,
+    #[serde(default)]
+    azp: Option<String>,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -179,18 +229,19 @@ struct IdTokenClaims {
     name: Option<String>,
 }
 
-/// Redacting `Debug` (Phase 23G): the nonce claim is CSRF material.
+/// Redacting `Debug`: nonce is CSRF material, while sub/email/name are
+/// personal identity data and should not leak through diagnostics either.
 impl std::fmt::Debug for IdTokenClaims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IdTokenClaims")
-            .field("sub", &self.sub)
-            .field("email", &self.email)
+            .field("sub", &crate::scrub::REDACTED)
+            .field("email", &crate::scrub::REDACTED)
             .field("email_verified", &self.email_verified)
             .field(
                 "nonce",
                 &self.nonce.as_ref().map(|_| crate::scrub::REDACTED),
             )
-            .field("name", &self.name)
+            .field("name", &self.name.as_ref().map(|_| crate::scrub::REDACTED))
             .finish()
     }
 }
@@ -239,10 +290,23 @@ pub fn verify_id_token_with(
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
     validation.set_audience(&[client_id]);
+    validation.leeway = 0;
     let data = decode::<IdTokenClaims>(id_token, &decoding, &validation)
         .map_err(|_| GoogleExchangeError::Refused)?;
 
     let claims = data.claims;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| GoogleExchangeError::Refused)?
+        .as_secs();
+    if !matches!(claims.iss.as_str(), "https://accounts.google.com" | "accounts.google.com")
+        || !claims.aud.contains(client_id)
+        || claims.azp.as_deref().is_some_and(|azp| azp != client_id)
+        || (claims.aud.len() > 1 && claims.azp.as_deref() != Some(client_id))
+        || claims.exp <= now
+    {
+        return Err(GoogleExchangeError::Refused);
+    }
     let email = claims.email.ok_or(GoogleExchangeError::Refused)?;
     Ok(GoogleIdentity {
         subject: claims.sub,
@@ -331,7 +395,7 @@ pub enum OAuthError {
     EmailUnverified,
     /// 401 `invalid_credentials` — the linked/created account is not active.
     InvalidCredentials,
-    /// 409 `email_conflict` — unverified account match; no auto-link (plan).
+    /// 409 `email_conflict` — existing account match; no email-only auto-link.
     EmailConflict,
     /// 503 `dependency_unavailable`.
     DependencyUnavailable,
@@ -363,7 +427,7 @@ impl OAuthError {
             }
             OAuthError::InvalidCredentials => "This account cannot sign in.",
             OAuthError::EmailConflict => {
-                "An account with this email already exists. Sign in with your password to link Google."
+                "A Nexora account with this email already exists. Sign in to that account before linking Google."
             }
             OAuthError::DependencyUnavailable => {
                 "Google sign-in is unavailable: it is not configured in this build."
@@ -391,8 +455,8 @@ pub struct GoogleExchangeRequest {
     pub code_verifier: String,
     pub state: String,
     pub redirect_uri: String,
-    /// Contract clarification: OIDC nonce (validated against the ID token
-    /// whenever supplied; omitted when the response type yields none).
+    /// Required OIDC nonce generated for this authorization request and
+    /// validated against the verified ID token claim.
     #[serde(default)]
     pub nonce: Option<String>,
 }
@@ -422,24 +486,42 @@ pub fn is_valid_code_verifier(raw: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
 }
 
-/// Plan §2.5 state: 128-bit random — accept the URL-safe character set the
-/// desktop generates (32–128 chars).
+/// State and nonce values generated from 128 random bits encode to 22
+/// unpadded base64url characters. Accept that representation plus longer
+/// base64url values, while rejecting whitespace and query delimiters.
 pub fn is_valid_state_shape(raw: &str) -> bool {
-    (32..=128).contains(&raw.len())
+    (22..=128).contains(&raw.len())
         && raw
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
 }
 
-/// Loopback redirect shape from plan §2.5/§2.5: `http://127.0.0.1:<port>/callback`.
+pub fn is_valid_nonce_shape(raw: &str) -> bool {
+    is_valid_state_shape(raw)
+}
+
+/// Exact loopback callback shape from RFC 8252 §7.3:
+/// `http://127.0.0.1:<non-zero-u16-port>/callback`.
 pub fn is_loopback_redirect_uri(raw: &str) -> bool {
     let Some(rest) = raw.strip_prefix("http://127.0.0.1:") else {
         return false;
     };
-    let Some((port, path)) = rest.split_once('/') else {
+    let Some((port_text, path)) = rest.split_once('/') else {
         return false;
     };
-    !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) && path == "callback"
+    let Ok(port) = port_text.parse::<u16>() else {
+        return false;
+    };
+    port > 0 && port.to_string() == port_text && path == "callback"
+}
+
+fn validate_nonce(request: &GoogleExchangeRequest) -> Result<(), OAuthError> {
+    match request.nonce.as_deref() {
+        Some(nonce) if is_valid_nonce_shape(nonce) => Ok(()),
+        _ => Err(OAuthError::Validation(
+            "OIDC nonce is missing or malformed.".to_string(),
+        )),
+    }
 }
 
 /// Validate request field shapes independently of server configuration so
@@ -463,13 +545,7 @@ pub fn validate_exchange_shapes_only(request: &GoogleExchangeRequest) -> Result<
     if !is_loopback_redirect_uri(&request.redirect_uri) {
         return Err(OAuthError::InvalidOrExpiredToken);
     }
-    if let Some(nonce) = &request.nonce {
-        if nonce.is_empty() || nonce.len() > 256 {
-            return Err(OAuthError::Validation(
-                "OAuth nonce is malformed.".to_string(),
-            ));
-        }
-    }
+    validate_nonce(request)?;
     Ok(())
 }
 
@@ -521,13 +597,7 @@ pub fn validate_exchange_request(
     if !matches_expected_redirect_uri(&request.redirect_uri, expected_redirect_uri) {
         return Err(OAuthError::InvalidOrExpiredToken);
     }
-    if let Some(nonce) = &request.nonce {
-        if nonce.is_empty() || nonce.len() > 256 {
-            return Err(OAuthError::Validation(
-                "OAuth nonce is malformed.".to_string(),
-            ));
-        }
-    }
+    validate_nonce(request)?;
     Ok(())
 }
 
@@ -538,6 +608,7 @@ pub async fn verify_code_with_provider(
     google: &dyn GoogleProvider,
     request: &GoogleExchangeRequest,
 ) -> Result<GoogleIdentity, OAuthError> {
+    validate_exchange_shapes_only(request)?;
     consume_state(pool, &request.state).await?;
 
     let identity = match google
@@ -553,11 +624,12 @@ pub async fn verify_code_with_provider(
         Err(GoogleExchangeError::Refused) => return Err(OAuthError::InvalidOrExpiredToken),
     };
 
-    if let Some(expected_nonce) = request.nonce.as_deref() {
-        match identity.nonce.as_deref() {
-            Some(actual) if actual == expected_nonce => {}
-            _ => return Err(OAuthError::InvalidOrExpiredToken),
-        }
+    let expected_nonce = request
+        .nonce
+        .as_deref()
+        .ok_or(OAuthError::InvalidOrExpiredToken)?;
+    if identity.nonce.as_deref() != Some(expected_nonce) {
+        return Err(OAuthError::InvalidOrExpiredToken);
     }
     if identity.subject.trim().is_empty() || identity.subject.len() > 255 {
         return Err(OAuthError::InvalidOrExpiredToken);
@@ -635,40 +707,7 @@ pub async fn google_exchange(
 ) -> Result<LoginOutcome, OAuthError> {
     validate_exchange_request(request, expected_redirect_uri)?;
     let pool = pool.ok_or(OAuthError::DependencyUnavailable)?;
-
-    // Single-use state (replay ⇒ hard generic failure) BEFORE the exchange.
-    consume_state(pool, &request.state).await?;
-
-    let identity = match google
-        .exchange_code(
-            request.code.trim(),
-            request.code_verifier.trim(),
-            &request.redirect_uri,
-        )
-        .await
-    {
-        Ok(identity) => identity,
-        Err(GoogleExchangeError::NotConfigured) => return Err(OAuthError::DependencyUnavailable),
-        Err(GoogleExchangeError::Refused) => return Err(OAuthError::InvalidOrExpiredToken),
-    };
-
-    // Nonce (OIDC): hard failure on mismatch or on a missing claim when the
-    // client supplied one.
-    if let Some(expected_nonce) = request.nonce.as_deref() {
-        match identity.nonce.as_deref() {
-            Some(actual) if actual == expected_nonce => {}
-            _ => return Err(OAuthError::InvalidOrExpiredToken),
-        }
-    }
-
-    // Claim hygiene: subject + Google-verified email are required.
-    if identity.subject.trim().is_empty() || identity.subject.len() > 255 {
-        return Err(OAuthError::InvalidOrExpiredToken);
-    }
-    // Plan §2.5: NEVER auto-link (or create) on unverified provider emails.
-    if !identity.email_verified {
-        return Err(OAuthError::EmailUnverified);
-    }
+    let identity = verify_code_with_provider(pool, google, request).await?;
     let email = validate_email(&identity.email).map_err(OAuthError::Validation)?;
 
     let mut tx = pool.begin().await.map_err(|_| OAuthError::Internal)?;
@@ -699,74 +738,96 @@ pub async fn google_exchange(
         };
         user_id
     } else {
-        // New subject: find-or-create by normalized email under the row lock.
-        let existing: Option<(String, bool, String)> = sqlx::query_as(
-            "SELECT id::text, (email_verified_at IS NOT NULL) AS verified, status \
-             FROM users WHERE email = $1 FOR UPDATE",
+        // Email may create a brand-new account, but must never select or link
+        // an existing Nexora account. Linking is a separate authenticated flow.
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT id::text FROM users WHERE email = $1 FOR UPDATE")
+                .bind(&email)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|_| OAuthError::Internal)?;
+        if existing.is_some() {
+            return Err(OAuthError::EmailConflict);
+        }
+
+        let display_name = display_name_for(&identity);
+        let created: Option<(String,)> = sqlx::query_as(
+            "INSERT INTO users (display_name, email, password_hash, email_verified_at) \
+             VALUES ($1, $2, NULL, now()) \
+             ON CONFLICT (email) DO NOTHING \
+             RETURNING id::text",
         )
+        .bind(&display_name)
         .bind(&email)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| OAuthError::Internal)?;
 
-        match existing {
-            // Verified + active account with the same normalized email:
-            // auto-link (plan §2.5 verified-match rule).
-            Some((user_id, true, status)) if status == "active" => user_id,
-            Some((_, true, _)) => return Err(OAuthError::InvalidCredentials),
-            // Unverified match: proof of existing-account control required —
-            // never auto-link (plan §2.5); the plan's guided message.
-            Some((_, false, _)) => return Err(OAuthError::EmailConflict),
+        match created {
+            Some((user_id,)) => user_id,
+            // A concurrent first login can reuse the account only when it is
+            // already bound to this exact immutable Google subject. A race on
+            // email alone remains a conflict; it is never an auto-link path.
             None => {
-                // Brand-new account: Google-verified email is proof enough.
-                let display_name = display_name_for(&identity);
-                let created: Option<(String,)> = sqlx::query_as(
-                    "INSERT INTO users (display_name, email, password_hash, email_verified_at) \
-                     VALUES ($1, $2, NULL, now()) \
-                     ON CONFLICT (email) DO NOTHING \
-                     RETURNING id::text",
+                let raced_identity: Option<(String,)> = sqlx::query_as(
+                    "SELECT user_id::text FROM oauth_accounts \
+                     WHERE provider = 'google' AND provider_subject = $1 FOR UPDATE",
                 )
-                .bind(&display_name)
-                .bind(&email)
+                .bind(identity.subject.trim())
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|_| OAuthError::Internal)?;
-                match created {
-                    Some((user_id,)) => user_id,
-                    // Lost a creation race: treat as the existing-account path.
-                    None => {
-                        let raced: Option<(String, bool, String)> = sqlx::query_as(
-                            "SELECT id::text, (email_verified_at IS NOT NULL) AS verified, status \
-                             FROM users WHERE email = $1 FOR UPDATE",
-                        )
-                        .bind(&email)
-                        .fetch_optional(&mut *tx)
-                        .await
-                        .map_err(|_| OAuthError::Internal)?;
-                        match raced {
-                            Some((user_id, true, status)) if status == "active" => user_id,
-                            Some((_, true, _)) => return Err(OAuthError::InvalidCredentials),
-                            Some((_, false, _)) => return Err(OAuthError::EmailConflict),
-                            None => return Err(OAuthError::Internal),
-                        }
-                    }
-                }
+                let Some((raced_user_id,)) = raced_identity else {
+                    return Err(OAuthError::EmailConflict);
+                };
+
+                let locked: Option<(String,)> = sqlx::query_as(
+                    "SELECT id::text FROM users \
+                     WHERE id = CAST($1 AS uuid) AND status = 'active' FOR UPDATE",
+                )
+                .bind(&raced_user_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|_| OAuthError::Internal)?;
+                let Some((user_id,)) = locked else {
+                    return Err(OAuthError::InvalidCredentials);
+                };
+                user_id
             }
         }
     };
 
-    // Link the immutable subject (idempotent under concurrency).
-    sqlx::query(
+    // The UNIQUE(provider, provider_subject) constraint is the identity map.
+    // Recheck its owner after an insert conflict so a concurrent first sign-in
+    // cannot receive a session for an unrelated account created by email.
+    let inserted: Option<(String,)> = sqlx::query_as(
         "INSERT INTO oauth_accounts (user_id, provider, provider_subject, provider_email) \
          VALUES (CAST($1 AS uuid), 'google', $2, $3) \
-         ON CONFLICT (provider, provider_subject) DO NOTHING",
+         ON CONFLICT (provider, provider_subject) DO NOTHING \
+         RETURNING user_id::text",
     )
     .bind(&user_id)
     .bind(identity.subject.trim())
     .bind(&email)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|_| OAuthError::Internal)?;
+
+    if inserted.is_none() {
+        let owner: Option<(String,)> = sqlx::query_as(
+            "SELECT user_id::text FROM oauth_accounts \
+             WHERE provider = 'google' AND provider_subject = $1 FOR UPDATE",
+        )
+        .bind(identity.subject.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| OAuthError::Internal)?;
+        match owner {
+            Some((owner_id,)) if owner_id == user_id => {}
+            Some(_) => return Err(OAuthError::EmailConflict),
+            None => return Err(OAuthError::Internal),
+        }
+    }
 
     let session = session::insert_session(
         &mut *tx,
@@ -806,10 +867,34 @@ mod tests {
         GoogleExchangeRequest {
             code: "4/0AeanS0b-secret-code".to_string(),
             code_verifier: "a".repeat(43),
-            state: "b".repeat(32),
+            state: "b".repeat(22),
             redirect_uri: "http://127.0.0.1:49152/callback".to_string(),
-            nonce: None,
+            nonce: Some("n".repeat(22)),
         }
+    }
+
+    #[test]
+    fn oauth_identity_and_claim_debug_redact_personal_data_and_nonce() {
+        let identity = GoogleIdentity {
+            subject: "SENTINEL_subject".to_string(),
+            email: "SENTINEL_email@example.test".to_string(),
+            email_verified: true,
+            nonce: Some("SENTINEL_nonce".to_string()),
+            name: Some("SENTINEL_name".to_string()),
+        };
+        let claims = IdTokenClaims {
+            sub: "SENTINEL_subject".to_string(),
+            iss: "https://accounts.google.com".to_string(),
+            aud: AudienceClaim::Single("client-id".to_string()),
+            exp: 1,
+            azp: None,
+            email: Some("SENTINEL_email@example.test".to_string()),
+            email_verified: Some(true),
+            nonce: Some("SENTINEL_nonce".to_string()),
+            name: Some("SENTINEL_name".to_string()),
+        };
+        assert!(!format!("{identity:?}").contains("SENTINEL"));
+        assert!(!format!("{claims:?}").contains("SENTINEL"));
     }
 
     #[test]
@@ -822,21 +907,28 @@ mod tests {
     }
 
     #[test]
-    fn state_shape_requires_the_desktop_generator_format() {
-        assert!(is_valid_state_shape(&"0123456789abcdef".repeat(2))); // 32
+    fn state_shape_accepts_the_desktop_generator_representation() {
+        assert!(is_valid_state_shape(&"a".repeat(22))); // 128 random bits, unpadded base64url
+        assert!(is_valid_state_shape(&"0123456789abcdef".repeat(2)));
+        assert!(!is_valid_state_shape(&"a".repeat(21)));
         assert!(!is_valid_state_shape("short"));
-        assert!(!is_valid_state_shape(&"a".repeat(31)));
         assert!(!is_valid_state_shape(&("a".repeat(32) + "+")));
+        assert!(is_valid_nonce_shape(&"n".repeat(22)));
+        assert!(!is_valid_nonce_shape(&"n".repeat(21)));
     }
 
     #[test]
-    fn loopback_redirect_requires_exact_127_0_0_1_callback() {
+    fn loopback_redirect_requires_exact_valid_127_0_0_1_callback() {
         assert!(is_loopback_redirect_uri("http://127.0.0.1:1/callback"));
         assert!(is_loopback_redirect_uri("http://127.0.0.1:49152/callback"));
+        assert!(is_loopback_redirect_uri("http://127.0.0.1:65535/callback"));
+        assert!(!is_loopback_redirect_uri("http://127.0.0.1:0/callback"));
+        assert!(!is_loopback_redirect_uri("http://127.0.0.1:65536/callback"));
+        assert!(!is_loopback_redirect_uri("http://127.0.0.1:049152/callback"));
+        assert!(!is_loopback_redirect_uri("http://127.0.0.1:49152/callback/"));
+        assert!(!is_loopback_redirect_uri("http://127.0.0.1:49152/callback?code=x"));
         assert!(!is_loopback_redirect_uri("http://localhost:1/callback"));
         assert!(!is_loopback_redirect_uri("https://127.0.0.1:1/callback"));
-        assert!(!is_loopback_redirect_uri("http://127.0.0.1:1/callback/"));
-        assert!(!is_loopback_redirect_uri("http://127.0.0.1:1/cb"));
         assert!(!is_loopback_redirect_uri("http://10.0.0.1:1/callback"));
     }
 
@@ -851,6 +943,20 @@ mod tests {
 
     #[test]
     fn malformed_requests_validate_before_any_state_or_provider_work() {
+        let mut r = request();
+        r.nonce = None;
+        assert_eq!(
+            validate_exchange_request(&r, &r.redirect_uri)
+                .unwrap_err()
+                .code(),
+            "validation_failed"
+        );
+        let mut r = request();
+        r.nonce = Some("bad nonce".to_string());
+        assert_eq!(
+            validate_exchange_shapes_only(&r).unwrap_err().code(),
+            "validation_failed"
+        );
         let mut r = request();
         r.code = " ".to_string();
         assert_eq!(
@@ -975,6 +1081,31 @@ mod tests {
         let wrong_aud = sign_test_token(Some("test-kid"), "someone-else", |_| {});
         assert!(verify_id_token_with(&wrong_aud, "client-123", &test_jwks("test-kid")).is_err());
 
+        // Multiple audiences require an authorized-party claim naming this client.
+        let multiple_audiences_without_azp = sign_test_token(Some("test-kid"), "client-123", |c| {
+            c["aud"] = serde_json::json!(["client-123", "other-client"]);
+        });
+        assert!(verify_id_token_with(
+            &multiple_audiences_without_azp,
+            "client-123",
+            &test_jwks("test-kid")
+        )
+        .is_err());
+        let multiple_audiences_with_azp = sign_test_token(Some("test-kid"), "client-123", |c| {
+            c["aud"] = serde_json::json!(["client-123", "other-client"]);
+            c["azp"] = serde_json::json!("client-123");
+        });
+        assert!(verify_id_token_with(
+            &multiple_audiences_with_azp,
+            "client-123",
+            &test_jwks("test-kid")
+        )
+        .is_ok());
+        let wrong_azp = sign_test_token(Some("test-kid"), "client-123", |c| {
+            c["azp"] = serde_json::json!("someone-else");
+        });
+        assert!(verify_id_token_with(&wrong_azp, "client-123", &test_jwks("test-kid")).is_err());
+
         // Wrong issuer.
         let wrong_iss = sign_test_token(Some("test-kid"), "client-123", |c| {
             c["iss"] = serde_json::json!("https://evil.example.test");
@@ -986,6 +1117,10 @@ mod tests {
             c["exp"] = serde_json::json!(1);
         });
         assert!(verify_id_token_with(&expired, "client-123", &test_jwks("test-kid")).is_err());
+        let missing_exp = sign_test_token(Some("test-kid"), "client-123", |c| {
+            c.as_object_mut().unwrap().remove("exp");
+        });
+        assert!(verify_id_token_with(&missing_exp, "client-123", &test_jwks("test-kid")).is_err());
 
         // Unknown kid (not in the JWKS material).
         assert!(verify_id_token_with(&good, "client-123", &test_jwks("other-kid")).is_err());

@@ -417,7 +417,7 @@ describe("ModelSelector", () => {
       cancelled: boolean;
     }) => void;
 
-    startDownloadMock.mockImplementationOnce(async (_dir, _id, onEvent) => {
+    startDownloadMock.mockImplementationOnce(async (_id, onEvent) => {
       onEvent({
         type: "progress",
         received: 2 * 1024 ** 3,
@@ -455,11 +455,7 @@ describe("ModelSelector", () => {
     await user.click(screen.getByTestId("model-selector-trigger"));
     await user.click(screen.getByTestId("selector-download-btn"));
 
-    expect(startDownloadMock).toHaveBeenCalledWith(
-      null,
-      SONNET_ID,
-      expect.any(Function),
-    );
+    expect(startDownloadMock).toHaveBeenCalledWith(SONNET_ID, expect.any(Function));
     expect(
       (await screen.findAllByText("Downloading 2.00 of 4.00 GiB (50%)")).length,
     ).toBeGreaterThanOrEqual(1);

@@ -229,7 +229,7 @@ function ModelSelectorInner({
     });
 
     try {
-      const outcome = await startModelDownload(null, profileId, (event) => {
+      const outcome = await startModelDownload(profileId, (event) => {
         if (!mountedRef.current || seq !== actionSeqRef.current) return;
         if (event.type === "progress") {
           setActiveDownload({

@@ -17,9 +17,11 @@ use nexora_auth::config::{AuthConfig, GoogleSettings};
 use nexora_auth::email::EmailMessage;
 use nexora_auth::login::{LoginError, LoginRequest};
 use nexora_auth::oauth::{GoogleExchangeRequest, OAuthError};
-use nexora_auth::recovery::{ChangePasswordRequest, RecoveryError, ResetPasswordRequest};
-use nexora_auth::registration::{RegisterRequest, VerifyEmailRequest};
-use nexora_auth::session::CreatedSession;
+use nexora_auth::recovery::{
+    ChangePasswordRequest, RecoveryError, RecoveryRequest, ResetPasswordRequest,
+};
+use nexora_auth::registration::{RegisterRequest, ResendVerificationRequest, VerifyEmailRequest};
+use nexora_auth::session::{CreatedSession, SessionContext, SessionUser};
 use tower::ServiceExt;
 
 const SENTINEL_PASSWORD: &str = "SENTINEL_Hunter2_pass!";
@@ -53,17 +55,17 @@ fn assert_clean(label: &str, output: &str) {
 #[test]
 fn debug_output_of_request_types_never_renders_secrets() {
     let login = LoginRequest {
-        email: "ada@example.test".to_string(),
+        email: "SENTINEL_ada@example.test".to_string(),
         password: SENTINEL_PASSWORD.to_string(),
     };
     let rendered = format!("{login:?}");
     assert_clean("LoginRequest Debug", &rendered);
-    assert!(rendered.contains("ada@example.test"));
+    assert!(!rendered.contains("SENTINEL_ada@example.test"));
     assert!(rendered.contains("<redacted>"));
 
     let register = RegisterRequest {
-        name: "Ada".to_string(),
-        email: "ada@example.test".to_string(),
+        name: "SENTINEL_person".to_string(),
+        email: "SENTINEL_ada@example.test".to_string(),
         password: SENTINEL_PASSWORD.to_string(),
     };
     assert_clean("RegisterRequest Debug", &format!("{register:?}"));
@@ -72,6 +74,16 @@ fn debug_output_of_request_types_never_renders_secrets() {
         token: SENTINEL_TOKEN.to_string(),
     };
     assert_clean("VerifyEmailRequest Debug", &format!("{verify:?}"));
+
+    let resend = ResendVerificationRequest {
+        email: "SENTINEL_ada@example.test".to_string(),
+    };
+    assert_clean("ResendVerificationRequest Debug", &format!("{resend:?}"));
+
+    let recovery = RecoveryRequest {
+        email: "SENTINEL_ada@example.test".to_string(),
+    };
+    assert_clean("RecoveryRequest Debug", &format!("{recovery:?}"));
 
     let reset = ResetPasswordRequest {
         token: SENTINEL_TOKEN.to_string(),
@@ -111,17 +123,29 @@ fn debug_output_of_credentials_and_messages_never_renders_secrets() {
         "expiry stays visible"
     );
 
+    let context = SessionContext {
+        user: SessionUser {
+            id: "SENTINEL_user_id".to_string(),
+            name: "SENTINEL_user_name".to_string(),
+            email: "SENTINEL_user@example.test".to_string(),
+        },
+        session_id: "SENTINEL_session_id".to_string(),
+        family_id: "SENTINEL_family_id".to_string(),
+    };
+    assert_clean("SessionContext Debug", &format!("{context:?}"));
+
     let message = EmailMessage {
-        to: "ada@example.test".to_string(),
+        to: "SENTINEL_recipient@example.test".to_string(),
         subject: "Reset your Nexora password".to_string(),
         body: format!("#/reset-password?token={SENTINEL_TOKEN}"),
     };
     let rendered = format!("{message:?}");
     assert_clean("EmailMessage Debug", &rendered);
     assert!(
-        rendered.contains("ada@example.test"),
-        "recipient stays visible"
+        !rendered.contains("SENTINEL_recipient@example.test"),
+        "recipient PII is redacted"
     );
+    assert!(rendered.contains("<redacted>"));
 
     // Config Debug: DB URL and OAuth secret must never render.
     let mut config =

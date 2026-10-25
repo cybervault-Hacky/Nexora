@@ -11,15 +11,18 @@
 //!     cargo test -- --ignored
 //! ```
 //!
-//! Rules: never point this at a production database; never use real user data
-//! or credentials (fixtures are synthetic `example.test` addresses); never
-//! print the connection string. Without PostgreSQL these tests are reported
-//! as "not run" — see docs/phase-23b/README.md.
+//! Rules: use only a disposable database whose name ends in `_test` (checked
+//! before migrations), never use production data or credentials (fixtures are
+//! synthetic `example.test` addresses), and never print the connection string.
+//! Without PostgreSQL these tests are reported as "not run" — see
+//! `docs/database-migrations-audit.md`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
+
+mod support;
 
 static UNIQUE: AtomicUsize = AtomicUsize::new(0);
 
@@ -39,6 +42,7 @@ async fn test_pool() -> sqlx::PgPool {
         .connect(&url)
         .await
         .expect("could not connect to the test database (is PostgreSQL running?)");
+    support::assert_test_database(&pool).await;
     nexora_auth::run_migrations(&pool)
         .await
         .expect("migrations must apply cleanly");
@@ -50,14 +54,40 @@ async fn test_pool() -> sqlx::PgPool {
 async fn migrations_apply_in_order_and_are_recorded() {
     let pool = test_pool().await;
 
-    let rows = sqlx::query("SELECT version FROM _sqlx_migrations ORDER BY version")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    assert!(
-        rows.len() >= 3,
-        "all migrations through 23C must be recorded"
+    let versions: Vec<i64> = sqlx::query_scalar(
+        "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        versions,
+        vec![
+            20261018000001,
+            20261018000002,
+            20261018000003,
+            20261018000004,
+            20261018000005,
+            20261018000006,
+            20261022000007,
+            20261023000008,
+            20261024000009,
+        ],
+        "the complete migration sequence must be recorded exactly once and in order"
     );
+
+    // A second run validates stored checksums and must not add duplicate
+    // history rows or rerun already-applied migrations.
+    nexora_auth::run_migrations(&pool)
+        .await
+        .expect("re-running the migrator must be idempotent");
+    let versions_after_rerun: Vec<i64> = sqlx::query_scalar(
+        "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(versions_after_rerun, versions);
 
     let users = sqlx::query("SELECT to_regclass('users')::text AS name")
         .fetch_one(&pool)
@@ -76,6 +106,36 @@ async fn migrations_apply_in_order_and_are_recorded() {
         .await
         .unwrap();
     assert!(tokens.get::<Option<String>, _>("name").is_some());
+
+    let subscription_watermark: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'subscriptions'
+               AND column_name = 'last_provider_event_created_at'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(subscription_watermark);
+
+    let webhook_ordering_columns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'webhook_events'
+           AND column_name IN (
+               'provider_event_created_at',
+               'provider_payment_intent_id',
+               'provider_subscription_id',
+               'provider_subscription_status',
+               'is_full_refund'
+           )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(webhook_ordering_columns, 5);
 }
 
 #[tokio::test]
@@ -193,4 +253,105 @@ async fn oauth_accounts_constraints_hold() {
     .execute(&pool)
     .await;
     assert!(orphan.is_err(), "orphaned oauth link must be rejected");
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test database (NEXORA_AUTH_TEST_DATABASE_URL)"]
+async fn auth_token_hashes_require_sha256_width() {
+    let pool = test_pool().await;
+    let owner_id: String = sqlx::query_scalar(
+        "INSERT INTO users (display_name, email) VALUES ($1, $2) RETURNING id::text",
+    )
+    .bind("Digest Constraint Fixture")
+    .bind(unique_email("digest-constraints"))
+    .fetch_one(&pool)
+    .await
+    .expect("synthetic fixture user insert must succeed");
+
+    let invalid_hash = vec![0xA5_u8; 31];
+    let valid_hash = nexora_auth::session::hash_session_token(&unique_email("valid-digest"));
+
+    let verification_invalid = sqlx::query(
+        "INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) \
+         VALUES ($1::uuid, $2, now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&invalid_hash)
+    .execute(&pool)
+    .await;
+    assert!(
+        verification_invalid.is_err(),
+        "verification token digests shorter than SHA-256 must be rejected"
+    );
+
+    let reset_invalid = sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
+         VALUES ($1::uuid, $2, now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&invalid_hash)
+    .execute(&pool)
+    .await;
+    assert!(
+        reset_invalid.is_err(),
+        "password reset digests shorter than SHA-256 must be rejected"
+    );
+
+    let session_invalid = sqlx::query(
+        "INSERT INTO sessions (user_id, token_hash, family_id, expires_at) \
+         VALUES ($1::uuid, $2, gen_random_uuid(), now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&invalid_hash)
+    .execute(&pool)
+    .await;
+    assert!(
+        session_invalid.is_err(),
+        "session digests shorter than SHA-256 must be rejected"
+    );
+
+    let state_invalid = sqlx::query("INSERT INTO google_oauth_states (state_hash) VALUES ($1)")
+        .bind(&invalid_hash)
+        .execute(&pool)
+        .await;
+    assert!(
+        state_invalid.is_err(),
+        "Google OAuth state digests shorter than SHA-256 must be rejected"
+    );
+
+    sqlx::query(
+        "INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) \
+         VALUES ($1::uuid, $2, now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&valid_hash)
+    .execute(&pool)
+    .await
+    .expect("32-byte verification digest must be accepted");
+
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
+         VALUES ($1::uuid, $2, now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&valid_hash)
+    .execute(&pool)
+    .await
+    .expect("32-byte reset digest must be accepted");
+
+    sqlx::query(
+        "INSERT INTO sessions (user_id, token_hash, family_id, expires_at) \
+         VALUES ($1::uuid, $2, gen_random_uuid(), now() + interval '1 hour')",
+    )
+    .bind(&owner_id)
+    .bind(&valid_hash)
+    .execute(&pool)
+    .await
+    .expect("32-byte session digest must be accepted");
+
+    sqlx::query("INSERT INTO google_oauth_states (state_hash) VALUES ($1)")
+        .bind(&valid_hash)
+        .execute(&pool)
+        .await
+        .expect("32-byte OAuth state digest must be accepted");
 }

@@ -524,7 +524,8 @@ describe("ModelSetup", () => {
     );
 
     expect(downloadMock).toHaveBeenCalledTimes(1);
-    expect(downloadMock.mock.calls[0]?.[0]).toBeNull();
+    expect(downloadMock.mock.calls[0]?.[0]).toBe(miniProfile.id);
+    expect(downloadMock.mock.calls[0]?.[1]).toEqual(expect.any(Function));
 
     const input = screen.getByRole("textbox", {
       name: "Model file (.gguf)",

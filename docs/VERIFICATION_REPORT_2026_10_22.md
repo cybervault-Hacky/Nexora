@@ -1,4 +1,6 @@
-# Nexora Release-Blocker Audit & Windows Release Candidate Verification Report
+# Historical Nexora Release-Blocker Audit & Windows Release Candidate Verification Report
+
+> **Superseded — not current release evidence (2026-10-24).** This 2026-10-22 report is bound to `arena/c01ae5dd-nexora` at `631a59e379281ae581fde401aace5ae913460e84`, not the current checkout. Its historical PASS claims, live-service assertions, proposed commit/push handoff, and legacy PFX-signing instructions are not verified by current Phase 18/19 evidence and must not be used as release authorization or current run instructions. Phase 18 remains **PARTIALLY VERIFIED**; Phase 19 remains **PARTIALLY VERIFIED / BLOCKED**. No real Windows installer or approved-model inference was produced or tested in those phases; G-01 remains open. See [Phase 18](PHASE_18_INTEGRATION_VERIFICATION.md), [Phase 19](PHASE_19_WINDOWS_PACKAGING.md), and [Phase 20](PHASE_20_PUBLISHING_PREPARATION.md).
 
 **Date:** `2026-10-22`
 **Repository:** `cybervault-Hacky/Nexora`

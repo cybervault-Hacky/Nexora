@@ -11,12 +11,13 @@ import {
   authResetPassword,
   authResendVerification,
   authVerifyEmail,
-  type AuthError,
+  isAuthUser,
   type AuthUser,
   type ChangePasswordPayload,
   type LoginPayload,
   type RegisterPayload,
 } from "../../lib/auth";
+import { safeAuthErrorMessage } from "../../lib/authMessages";
 import { isDesktopShell } from "../../lib/ipc";
 
 export function useAuth() {
@@ -41,8 +42,8 @@ export function useAuth() {
     }
     try {
       const session = await authGetSession();
-      if (session && typeof session === "object" && "authenticated" in session) {
-        setUser(session.user ?? null);
+      if (session && typeof session === "object" && typeof session.authenticated === "boolean") {
+        setUser(session.authenticated && isAuthUser(session.user) ? session.user : null);
         setSessionEnforced(true);
       } else {
         setUser(null);
@@ -63,12 +64,14 @@ export function useAuth() {
     setError(null);
     try {
       const authUser = await authLogin(credentials);
+      if (!isAuthUser(authUser)) {
+        throw { code: "invalid_response", message: "The account service returned an invalid user response." };
+      }
       setUser(authUser);
       setSessionEnforced(true);
       return authUser;
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Sign-in failed.");
+      setError(safeAuthErrorMessage(err, "signin", [credentials.email, credentials.password]));
       throw err;
     }
   }, []);
@@ -78,8 +81,7 @@ export function useAuth() {
     try {
       return await authRegister(data);
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Registration failed.");
+      setError(safeAuthErrorMessage(err, "signup", [data.name, data.email, data.password]));
       throw err;
     }
   }, []);
@@ -89,8 +91,7 @@ export function useAuth() {
     try {
       return await authVerifyEmail({ token });
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Verification failed.");
+      setError(safeAuthErrorMessage(err, "verify", [token]));
       throw err;
     }
   }, []);
@@ -100,8 +101,7 @@ export function useAuth() {
     try {
       return await authResendVerification({ email });
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Resend failed.");
+      setError(safeAuthErrorMessage(err, "verify", [email]));
       throw err;
     }
   }, []);
@@ -111,8 +111,7 @@ export function useAuth() {
     try {
       return await authRecoverPassword({ email });
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Recovery request failed.");
+      setError(safeAuthErrorMessage(err, "recover", [email]));
       throw err;
     }
   }, []);
@@ -124,8 +123,7 @@ export function useAuth() {
       setUser(null);
       return res;
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Password reset failed.");
+      setError(safeAuthErrorMessage(err, "reset", [token, password]));
       throw err;
     }
   }, []);
@@ -135,31 +133,29 @@ export function useAuth() {
     try {
       return await authChangePassword(payload);
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Failed to change password.");
+      setError(safeAuthErrorMessage(err, "general", [payload.currentPassword, payload.newPassword]));
       throw err;
     }
   }, []);
 
   const logout = useCallback(async () => {
-    try {
-      await authLogout();
-    } finally {
-      setUser(null);
-      setSessionEnforced(true);
-    }
+    await authLogout();
+    setUser(null);
+    setSessionEnforced(true);
   }, []);
 
   const signInWithGoogle = useCallback(async (): Promise<AuthUser> => {
     setError(null);
     try {
       const authUser = await authGoogleBegin();
+      if (!isAuthUser(authUser)) {
+        throw { code: "invalid_response", message: "The account service returned an invalid user response." };
+      }
       setUser(authUser);
       setSessionEnforced(true);
       return authUser;
     } catch (err) {
-      const authErr = err as AuthError;
-      setError(authErr.message || "Google sign-in failed.");
+      setError(safeAuthErrorMessage(err, "google"));
       throw err;
     }
   }, []);
@@ -187,3 +183,5 @@ export function useAuth() {
     refreshSession,
   };
 }
+
+export type AuthController = ReturnType<typeof useAuth>;

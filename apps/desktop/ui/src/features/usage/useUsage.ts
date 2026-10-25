@@ -16,11 +16,8 @@ export interface UsageView {
 const TICK_MS = 30_000;
 
 /**
- * Tracks the daily free allowance.
- *
- * The status comes from the Rust core. The only thing computed here is the
- * countdown to the reset instant the core supplied, recomputed from the clock
- * on every tick — no stored timer, and no claim that a reset happened early.
+ * Tracks device-local generation accounting. A reset timer is used only when
+ * the core explicitly reports a configured local policy and reset instant.
  */
 export function useUsage(refreshKey = 0): UsageView {
   const [status, setStatus] = useState<UsageStatus | null>(null);
@@ -63,7 +60,8 @@ export function useUsage(refreshKey = 0): UsageView {
   // Clock-driven ticker: refreshes the countdown and re-reads the record once
   // the reset instant has actually passed.
   useEffect(() => {
-    if (!status) {
+    const resetAtMs = status?.policyConfigured ? status.resetAtMs : null;
+    if (resetAtMs === null || resetAtMs === undefined) {
       return;
     }
 
@@ -71,7 +69,7 @@ export function useUsage(refreshKey = 0): UsageView {
       const current = Date.now();
       setNow(current);
 
-      if (!crossed.current && current >= status.resetAtMs) {
+      if (!crossed.current && current >= resetAtMs) {
         crossed.current = true;
         setAttempt((value) => value + 1);
       }

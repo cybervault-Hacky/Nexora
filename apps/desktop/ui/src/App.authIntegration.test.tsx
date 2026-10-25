@@ -77,6 +77,27 @@ describe("Desktop Authentication IPC Integration (Email, Rate-Limit, Google PKCE
     expect(await screen.findByRole("link", { name: "Developer Account" })).toBeTruthy();
   });
 
+  it("rejects a malformed IPC user response without creating a signed-in client state", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_get_session") return { user: null, authenticated: false };
+      if (cmd === "auth_login") return { id: "", name: "", email: "", emailVerified: "yes" };
+      if (cmd === "get_usage_status") return makeUsage();
+      return true;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    const modal = await screen.findByRole("dialog");
+    await user.type(within(modal).getByLabelText("Email address"), "alice@example.com");
+    await user.type(within(modal).getByLabelText("Password"), "validpassword8");
+    await user.click(within(modal).getByRole("button", { name: "Sign in" }));
+
+    expect(await within(modal).findByText(/invalid user response/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Developer Account" })).toBeNull();
+  });
+
   it("surfaces invalid-credential and rate-limit errors accurately inside the modal", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "auth_get_session") return { user: null, authenticated: false };

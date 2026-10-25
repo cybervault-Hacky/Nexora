@@ -7,7 +7,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
-  PUBLISHED_DAILY_ALLOWANCE,
   fetchUsage,
   formatCountdown,
   formatResetClock,
@@ -70,16 +69,27 @@ describe("Phase 7 — usage client", () => {
     });
   });
 
-  it("validates every field the UI relies on", () => {
+  it("validates the explicit policy state and every field the UI relies on", () => {
     expect(isUsageStatus(makeUsage())).toBe(true);
     expect(isUsageStatus(null)).toBe(false);
     expect(isUsageStatus({ ...makeUsage(), notice: 5 })).toBe(false);
     expect(isUsageStatus({ ...makeUsage(), exhausted: "yes" })).toBe(false);
+    expect(isUsageStatus({ ...makeUsage(), policyConfigured: true })).toBe(false);
+    expect(
+      isUsageStatus(
+        makeUsage({ policyConfigured: true, allowance: 50, resetAtMs: RESET }),
+      ),
+    ).toBe(true);
   });
 
-  it("publishes the same allowance the backend enforces", () => {
-    // The cross-language check in rustContract.test.ts pins this to Rust.
-    expect(PUBLISHED_DAILY_ALLOWANCE).toBe(50);
+  it("represents absent quota policy as unconfigured rather than a number", () => {
+    const status = makeUsage();
+
+    expect(status.policyConfigured).toBe(false);
+    expect(status.allowance).toBeNull();
+    expect(status.remaining).toBeNull();
+    expect(status.resetAtMs).toBeNull();
+    expect(status.policyId).toBeNull();
   });
 
   it("derives the countdown from the reset instant", () => {
@@ -98,10 +108,17 @@ describe("Phase 7 — usage client", () => {
     expect(formatResetClock(Number.NaN)).toBe("");
   });
 
-  it("never reports a percentage outside 0–100", () => {
-    expect(usedPercent(makeUsage({ used: 0 }))).toBe(0);
-    expect(usedPercent(makeUsage({ used: 25 }))).toBe(50);
-    expect(usedPercent(makeUsage({ used: 50 }))).toBe(100);
-    expect(usedPercent(makeUsage({ allowance: 0, used: 5 }))).toBe(0);
+  it("only computes a percentage when policy and usage are known", () => {
+    const configured = (used: number, allowance = 50) =>
+      makeUsage({ policyConfigured: true, used, allowance });
+
+    expect(usedPercent(configured(0))).toBe(0);
+    expect(usedPercent(configured(25))).toBe(50);
+    expect(usedPercent(configured(50))).toBe(100);
+    expect(usedPercent(configured(500))).toBe(100);
+    expect(usedPercent(makeUsage())).toBe(0);
+    expect(
+      usedPercent(makeUsage({ policyConfigured: true, allowance: 50, used: null })),
+    ).toBe(0);
   });
 });

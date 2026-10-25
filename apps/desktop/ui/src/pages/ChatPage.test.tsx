@@ -191,6 +191,36 @@ describe("Phase 25 — ChatPage component", () => {
     expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
   });
 
+  it("fails closed while no approved profile is available, even with a ready engine", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <ChatPage
+        conversation={makeConversationMock({ draft: "hello" })}
+        workspace={makeWorkspaceMock()}
+        engineStatus={makeStatus()}
+        statusError={null}
+        engineReady={true}
+        desktop={true}
+        contextPlan={null}
+        retrievalResult={null}
+        evidenceReport={null}
+        textareaRef={createRef<HTMLTextAreaElement>()}
+        focusNonce={0}
+        onSubmit={onSubmit}
+        usage={makeUsageMock()}
+        models={makeModelsMock({ entries: [], selected: null, loading: true, selectionError: null })}
+      />,
+    );
+
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Waiting for an approved local model profile")).toBeTruthy();
+    await user.keyboard("{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("renders conversation header, engine status chip, and local-only chip", () => {
     const conversation = makeConversationMock();
     const workspace = makeWorkspaceMock();

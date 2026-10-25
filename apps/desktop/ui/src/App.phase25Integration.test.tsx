@@ -130,6 +130,19 @@ describe("Phase 25 — Developer Account & Founder Control Centre Integration", 
           },
         });
       }
+      if (cmd === "account_get_profile") {
+        return Promise.resolve({
+          id: "usr_founder_01",
+          name: "Hacky Founder",
+          email: "founder@nexora.dev",
+          emailVerified: true,
+          hasPassword: true,
+          providers: ["password"],
+          planId: "free",
+          planName: "Free",
+          createdAt: "2026-01-15T12:00:00Z",
+        });
+      }
       if (cmd === "auth_change_password") {
         return Promise.resolve({
           status: "success",

@@ -27,11 +27,18 @@ argon2 = "0.5"
 # sha256-at-rest for high-entropy tokens (not Argon2id; fast hash is correct
 # for 256-bit secrets and allows indexed lookup). Never used for passwords.
 sha2 = "0.10"
-# PostgreSQL driver + migration runner (Phase 23C: runtime account/verification
-# storage; promoted from dev-dependencies — the service now performs real,
-# parameterized database operations). Runtime queries only; no compile-time DB
-# access. TLS features deliberately omitted (loopback/dev posture; see docs).
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "migrate"] }
+# PostgreSQL driver + embedded migration runner (Phase 13). SQL queries remain
+# runtime-checked; the `macros` feature is used only by `migrate!()` so the
+# release binary carries the migration files and does not depend on its cwd or
+# a source checkout. Rustls is enabled for the production PostgreSQL TLS
+# configuration documented in docs/PRODUCTION_DEPLOYMENT_AND_SECURITY.md.
+sqlx = { version = "0.8", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "migrate",
+    "macros",
+    "tls-rustls-ring-webpki",
+] }
 # HTTPS client for the server-side Google code exchange (Phase 23F, plan §2.5:
 # "Code exchange: performed by the auth server"; the client secret lives only
 # in the server secret store). rustls avoids OpenSSL system dependencies;

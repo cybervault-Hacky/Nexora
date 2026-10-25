@@ -258,10 +258,16 @@ export interface GenerationEvent {
   text?: string;
 }
 
+export interface UsageWarning {
+  code: string;
+  message: string;
+}
+
 export interface GenerationOutcome {
   requestId: string;
   finishReason: string | null;
   cancelled: boolean;
+  usageWarnings: UsageWarning[];
 }
 
 export interface InferenceError {
@@ -270,20 +276,19 @@ export interface InferenceError {
 }
 
 /**
- * Daily free usage, as reported by `src-tauri/src/usage/mod.rs`.
- *
- * Every field is authoritative. The UI never derives remaining usage or the
- * reset instant; it only formats them.
+ * Device-local generation accounting, as reported by `src-tauri/src/usage/mod.rs`.
+ * Missing quota fields mean there is no approved local limit configured; a
+ * missing `used` value means the persisted counter could not be trusted.
  */
 export interface UsageStatus {
-  allowance: number;
-  used: number;
-  remaining: number;
+  policyConfigured: boolean;
+  allowance: number | null;
+  used: number | null;
+  remaining: number | null;
   /** UTC calendar day, `YYYY-MM-DD`. */
   day: string;
-  resetAtMs: number;
-  policyId: string;
-  provisional: boolean;
+  resetAtMs: number | null;
+  policyId: string | null;
   exhausted: boolean;
   notice: string | null;
   error: string | null;

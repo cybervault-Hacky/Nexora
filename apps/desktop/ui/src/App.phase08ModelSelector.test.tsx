@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -197,7 +197,7 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
           ? "Sonnet multi-file analysis complete."
           : "Mini fast helper answer.";
       onEvent({ type: "delta", requestId: request.requestId, text: reply });
-      return { requestId: request.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: request.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
 
     const user = userEvent.setup();
@@ -253,6 +253,68 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
 
     // Verify exact per-turn profile IDs sent to core
     expect(submittedProfiles).toEqual([NEXORA_MINI_ID, NEXORA_SONNET_ID]);
+
+    // Opening and closing auth must leave the selected model, active transcript, and composer draft untouched.
+    await user.type(composer, "Keep this draft while I review account options");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("dialog", { name: "Sign in to Nexora" })).toBeTruthy();
+    expect(composer.value).toBe("Keep this draft while I review account options");
+    expect(within(trigger).getByText("Nexora Sonnet")).toBeTruthy();
+    expect(document.querySelector(".workspace")?.textContent).toContain("Mini fast helper answer.");
+    expect(document.querySelector(".app")?.hasAttribute("inert")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Close authentication dialog" }));
+    expect(composer.value).toBe("Keep this draft while I review account options");
+    expect(within(trigger).getByText("Nexora Sonnet")).toBeTruthy();
+    expect(
+      within(screen.getByRole("main")).getByText("Sonnet multi-file analysis complete."),
+    ).toBeTruthy();
+    expect(document.querySelector(".app")?.hasAttribute("inert")).toBe(false);
+
+    // Plans navigation must preserve the App-owned local conversation, draft, and model selection.
+    act(() => {
+      window.location.hash = "#/plans";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    expect(await screen.findByRole("heading", { name: "Plans & Premium" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("No account is signed in");
+    expect(invokeMock.mock.calls.some(([command]) => command === "billing_get_status")).toBe(false);
+
+    act(() => {
+      window.location.hash = "#/chat";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    const plansRestoredComposer = (await screen.findByRole("textbox", {
+      name: "Message Nexora",
+    })) as HTMLTextAreaElement;
+    const plansRestoredTrigger = await screen.findByTestId("model-selector-trigger");
+    expect(plansRestoredComposer.value).toBe("Keep this draft while I review account options");
+    expect(within(plansRestoredTrigger).getByText("Nexora Sonnet")).toBeTruthy();
+    expect(
+      within(screen.getByRole("main")).getByText("Sonnet multi-file analysis complete."),
+    ).toBeTruthy();
+
+    // Opening the signed-out account page and returning to Chat retains the same local state.
+    act(() => {
+      window.location.hash = "#/account";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    expect(await screen.findByRole("region", { name: "Account profile" })).toBeTruthy();
+    expect(screen.getByText(/Local Guest Mode/i)).toBeTruthy();
+
+    act(() => {
+      window.location.hash = "#/chat";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    const restoredComposer = (await screen.findByRole("textbox", {
+      name: "Message Nexora",
+    })) as HTMLTextAreaElement;
+    const restoredTrigger = await screen.findByTestId("model-selector-trigger");
+    expect(restoredComposer.value).toBe("Keep this draft while I review account options");
+    expect(within(restoredTrigger).getByText("Nexora Sonnet")).toBeTruthy();
+    expect(
+      within(screen.getByRole("main")).getByText("Sonnet multi-file analysis complete."),
+    ).toBeTruthy();
   });
 
   it("blocks unsafe switching during active streaming and keeps submitted request profileId immutable", async () => {
@@ -283,7 +345,7 @@ describe("Phase 08 — Dedicated Chat Header Model Selector Integration", () => 
       await new Promise<void>((resolve) => {
         finishStream = resolve;
       });
-      return { requestId: request.requestId, finishReason: "stop", cancelled: false };
+      return { requestId: request.requestId, finishReason: "stop", cancelled: false, usageWarnings: [] };
     });
 
     const user = userEvent.setup();
