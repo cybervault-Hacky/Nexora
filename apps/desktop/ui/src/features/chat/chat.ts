@@ -1,4 +1,5 @@
 import type { ChatTurn } from "../../lib/ipc";
+import type { ImageReferenceMetadata, PreparedImageTo3dTask } from "./imageTo3dTask";
 
 export const MAX_MESSAGE_LENGTH = 32_000;
 export const WARN_MESSAGE_LENGTH = 4_000;
@@ -19,6 +20,10 @@ export interface ChatMessage {
   failure?: string;
   /** Model profile active when this assistant reply was generated. */
   profileId?: string;
+  /** Prevents local media-status prompts from entering coding-model turns. */
+  localOnly?: boolean;
+  imageReference?: ImageReferenceMetadata;
+  imageTo3dTask?: PreparedImageTo3dTask;
 }
 
 export type ComposerErrorCode = "empty" | "too_long" | "busy";
@@ -93,7 +98,8 @@ export function toChatTurns(messages: readonly ChatMessage[]): ChatTurn[] {
       (message) =>
         (message.role === "user" || message.role === "assistant") &&
         message.content.trim().length > 0 &&
-        message.state !== "error",
+        message.state !== "error" &&
+        !message.localOnly,
     )
     .map((message) => ({ role: message.role, content: message.content }));
 }

@@ -35,6 +35,7 @@ import { clearSymbolIndex, getSymbolIndex, type SymbolIndex } from "./lib/symbol
 import { useAppStatus } from "./lib/useAppStatus";
 import { getWorkspaceSettings, saveWorkspaceSettings } from "./lib/workspaceSettings";
 import { AccountPage } from "./pages/AccountPage";
+import { AppIntegrationsPage } from "./pages/AppIntegrationsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { CodeIntelligencePage } from "./pages/CodeIntelligencePage";
 import { FounderPage } from "./pages/FounderPage";
@@ -727,6 +728,8 @@ export default function App() {
               onUnload={desktop ? handleUnload : undefined}
               onModelsChanged={modelRefresh}
             />
+          ) : route.id === "integrations" ? (
+            <AppIntegrationsPage />
           ) : route.id === "plans" ? (
             <PlansPage
               isAuthenticated={auth.isAuthenticated}

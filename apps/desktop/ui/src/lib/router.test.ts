@@ -27,6 +27,7 @@ describe("parseRoute", () => {
     expect(parseRoute("#/intelligence").id).toBe("code");
     expect(parseRoute("#/models").id).toBe("models");
     expect(parseRoute("#/engine").id).toBe("models");
+    expect(parseRoute("#/integrations").id).toBe("integrations");
     expect(parseRoute("#/plans").id).toBe("plans");
     expect(parseRoute("#/billing").id).toBe("plans");
     expect(parseRoute("#/pricing").id).toBe("plans");
@@ -52,6 +53,9 @@ describe("parseRoute", () => {
     window.location.hash = "";
     navigateTo("chat");
     expect(parseRoute(window.location.hash).id).toBe("chat");
+    navigateTo("integrations");
+    expect(window.location.hash).toBe(routeHref("integrations"));
+    expect(ROUTES.some((r) => r.id === "integrations")).toBe(true);
     navigateTo("plans");
     expect(window.location.hash).toBe(routeHref("plans"));
     expect(ROUTES.some((r) => r.id === "plans")).toBe(true);

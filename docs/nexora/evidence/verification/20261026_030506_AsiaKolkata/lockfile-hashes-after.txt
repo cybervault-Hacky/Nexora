@@ -1,0 +1,4 @@
+300514daa9687a8ee06442052e2e3ba39d1ea42895d97b72a60b3d5149d00b61  pnpm-lock.yaml
+f2c500afd5c8e480e955299e8e83385d153983afa8aed6291c7a192712db2780  apps/desktop/src-tauri/Cargo.lock
+
+Comparison: these exactly match the pre-install SHA-256 values captured before `corepack pnpm install --frozen-lockfile` in pnpm-install.log. The install did not alter either lockfile.

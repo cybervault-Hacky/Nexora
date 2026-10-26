@@ -3,6 +3,7 @@ import {
   isDesktopShell,
   previewStatus,
   type AppStatus,
+  type AdaptiveCapabilities,
   type GenerateRequestPayload,
   type GenerationEvent,
   type GenerationOutcome,
@@ -205,6 +206,11 @@ export function unloadModel(): Promise<AppStatus> {
 
 export function fetchSystemInfo(): Promise<SystemInfo> {
   return call<SystemInfo>("get_system_info");
+}
+
+/** Fetches a fresh native capability snapshot on demand; no UI is coupled to it. */
+export function fetchAdaptiveCapabilities(): Promise<AdaptiveCapabilities> {
+  return call<AdaptiveCapabilities>("get_adaptive_capabilities");
 }
 
 /**

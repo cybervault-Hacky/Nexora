@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isDesktopShell } from "./ipc";
+import type { ImageReferenceMetadata, PreparedImageTo3dTask } from "../features/chat/imageTo3dTask";
 
 export interface HistoryMessage {
   id: string;
@@ -9,6 +10,34 @@ export interface HistoryMessage {
   state?: string;
   failure?: string;
   profileId?: string;
+  /** Local-only exchanges are visible in history but excluded from model turns. */
+  localOnly?: boolean;
+  imageReference?: ImageReferenceMetadata;
+  imageTo3dTask?: PreparedImageTo3dTask;
+}
+
+function validImageReference(value: unknown): value is ImageReferenceMetadata {
+  if (!value || typeof value !== "object") return false;
+  const reference = value as Partial<ImageReferenceMetadata>;
+  return reference.schemaVersion === 1 &&
+    typeof reference.referenceId === "string" && /^[a-f0-9]{32}$/i.test(reference.referenceId) &&
+    reference.format === "image/png" && Number.isInteger(reference.width) && reference.width! > 0 && reference.width! <= 2048 &&
+    Number.isInteger(reference.height) && reference.height! > 0 && reference.height! <= 2048 &&
+    reference.width! * reference.height! <= 4 * 1024 * 1024 &&
+    Number.isSafeInteger(reference.sizeBytes) && reference.sizeBytes! > 0 && reference.sizeBytes! <= 8 * 1024 * 1024 &&
+    (reference.description === undefined || (typeof reference.description === "string" && Array.from(reference.description).length <= 32_000)) &&
+    reference.processingState === "validated" && Array.isArray(reference.validationErrors) && reference.validationErrors.length === 0;
+}
+
+function validPreparedTask(value: unknown): value is PreparedImageTo3dTask {
+  if (!value || typeof value !== "object") return false;
+  const task = value as Partial<PreparedImageTo3dTask>;
+  return task.schemaVersion === 1 && task.taskType === "image_to_3d" &&
+    typeof task.userRequest === "string" && task.userRequest.trim().length > 0 && Array.from(task.userRequest).length <= 32_000 &&
+    Array.isArray(task.references) && task.references.length === 1 && task.references.every(validImageReference) &&
+    Array.isArray(task.knownConstraints) && task.knownConstraints.length <= 16 && task.knownConstraints.every((item) => typeof item === "string" && item.length <= 1_000) &&
+    Array.isArray(task.missingInformation) && task.missingInformation.length <= 16 && task.missingInformation.every((item) => typeof item === "string" && item.length <= 1_000) &&
+    task.analysisAvailable === false && task.nextStage === "awaiting_supported_vision_capability";
 }
 
 export interface PersistedConversation {
@@ -81,7 +110,11 @@ function validateBrowserFile(file: FallbackFile): void {
         Array.from(m.content).length > 400_000 || !timestamp(m.createdAt) ||
         (m.state !== undefined && !["complete","stopped","streaming","error"].includes(m.state)) ||
         (m.failure !== undefined && (typeof m.failure !== "string" || Array.from(m.failure).length > 2000)) ||
-        (m.profileId !== undefined && (typeof m.profileId !== "string" || !isValidProfileId(m.profileId))))
+        (m.profileId !== undefined && (typeof m.profileId !== "string" || !isValidProfileId(m.profileId))) ||
+        (m.localOnly !== undefined && typeof m.localOnly !== "boolean") ||
+        (m.imageReference !== undefined && (!validImageReference(m.imageReference) || m.role !== "user" || m.localOnly !== true)) ||
+        (m.imageTo3dTask !== undefined && (!validPreparedTask(m.imageTo3dTask) || m.role !== "user" || m.localOnly !== true ||
+          !validImageReference(m.imageReference) || m.imageTo3dTask.references[0]?.referenceId !== m.imageReference.referenceId)))
         throw new Error("Invalid message");
       messageIds.add(m.id);
     }

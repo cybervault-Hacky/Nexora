@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelGeneration, generate, toInferenceError } from "../../lib/inference";
 import type { GenerationOutcome } from "../../lib/ipc";
 import { isApprovedProfileId } from "../models/readiness";
+import { deleteImageEditSource } from "../../lib/imageEditing";
+import type { ImageReferenceMetadata, PreparedImageTo3dTask } from "./imageTo3dTask";
 import {
   BUSY_ERROR,
   createAssistantMessage,
@@ -165,6 +167,9 @@ export function usePersistentConversation({
           state: m.state === "streaming" ? "stopped" : m.state,
           failure: m.failure,
           ...(m.profileId ? { profileId: m.profileId } : {}),
+          ...(m.localOnly ? { localOnly: true } : {}),
+          ...(m.imageReference ? { imageReference: m.imageReference } : {}),
+          ...(m.imageTo3dTask ? { imageTo3dTask: m.imageTo3dTask } : {}),
         })),
       };
       activeRef.current = payload;
@@ -578,6 +583,73 @@ export function usePersistentConversation({
     [launchGeneration],
   );
 
+  /** Adds a local capability-status exchange without entering the coding-model stream. */
+  const recordLocalExchange = useCallback(
+    (
+      userText: string,
+      assistantText: string,
+      imageTask?: { reference: ImageReferenceMetadata; task: PreparedImageTo3dTask },
+    ): boolean => {
+      if (loadingRef.current) return false;
+      if (sessionRef.current) {
+        setError(BUSY_ERROR);
+        return false;
+      }
+
+      const now = Date.now();
+      if (shouldIgnoreSubmission(lastSubmitAtRef.current, now)) return false;
+      const validation = validateDraft(userText);
+      if (!validation.ok) {
+        setError(validation.error);
+        return false;
+      }
+      const reply = assistantText.trim();
+      if (!reply) return false;
+
+      if (!activeRef.current) {
+        const conversation: PersistedConversation = {
+          id: createId(),
+          title: "New conversation",
+          createdAt: now,
+          updatedAt: now,
+          messages: [],
+        };
+        activeRef.current = conversation;
+        conversationRef.current = conversation.id;
+        setActiveId(conversation.id);
+      }
+
+      const userMessage: ChatMessage = {
+        ...createUserMessage(validation.text, createId(), now),
+        localOnly: true,
+        ...(imageTask ? { imageReference: imageTask.reference, imageTo3dTask: imageTask.task } : {}),
+      };
+      const assistantMessage: ChatMessage = {
+        id: createId(),
+        role: "assistant",
+        content: reply,
+        createdAt: now,
+        state: "complete",
+        localOnly: true,
+      };
+      const next = [...messagesRef.current, userMessage, assistantMessage];
+      lastSubmitAtRef.current = now;
+      if (draftRef.current.trim() === validation.text) {
+        draftRef.current = "";
+        setDraftState("");
+      }
+      setError(null);
+      setRuntimeError(null);
+      if (activeRef.current.title === "New conversation") {
+        activeRef.current.title = deriveTitle(next);
+        setActiveTitle(activeRef.current.title);
+      }
+      commit(next);
+      return true;
+    },
+    [commit],
+  );
+
   const retry = useCallback(
     (options?: { contextBlock?: string }) => {
       if (loadingRef.current) return;
@@ -648,8 +720,18 @@ export function usePersistentConversation({
       if (activeRef.current?.id === id) detach();
       try {
         await flush();
+        const snapshot = activeRef.current?.id === id
+          ? activeRef.current
+          : await loadConversation(id).catch(() => null);
         await deleteConversation(id);
+        const referenceIds = [...new Set((snapshot?.messages ?? [])
+          .flatMap((message) => message.imageReference ? [message.imageReference.referenceId] : []))];
+        const cleanup = await Promise.allSettled(referenceIds.map((referenceId) => deleteImageEditSource(referenceId)));
         if (!mountedRef.current) return;
+        if (cleanup.some((result) => result.status === "rejected")) {
+          setSaveError("Conversation deleted, but one or more managed image references could not be removed.");
+          setSaveStatus("error");
+        }
         setConversations((prev) => prev.filter((c) => c.id !== id));
         if (activeRef.current?.id === id) {
           activeRef.current = null;
@@ -698,6 +780,7 @@ export function usePersistentConversation({
     dismissLoadError,
     refreshList,
     submit,
+    recordLocalExchange,
     retry,
     stop,
     newChat,

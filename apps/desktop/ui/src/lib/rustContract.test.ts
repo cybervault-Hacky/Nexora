@@ -47,6 +47,18 @@ const sources = {
   exportCommands: readFileSync(join(rustSrcDir, "export/commands.rs"), "utf8"),
   usageMod: readFileSync(join(rustSrcDir, "usage/mod.rs"), "utf8"),
   usageCommands: readFileSync(join(rustSrcDir, "usage/commands.rs"), "utf8"),
+  mediaModelCommands: readFileSync(join(rustSrcDir, "media_models/commands.rs"), "utf8"),
+  imageGenerationCommands: readFileSync(join(rustSrcDir, "image_generation/commands.rs"), "utf8"),
+  imageEditingCommands: readFileSync(join(rustSrcDir, "image_editing/commands.rs"), "utf8"),
+  sonnetImageGenerationCommands: readFileSync(join(rustSrcDir, "sonnet_image_generation/commands.rs"), "utf8"),
+  sonnetImageGenerationAdapter: readFileSync(join(rustSrcDir, "sonnet_image_generation/adapter.rs"), "utf8"),
+  videoGenerationCommands: readFileSync(join(rustSrcDir, "video_generation/commands.rs"), "utf8"),
+  videoGenerationAdapter: readFileSync(join(rustSrcDir, "video_generation/adapter.rs"), "utf8"),
+  videoEditingCommands: readFileSync(join(rustSrcDir, "video_editing/commands.rs"), "utf8"),
+  videoEditingAdapter: readFileSync(join(rustSrcDir, "video_editing/adapter.rs"), "utf8"),
+  integrationCommands: readFileSync(join(rustSrcDir, "integrations/commands.rs"), "utf8"),
+  integrationDetector: readFileSync(join(rustSrcDir, "integrations/detector.rs"), "utf8"),
+  integrationMod: readFileSync(join(rustSrcDir, "integrations/mod.rs"), "utf8"),
   historyStorage: readFileSync(join(rustSrcDir, "history/storage.rs"), "utf8"),
   historyCommands: readFileSync(join(rustSrcDir, "history/commands.rs"), "utf8"),
   authMod: readFileSync(join(rustSrcDir, "auth/mod.rs"), "utf8"),
@@ -58,6 +70,14 @@ const exportSource = readFileSync(join(uiLibDir, "export.ts"), "utf8");
 const usageSource = readFileSync(join(uiLibDir, "usage.ts"), "utf8");
 const historySource = readFileSync(join(uiLibDir, "history.ts"), "utf8");
 const authSource = readFileSync(join(uiLibDir, "auth.ts"), "utf8");
+const mediaModelsSource = readFileSync(join(uiLibDir, "mediaModels.ts"), "utf8");
+const imageGenerationSource = readFileSync(join(uiLibDir, "imageGeneration.ts"), "utf8");
+const imageEditingSource = readFileSync(join(uiLibDir, "imageEditing.ts"), "utf8");
+const sonnetImageGenerationSource = readFileSync(join(uiLibDir, "sonnetImageGeneration.ts"), "utf8");
+const videoGenerationSource = readFileSync(join(uiLibDir, "videoGeneration.ts"), "utf8");
+const videoEditingSource = readFileSync(join(uiLibDir, "videoEditing.ts"), "utf8");
+const integrationSource = readFileSync(join(uiLibDir, "../features/integrations/native.ts"), "utf8");
+const integrationCatalogueSource = readFileSync(join(uiLibDir, "../features/integrations/catalogue.ts"), "utf8");
 
 function group(match: ArrayLike<string | undefined>, index: number): string {
   const value = match[index];
@@ -452,6 +472,119 @@ const STRUCTS: StructFixture[] = [
     wire: ["selection", "destination", "overwrite"],
     direction: "request",
   },
+  {
+    rust: "VideoGenerationCapabilityStatus",
+    file: "videoGenerationAdapter",
+    ts: "VideoGenerationCapabilityStatus",
+    wire: [
+      "candidateModelId",
+      "candidateModelName",
+      "task",
+      "modelRegisteredWithMediaManager",
+      "requiredModelFileCount",
+      "registeredModelSizeBytes",
+      "modelLifecycleState",
+      "managerReportedDownloaded",
+      "managerReportedIntegrityValidated",
+      "managerRecordedRequiredFileCount",
+      "managerStateNote",
+      "modelLoaded",
+      "usableForTextToVideo",
+      "runtimeCompatibilityStatus",
+      "runtimePackageVersionPinned",
+      "modelLicense",
+      "modelLicenseReference",
+      "runtimeName",
+      "runtimeSourceRevision",
+      "runtimeReference",
+      "upstreamWindowsSupportDocumented",
+      "upstreamBackendsDocumented",
+      "runtimeBundleAvailable",
+      "runtimeBinaryRevisionVerified",
+      "runtimeProbePerformed",
+      "modelRuntimeCompatibilityConfirmed",
+      "modelSpecificResourceFitConfirmed",
+      "hardwareCompatibility",
+      "generationCommandAvailable",
+      "nexoraOutputPipelineAvailable",
+      "upstreamVideoContainersDocumented",
+      "selectedDiffusionWeights",
+      "selectedTextEncoder",
+      "resourceEvidence",
+      "limitations",
+    ],
+  },
+  {
+    rust: "SonnetImageGenerationCapabilityStatus",
+    file: "sonnetImageGenerationAdapter",
+    ts: "SonnetImageGenerationCapabilityStatus",
+    wire: [
+      "candidateModelId",
+      "candidateModelName",
+      "parameterCount",
+      "officialModelCard",
+      "modelCardSourceRevision",
+      "officialModelRepository",
+      "officialRepositoryReportedMd5",
+      "modelWeightsRevision",
+      "modelWeightsSizeBytes",
+      "modelWeightsSha256",
+      "registeredWithMediaModelManager",
+      "requiredComponentCount",
+      "requiredAssetManifestComplete",
+      "downloadable",
+      "licenseIdentifier",
+      "licenseReference",
+      "publisherUseLimitations",
+      "runtimeName",
+      "runtimeSourceRevision",
+      "runtimeSourceGuide",
+      "upstreamRuntimeSupportDocumented",
+      "upstreamWindowsSupportDocumented",
+      "upstreamBackendsDocumented",
+      "runtimeBundleConfigured",
+      "runtimeProbePerformed",
+      "runtimeBinaryRevisionVerified",
+      "modelRuntimeCompatibilityConfirmed",
+      "hardwareCompatibility",
+      "minimumRamBytes",
+      "minimumVramBytes",
+      "resourceEvidence",
+      "generationCommandAvailable",
+      "outputValidationPipelineAvailable",
+      "inferenceUsable",
+      "limitations",
+    ],
+  },
+  {
+    rust: "VideoEditingCapabilityStatus",
+    file: "videoEditingAdapter",
+    ts: "VideoEditingCapabilityStatus",
+    wire: [
+      "conventionalProcessingAvailable",
+      "supportedOperationCount",
+      "sourceVideoImportAvailable",
+      "inputFormatContractEstablished",
+      "externalMediaRuntimeConfigured",
+      "runtimeVersionPinned",
+      "runtimeProbePerformed",
+      "runtimeCompatibilityStatus",
+      "windowsCompatibility",
+      "supportedInputFormats",
+      "supportedOutputFormats",
+      "outputArtifactStoreAvailable",
+      "outputValidationAvailable",
+      "processingProgressAvailable",
+      "cancellationAvailable",
+      "aiEnhancementCandidateModelId",
+      "aiEnhancementModelRegistered",
+      "aiEnhancementRuntimeAvailable",
+      "aiEnhancementUsable",
+      "hardwareCompatibility",
+      "resourceEvidence",
+      "limitations",
+    ],
+  },
 ];
 
 describe("serialised structs match the TypeScript interfaces", () => {
@@ -581,6 +714,71 @@ describe("enumerations match the TypeScript unions", () => {
   });
 });
 
+describe("Blender installation detection boundary", () => {
+  it("keeps native detection states aligned with the UI tagged union", () => {
+    const attributes = attributesBefore(
+      sources.integrationCommands,
+      "pub enum InstallationDetectionResult {",
+    );
+    expect(attributes).toContain('tag = "state"');
+    expect(attributes).toContain('rename_all = "snake_case"');
+
+    const nativeStates = [
+      ...enumBody(sources.integrationCommands, "InstallationDetectionResult").matchAll(
+        /^\s{4}([A-Z]\w*)\s*\{/gm,
+      ),
+    ].map((match) => snakeCase(group(match, 1)));
+    const typeStart = integrationCatalogueSource.indexOf("export type InstallationStatus =");
+    const typeEnd = integrationCatalogueSource.indexOf("export type ConnectionAction", typeStart);
+    const uiStates = [
+      ...integrationCatalogueSource
+        .slice(typeStart, typeEnd)
+        .matchAll(/state:\s*"([a-z_]+)"/g),
+    ].map((match) => group(match, 1));
+
+    expect(typeStart).toBeGreaterThanOrEqual(0);
+    expect(uiStates).toEqual(expect.arrayContaining(nativeStates));
+    expect(uiStates).toEqual(expect.arrayContaining(["unknown", "checking"]));
+    expect(sorted(nativeStates)).toEqual([
+      "access_denied",
+      "error",
+      "found",
+      "not_found",
+      "unsupported",
+    ]);
+  });
+
+  it("preserves the detector's camelCase nested result contract", () => {
+    expect(sources.integrationCommands).toContain('#[serde(rename_all = "camelCase")]');
+    expect(sources.integrationCommands).toContain('#[serde(rename = "incompleteLocations")]');
+    expect(sources.integrationCommands).toContain('#[serde(rename = "checkedLocations")]');
+    expect(sources.integrationCommands).toContain('#[serde(rename = "rejectedCandidates")]');
+    expect(integrationCatalogueSource).toContain("installations: readonly {");
+    expect(integrationCatalogueSource).toContain('method: "standard_directory"');
+    expect(integrationCatalogueSource).toContain('confidence: "candidate_only"');
+    expect(integrationCatalogueSource).toContain("incompleteLocations: readonly string[]");
+  });
+
+  it("registers the bounded detector without launching candidates or scanning recursively", () => {
+    expect(sources.integrationMod).toContain("pub mod detector;");
+    expect(sources.integrationCommands).toContain("super::detector::detect_blender_installations()");
+    expect(sources.integrationDetector).toContain("MAX_ROOT_ENTRIES: usize = 128");
+    expect(sources.integrationDetector).toContain("MAX_FOUND_CANDIDATES: usize = 16");
+    expect(sources.integrationDetector).toContain("fs::read_dir(root)");
+    expect(sources.integrationDetector).not.toMatch(/Command::new|std::process::Command|walkdir|WalkDir/);
+    expect(sources.integrationDetector).toContain("InstallationDetectionResult::Unsupported");
+  });
+
+  it("keeps a found result explicitly candidate-only with an unknown version", () => {
+    expect(sources.integrationCommands).toContain("pub version: Option<String>");
+    expect(sources.integrationCommands).toContain("pub confidence: DetectionConfidence");
+    expect(sources.integrationCommands).toContain("pub validation: String");
+    expect(sources.integrationDetector).toContain("version: None");
+    expect(sources.integrationDetector).toContain("DetectionConfidence::CandidateOnly");
+    expect(sources.integrationDetector).toContain("Publisher identity, Blender product metadata, version, and compatibility are not verified.");
+  });
+});
+
 describe("the Rust core is internally consistent", () => {
   it("only calls InferenceError constructors that exist", () => {
     const defined = new Set(
@@ -644,7 +842,7 @@ function rustCommands(): RustCommand[] {
   const pattern =
     /^#\[(tauri::command[^\]]*)\]\s*\n(?:pub )?(?:async )?fn (\w+)\(([\s\S]*?)\)\s*->/gm;
 
-  const combined = `${sources.commands}\n${sources.exportCommands}\n${sources.usageCommands}`;
+  const combined = `${sources.commands}\n${sources.exportCommands}\n${sources.usageCommands}\n${sources.mediaModelCommands}\n${sources.imageGenerationCommands}\n${sources.imageEditingCommands}\n${sources.sonnetImageGenerationCommands}\n${sources.videoGenerationCommands}\n${sources.videoEditingCommands}\n${sources.integrationCommands}`;
 
   return [...combined.matchAll(pattern)].map((match) => {
     const args = splitTopLevel(group(match, 3))
@@ -669,7 +867,7 @@ function registeredCommands(): string[] {
     throw new Error("generate_handler![...] not found in lib.rs");
   }
 
-  return [...group(match, 1).matchAll(/(?:inference|export|usage)::commands::(\w+)/g)].map(
+  return [...group(match, 1).matchAll(/(?:inference|export|usage|media_models|image_generation|image_editing|sonnet_image_generation|video_generation|video_editing|integrations)::commands::(\w+)/g)].map(
     (command) => group(command, 1),
   );
 }
@@ -677,9 +875,9 @@ function registeredCommands(): string[] {
 /** Command name → argument keys the UI sends, from every call/invoke site. */
 function uiCommands(): Map<string, string[]> {
   const calls = new Map<string, string[]>();
-  const pattern = /\b(?:call|invoke)<\w+>\("(\w+)"(?:,\s*\{([\s\S]*?)\})?\)/g;
+  const pattern = /\b(?:call|invoke)<\w+>\(\s*"(\w+)"(?:,\s*\{([\s\S]*?)\})?\s*,?\s*\)/g;
 
-  for (const match of `${inferenceSource}\n${exportSource}\n${usageSource}`.matchAll(pattern)) {
+  for (const match of `${inferenceSource}\n${exportSource}\n${usageSource}\n${mediaModelsSource}\n${imageGenerationSource}\n${imageEditingSource}\n${sonnetImageGenerationSource}\n${videoGenerationSource}\n${videoEditingSource}\n${integrationSource}`.matchAll(pattern)) {
     const body = match[2];
     const keys =
       body === undefined
@@ -751,14 +949,23 @@ describe("Tauri command surface", () => {
     // signatures without updating the wrapper would break every call.
     expect(sorted(argless)).toEqual([
       "cancel_export",
+      "cancel_local_image_generation",
       "cancel_model_download",
       "check_model_readiness",
+      "get_adaptive_capabilities",
       "get_app_status",
+      "get_blender_detection_status",
+      "get_local_image_editing_status",
+      "get_local_image_generation_status",
+      "get_local_video_editing_status",
+      "get_local_video_generation_status",
       "get_model_catalog",
       "get_model_profile",
       "get_settings",
+      "get_sonnet_image_generation_status",
       "get_system_info",
       "get_usage_status",
+      "list_media_models",
       "load_model",
       "unload_model",
     ]);
@@ -779,6 +986,10 @@ describe("Tauri command surface", () => {
     expect(byName.get("verify_model")).toEqual(["path", "profileId"]);
     expect(byName.get("get_disk_space")).toEqual(["targetDir"]);
     expect(byName.get("select_model")).toEqual(["id"]);
+    expect(byName.get("generate_local_image")).toEqual(["request"]);
+    expect(byName.get("get_generated_image_artifact")).toEqual(["artifactId"]);
+    expect(byName.get("import_image_edit_source")).toEqual(["request"]);
+    expect(byName.get("get_image_edit_source")).toEqual(["sourceId"]);
     expect(byName.get("plan_workspace_export")).toEqual(["selection"]);
     expect(byName.get("suggest_export_path")).toEqual(["kind", "relativePath"]);
     expect(byName.get("export_single_file")).toEqual(["onEvent", "request"]);

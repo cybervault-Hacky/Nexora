@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 
 export type IconName =
   | "activity"
+  | "apps"
   | "alert"
   | "arrow-up"
   | "branch"
@@ -41,6 +42,14 @@ const ICONS: Record<IconName, ReactElement> = {
   activity: (
     <>
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </>
+  ),
+  apps: (
+    <>
+      <rect x="4" y="4" width="6.5" height="6.5" rx="1.2" />
+      <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2" />
+      <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2" />
+      <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2" />
     </>
   ),
   alert: (

@@ -232,6 +232,421 @@ export interface SystemInfo {
   platform: string;
 }
 
+/** Confidence attached to best-effort native hardware readings. */
+export type DetectionConfidence = "confirmed" | "estimated" | "unavailable" | "unknown";
+
+export interface HardwareDetection<T> {
+  value: T | null;
+  confidence: DetectionConfidence;
+  detail: string | null;
+}
+
+export interface AdaptiveCapabilities {
+  contractVersion: number;
+  hardware: {
+    operatingSystem: {
+      name: HardwareDetection<string>;
+      version: HardwareDetection<string>;
+      architecture: HardwareDetection<string>;
+    };
+    processor: {
+      architecture: HardwareDetection<string>;
+      availableLogicalProcessors: HardwareDetection<number>;
+      model: HardwareDetection<string>;
+    };
+    memory: {
+      totalPhysicalBytes: HardwareDetection<number>;
+      availablePhysicalBytes: HardwareDetection<number>;
+      sharedGpuBytes: HardwareDetection<number>;
+    };
+    graphicsAdapters: HardwareDetection<{
+      vendor: HardwareDetection<string>;
+      model: HardwareDetection<string>;
+      dedicatedVramBytes: HardwareDetection<number>;
+      sharedMemoryBytes: HardwareDetection<number>;
+    }[]>;
+    modelStorage: {
+      freeBytes: HardwareDetection<number>;
+      totalBytes: HardwareDetection<number>;
+    };
+    accelerationBackends: {
+      backend: "cpu" | "cuda" | "direct_ml" | "vulkan";
+      availability: DetectionConfidence;
+      detail: string;
+    }[];
+    refreshedAtUnixMs: number | null;
+  };
+  resources: {
+    totalMemoryBytes: HardwareDetection<number>;
+    availableMemoryBytes: HardwareDetection<number>;
+    dedicatedVramBytes: HardwareDetection<number>;
+    modelStorageFreeBytes: HardwareDetection<number>;
+    accelerationConfirmed: boolean;
+  };
+  selectedProfile: "light" | "balanced" | "quality";
+  profileConfidence: DetectionConfidence;
+  profileReasons: string[];
+  imageWorkload: PreliminaryWorkloadFeasibility;
+  videoWorkload: PreliminaryWorkloadFeasibility;
+}
+
+export interface PreliminaryWorkloadFeasibility {
+  status: "resource_constrained" | "resource_headroom_observed" | "unknown";
+  generationSupportConfirmed: boolean;
+  reasons: string[];
+}
+
+export type MediaModelCategory =
+  | "image_generation"
+  | "image_editing"
+  | "video_generation"
+  | "video_editing_enhancement";
+export type MediaModelLifecycleState =
+  | "not_installed"
+  | "awaiting_compatibility_assessment"
+  | "ready_to_download"
+  | "downloading"
+  | "download_interrupted"
+  | "downloaded_not_validated"
+  | "installed_validated"
+  | "incompatible"
+  | "failed"
+  | "removing";
+export type MediaModelCompatibilityStatus =
+  | "awaiting_assessment"
+  | "resource_constrained"
+  | "resource_headroom_observed"
+  | "unknown";
+export type MediaModelBackendRequirement = "cpu" | "cuda" | "direct_ml" | "vulkan";
+export type MediaModelFileRole =
+  | "weights"
+  | "text_encoder"
+  | "vae"
+  | "configuration"
+  | "tokenizer"
+  | "auxiliary";
+
+export interface MediaModelFileDefinition {
+  id: string;
+  fileName: string;
+  role: MediaModelFileRole;
+  required: boolean;
+  expectedSizeBytes: number | null;
+  expectedSha256: string | null;
+  downloadUrl: string | null;
+}
+
+export interface MediaModelDefinition {
+  id: string;
+  displayName: string;
+  category: MediaModelCategory;
+  family: string | null;
+  version: string | null;
+  source: { officialReference: string } | null;
+  license: {
+    identifier: string | null;
+    reference: string | null;
+    restrictions: string | null;
+  };
+  files: MediaModelFileDefinition[];
+  expectedTotalSizeBytes: number | null;
+  requirements: {
+    minimumRamBytes: number | null;
+    recommendedRamBytes: number | null;
+    minimumVramBytes: number | null;
+    recommendedVramBytes: number | null;
+    requiredBackend: MediaModelBackendRequirement | null;
+  };
+  inferenceRuntime: {
+    name: string;
+    officialReference: string;
+    supportedBackends: MediaModelBackendRequirement[];
+  } | null;
+  compatibility: "awaiting_assessment" | "experiment_only";
+  downloadable: boolean;
+  experimental: boolean;
+}
+
+export interface MediaModelInstallationRecord {
+  schemaVersion: number;
+  modelId: string;
+  state: MediaModelLifecycleState;
+  files: {
+    fileId: string;
+    fileName: string;
+    bytes: number;
+    sha256: string;
+    integrityVerified: boolean;
+  }[];
+  lastError: string | null;
+  updatedAtUnixMs: number;
+}
+
+export interface MediaModelCompatibilityAssessment {
+  status: MediaModelCompatibilityStatus;
+  reasons: string[];
+  runtimeCompatibilityConfirmed: false;
+}
+
+export interface MediaModelDownloadProgress {
+  modelId: string;
+  fileId: string | null;
+  receivedBytes: number;
+  totalBytes: number | null;
+}
+
+export interface MediaModelView {
+  definition: MediaModelDefinition;
+  state: MediaModelLifecycleState;
+  progress: MediaModelDownloadProgress | null;
+  usable: boolean;
+  compatibility: MediaModelCompatibilityAssessment;
+  installation: MediaModelInstallationRecord | null;
+  integrityNote: string;
+}
+
+export interface MediaModelCatalog {
+  categories: MediaModelCategory[];
+  models: MediaModelView[];
+  storageDirectoryAvailable: boolean;
+  catalogNote: string;
+}
+
+export interface MediaModelDownloadResult {
+  modelId: string;
+  state: MediaModelLifecycleState;
+  downloadedFileCount: number;
+  integrityComplete: boolean;
+  message: string;
+}
+
+export type ImageQualityProfile = "light" | "balanced" | "quality";
+export type ImageGenerationStage = "preparing" | "running" | "cancelling";
+
+export interface GenerateImageRequestPayload {
+  prompt: string;
+  profile?: ImageQualityProfile;
+  seed?: number | null;
+}
+
+export interface ActiveImageGenerationStatus {
+  requestId: string;
+  stage: ImageGenerationStage;
+  detail: string;
+}
+
+export interface ImageGenerationStatus {
+  modelId: string;
+  modelState: MediaModelLifecycleState;
+  modelValidated: boolean;
+  runtimeAvailable: boolean;
+  runtimeCpuBackendConfirmed: boolean;
+  runtimeVersionVerified: boolean;
+  modelRuntimeCompatibilityConfirmed: boolean;
+  usable: boolean;
+  selectedBackend: string | null;
+  availableRamBytes: number | null;
+  modelStorageFreeBytes: number | null;
+  outputStorageFreeBytes: number | null;
+  canAttemptGeneration: boolean;
+  activeGeneration: ActiveImageGenerationStatus | null;
+  limitations: string[];
+}
+
+/** Status-only Sonnet media capability; this is never a coding-model profile. */
+export interface SonnetImageGenerationCapabilityStatus {
+  candidateModelId: string;
+  candidateModelName: string;
+  parameterCount: number;
+  officialModelCard: string;
+  modelCardSourceRevision: string;
+  officialModelRepository: string;
+  officialRepositoryReportedMd5: string;
+  modelWeightsRevision: string | null;
+  modelWeightsSizeBytes: number | null;
+  modelWeightsSha256: string | null;
+  registeredWithMediaModelManager: boolean;
+  requiredComponentCount: number;
+  requiredAssetManifestComplete: boolean;
+  downloadable: boolean;
+  licenseIdentifier: string;
+  licenseReference: string;
+  publisherUseLimitations: string[];
+  runtimeName: string;
+  runtimeSourceRevision: string;
+  runtimeSourceGuide: string;
+  upstreamRuntimeSupportDocumented: boolean;
+  upstreamWindowsSupportDocumented: boolean;
+  upstreamBackendsDocumented: string[];
+  runtimeBundleConfigured: boolean;
+  runtimeProbePerformed: boolean;
+  runtimeBinaryRevisionVerified: boolean;
+  modelRuntimeCompatibilityConfirmed: boolean;
+  hardwareCompatibility: "unknown";
+  minimumRamBytes: number | null;
+  minimumVramBytes: number | null;
+  resourceEvidence: string;
+  generationCommandAvailable: boolean;
+  outputValidationPipelineAvailable: boolean;
+  inferenceUsable: boolean;
+  limitations: string[];
+}
+
+export interface GeneratedImageArtifact {
+  schemaVersion: number;
+  artifactId: string;
+  modelId: string;
+  modelVersion: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string;
+  seed: number;
+  profile: ImageQualityProfile;
+  steps: number;
+  backend: "cpu";
+  createdAtUnixMs: number;
+}
+
+/** Candidate metadata is reported; editing usability remains unavailable until a compatible local runtime is integrated. */
+export interface ImageEditingCapabilityStatus {
+  candidateModelId: string;
+  candidateModelName: string;
+  candidateModelCard: string;
+  modelWeightsRevision: string;
+  modelWeightsFile: string;
+  modelWeightsBytes: number;
+  modelWeightsSha256: string;
+  modelRegisteredWithMediaManager: boolean;
+  runtimeName: string;
+  runtimeReference: string;
+  licenseReference: string;
+  licenseNote: string;
+  runtimeBundleAvailable: boolean;
+  runtimeProbePerformed: boolean;
+  modelRuntimeCompatibilityConfirmed: boolean;
+  hardwareCompatibility: "unknown";
+  sourceImageImportAvailable: boolean;
+  editCommandAvailable: boolean;
+  limitations: string[];
+  /** Additive fields are optional for compatibility with older desktop cores. */
+  modelWeightsFormat?: string;
+  requiredAssetManifestComplete?: boolean;
+  requiredAssetManifestNote?: string;
+  modelDownloaded?: boolean | null;
+  modelIntegrityValidated?: boolean | null;
+  modelLoaded?: boolean;
+  runtimeSourceRevision?: string;
+  runtimePackageVersionPinned?: boolean;
+  upstreamInstructionEditingSupported?: boolean;
+  runtimeCompatibilityStatus?: "unknown" | "incompatible" | "compatible";
+  windowsCompatibility?: "unknown" | "incompatible" | "compatible";
+  minimumRamBytes?: number | null;
+  minimumVramBytes?: number | null;
+  resourceEvidence?: string;
+  supportsInstructionGuidedEditing?: boolean;
+  supportsMaskInput?: boolean;
+  supportsRegionSelection?: boolean;
+  outputValidationPipelineAvailable?: boolean;
+  usableForInstructionEditing?: boolean;
+}
+
+/** Status-only video-editing boundary; no operation is currently implemented. */
+export interface VideoEditingCapabilityStatus {
+  conventionalProcessingAvailable: boolean;
+  supportedOperationCount: number;
+  sourceVideoImportAvailable: boolean;
+  inputFormatContractEstablished: boolean;
+  externalMediaRuntimeConfigured: boolean;
+  runtimeVersionPinned: boolean;
+  runtimeProbePerformed: boolean;
+  runtimeCompatibilityStatus: "unknown" | "incompatible" | "compatible";
+  windowsCompatibility: "unknown" | "incompatible" | "compatible";
+  supportedInputFormats: string[];
+  supportedOutputFormats: string[];
+  outputArtifactStoreAvailable: boolean;
+  outputValidationAvailable: boolean;
+  processingProgressAvailable: boolean;
+  cancellationAvailable: boolean;
+  aiEnhancementCandidateModelId: string | null;
+  aiEnhancementModelRegistered: boolean;
+  aiEnhancementRuntimeAvailable: boolean;
+  aiEnhancementUsable: boolean;
+  hardwareCompatibility: "unknown";
+  resourceEvidence: string;
+  limitations: string[];
+}
+
+/** Read-only Phase 5 boundary; none of these flags imply a usable runtime. */
+export interface VideoGenerationCapabilityStatus {
+  candidateModelId: string;
+  candidateModelName: string;
+  task: "text_to_video_only";
+  modelRegisteredWithMediaManager: boolean;
+  /** Additive lifecycle fields remain optional for older desktop cores. */
+  modelLifecycleState?: MediaModelLifecycleState | null;
+  managerReportedDownloaded?: boolean | null;
+  managerReportedIntegrityValidated?: boolean | null;
+  managerRecordedRequiredFileCount?: number | null;
+  managerStateNote?: string;
+  modelLoaded?: boolean;
+  usableForTextToVideo?: boolean;
+  runtimeCompatibilityStatus?: "unknown" | "incompatible" | "compatible";
+  requiredModelFileCount: number;
+  registeredModelSizeBytes: number;
+  modelLicense: string;
+  modelLicenseReference: string;
+  runtimeName: string;
+  runtimeSourceRevision: string;
+  runtimeReference: string;
+  upstreamWindowsSupportDocumented: boolean;
+  upstreamBackendsDocumented: string[];
+  runtimeBundleAvailable: boolean;
+  runtimePackageVersionPinned?: boolean;
+  runtimeBinaryRevisionVerified: boolean;
+  runtimeProbePerformed: boolean;
+  modelRuntimeCompatibilityConfirmed: boolean;
+  modelSpecificResourceFitConfirmed: boolean;
+  hardwareCompatibility: "unknown";
+  generationCommandAvailable: boolean;
+  nexoraOutputPipelineAvailable: boolean;
+  upstreamVideoContainersDocumented: string[];
+  selectedDiffusionWeights: string;
+  selectedTextEncoder: string;
+  resourceEvidence: string;
+  limitations: string[];
+}
+
+export interface ImageEditSourceArtifact {
+  schemaVersion: number;
+  sourceId: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string;
+  createdAtUnixMs: number;
+}
+
+export interface ImportImageEditSourcePayload {
+  /** Bytes from a user-selected PNG; never a renderer-supplied filesystem path. */
+  sourceBytes: number[];
+}
+
+export interface MediaModelValidationResult {
+  modelId: string;
+  state: MediaModelLifecycleState;
+  verifiedFileCount: number;
+  integrityComplete: boolean;
+  message: string;
+}
+
+export interface MediaModelError {
+  code: string;
+  message: string;
+}
+
 export interface ChatTurn {
   role: "system" | "user" | "assistant";
   content: string;

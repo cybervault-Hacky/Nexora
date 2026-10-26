@@ -19,6 +19,7 @@ const NAV_ITEMS: Array<{ id: RouteId; label: string; icon: IconName }> = [
   { id: "projects", label: "Projects", icon: "folder" },
   { id: "code", label: "Code Intelligence", icon: "code" },
   { id: "models", label: "Local Models", icon: "chip" },
+  { id: "integrations", label: "App Integrations", icon: "apps" },
   { id: "plans", label: "Plans", icon: "activity" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];

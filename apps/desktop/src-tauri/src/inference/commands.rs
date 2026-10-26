@@ -8,6 +8,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::Notify;
 
+use crate::adaptive::{self, AdaptiveCapabilities};
 use super::acquisition::{self, DownloadEvent, DownloadOutcome, IntegrityReport};
 use super::budget;
 use super::error::{InferenceError, InferenceResult};
@@ -392,6 +393,25 @@ pub async fn get_app_status(
 #[tauri::command]
 pub fn get_system_info() -> SystemInfo {
     hardware::system_info()
+}
+
+/// Returns a fresh, read-only adaptive hardware snapshot for future local
+/// workloads. Detection is on demand and does not load or reserve resources.
+#[tauri::command]
+pub fn get_adaptive_capabilities(
+    app: AppHandle,
+    state: State<'_, InferenceState>,
+) -> AdaptiveCapabilities {
+    let settings = state.settings_snapshot();
+    let storage_path = settings
+        .model_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| default_model_dir(&app))
+        .unwrap_or_default();
+    adaptive::collect(&storage_path)
 }
 
 /// Free space at the folder models are stored in, or at a folder the caller
@@ -3206,6 +3226,9 @@ Threaded((host, port), H).serve_forever()
             state: Some("complete".into()),
             failure: None,
             profile_id: None,
+            local_only: false,
+            image_reference: None,
+            image_to_3d_task: None,
         });
         conv_a.messages.push(StoredMessage {
             id: "a-1".into(),
@@ -3215,6 +3238,9 @@ Threaded((host, port), H).serve_forever()
             state: Some("complete".into()),
             failure: None,
             profile_id: Some(registry::NEXORA_MINI_ID.into()),
+            local_only: false,
+            image_reference: None,
+            image_to_3d_task: None,
         });
         history.save(conv_a.clone()).expect("save A");
         assert_eq!(history.load(&conv_b.id).expect("load B").messages.len(), 0);
