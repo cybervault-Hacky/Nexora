@@ -86,6 +86,39 @@ describe("toChatTurns", () => {
     ]);
   });
 
+  it("keeps prepared image-to-3D reference tasks out of model turns", () => {
+    const reference = {
+      schemaVersion: 1 as const,
+      referenceId: "0123456789abcdef0123456789abcdef",
+      format: "image/png" as const,
+      width: 512,
+      height: 512,
+      sizeBytes: 100,
+      processingState: "validated" as const,
+      validationErrors: [],
+    };
+    const localReferenceMessage: ChatMessage = {
+      ...base,
+      id: "reference-task",
+      content: "Create a 3D asset from this image",
+      localOnly: true,
+      imageReference: reference,
+      imageTo3dTask: {
+        schemaVersion: 1,
+        taskType: "image_to_3d",
+        userRequest: "Create a 3D asset from this image",
+        references: [reference],
+        knownConstraints: [],
+        missingInformation: [],
+        analysisAvailable: false,
+        nextStage: "awaiting_supported_vision_capability",
+      },
+    };
+    expect(toChatTurns([base, localReferenceMessage])).toEqual([
+      { role: "user", content: "hello" },
+    ]);
+  });
+
   it("drops empty, streaming-empty, and failed replies", () => {
     const turns = toChatTurns([
       base,

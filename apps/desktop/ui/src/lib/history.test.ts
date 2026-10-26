@@ -100,6 +100,76 @@ describe("browser storage integrity", () => {
     expect(localStorage.getItem("nexora:conversations:v1")).toBe("not-json");
     clearFallbackStorage();
   });
+  it("round-trips validated references and transport-independent task metadata", async () => {
+    const { createConversation, saveConversation, loadConversation } = await import("./history");
+    const conversation = await createConversation("Reference task");
+    const reference = {
+      schemaVersion: 1 as const,
+      referenceId: "0123456789abcdef0123456789abcdef",
+      format: "image/png" as const,
+      width: 512,
+      height: 512,
+      sizeBytes: 128_000,
+      description: "Create a low-poly arch",
+      processingState: "validated" as const,
+      validationErrors: [],
+    };
+    const task = {
+      schemaVersion: 1 as const,
+      taskType: "image_to_3d" as const,
+      userRequest: "Create a low-poly arch",
+      references: [reference],
+      knownConstraints: ["Reference validated locally"],
+      missingInformation: ["Target dimensions"],
+      analysisAvailable: false as const,
+      nextStage: "awaiting_supported_vision_capability" as const,
+    };
+    await saveConversation({
+      ...conversation,
+      messages: [{
+        id: "message-reference",
+        role: "user",
+        content: task.userRequest,
+        createdAt: Date.now(),
+        localOnly: true,
+        imageReference: reference,
+        imageTo3dTask: task,
+      }],
+    });
+    const restored = await loadConversation(conversation.id);
+    expect(restored.messages[0]?.imageReference).toEqual(reference);
+    expect(restored.messages[0]?.imageTo3dTask).toEqual(task);
+  });
+
+  it("rejects unsafe reference metadata instead of persisting it", async () => {
+    const { createConversation, saveConversation } = await import("./history");
+    const conversation = await createConversation("Invalid reference");
+    const reference = {
+      schemaVersion: 1 as const,
+      referenceId: "../outside",
+      format: "image/png" as const,
+      width: 1,
+      height: 1,
+      sizeBytes: 16,
+      processingState: "validated" as const,
+      validationErrors: [],
+    };
+    const task = {
+      schemaVersion: 1 as const,
+      taskType: "image_to_3d" as const,
+      userRequest: "Create a model",
+      references: [reference],
+      knownConstraints: [],
+      missingInformation: [],
+      analysisAvailable: false as const,
+      nextStage: "awaiting_supported_vision_capability" as const,
+    };
+    await expect(saveConversation({
+      ...conversation,
+      messages: [{ id: "message-invalid", role: "user", content: "Create a model", createdAt: Date.now(), localOnly: true, imageReference: reference, imageTo3dTask: task }],
+    })).rejects.toMatchObject({ code: "storage" });
+  });
+
   it("reports quota failures instead of claiming a save", async () => {
     const {createConversation} = await import("./history");
     const spy = vi.spyOn(Storage.prototype,"setItem").mockImplementation(() => { throw new Error("Quota"); });

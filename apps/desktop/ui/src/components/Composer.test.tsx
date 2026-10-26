@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { MAX_MESSAGE_LENGTH, type ComposerError } from "../features/chat/chat";
+import type { ImageReferenceMetadata } from "../features/chat/imageTo3dTask";
 
 interface RenderOptions {
   value?: string;
@@ -196,5 +197,66 @@ describe("Composer interaction", () => {
 
     await user.type(screen.getByLabelText("Message Nexora"), "ab");
     expect(onChange).toHaveBeenCalled();
+  });
+
+  it("lets the user choose a PNG reference without requiring a chat model", async () => {
+    const onPickImageReference = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Composer
+        value="Make a stone arch"
+        error={null}
+        textareaRef={createRef<HTMLTextAreaElement>()}
+        busy={false}
+        canGenerate={false}
+        allowSubmitWithoutModel
+        onPickImageReference={onPickImageReference}
+        onChange={() => undefined}
+        onSubmit={() => undefined}
+        onStop={() => undefined}
+        onDismissError={() => undefined}
+      />,
+    );
+    await user.upload(screen.getByLabelText("Choose PNG image reference"), new File(["png"], "reference.png", { type: "image/png" }));
+    expect(onPickImageReference).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows preview metadata and supports removal for a validated reference", async () => {
+    const reference: ImageReferenceMetadata = {
+      schemaVersion: 1,
+      referenceId: "0123456789abcdef0123456789abcdef",
+      format: "image/png",
+      width: 512,
+      height: 512,
+      sizeBytes: 128_000,
+      processingState: "validated",
+      validationErrors: [],
+    };
+    const onRemoveImageReference = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Composer
+        value="Create a 3D arch"
+        error={null}
+        textareaRef={createRef<HTMLTextAreaElement>()}
+        busy={false}
+        canGenerate={false}
+        allowSubmitWithoutModel
+        imageReference={{ metadata: reference, previewUrl: "blob:test-preview" }}
+        onPickImageReference={vi.fn()}
+        onRemoveImageReference={onRemoveImageReference}
+        onChange={() => undefined}
+        onSubmit={() => undefined}
+        onStop={() => undefined}
+        onDismissError={() => undefined}
+      />,
+    );
+    expect(screen.getByAltText("Selected image reference preview")).toBeTruthy();
+    expect(screen.getAllByText(/Image attached · Reference validated/)).toHaveLength(2);
+    expect(screen.getAllByText(/Analysis unavailable/)).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Replace image" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove image reference" }));
+    expect(onRemoveImageReference).toHaveBeenCalledTimes(1);
   });
 });

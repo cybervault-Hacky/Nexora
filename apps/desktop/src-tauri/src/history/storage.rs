@@ -80,6 +80,17 @@ pub struct StoredMessage {
     pub failure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
+    /// Local capability-status exchanges remain visible but are excluded from inference turns.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_reference: Option<crate::image_references::ImageReferenceMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_to_3d_task: Option<crate::image_references::PreparedImageTo3dTask>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +217,22 @@ pub fn validate_message(msg: &StoredMessage) -> HistoryResult<()> {
             return Err(HistoryError::invalid_request(
                 "Invalid model profile identifier.",
             ));
+        }
+    }
+    if msg.image_reference.is_some() != msg.image_to_3d_task.is_some() {
+        return Err(HistoryError::invalid_request("Image-reference metadata and its prepared task must be stored together."));
+    }
+    if let Some(reference) = &msg.image_reference {
+        if msg.role != "user" || !msg.local_only || !crate::image_references::valid_reference(reference) {
+            return Err(HistoryError::invalid_request("Invalid local image-reference metadata."));
+        }
+    }
+    if let Some(task) = &msg.image_to_3d_task {
+        if msg.role != "user" || !msg.local_only || !crate::image_references::valid_task(task)
+            || msg.image_reference.as_ref().map(|reference| reference.reference_id.as_str())
+                != task.references.first().map(|reference| reference.reference_id.as_str())
+        {
+            return Err(HistoryError::invalid_request("Invalid local image-to-3D task metadata."));
         }
     }
     Ok(())
@@ -620,6 +647,9 @@ mod tests {
             state: Some("complete".to_string()),
             failure: None,
             profile_id: None,
+            local_only: false,
+            image_reference: None,
+            image_to_3d_task: None,
         }
     }
 
@@ -795,6 +825,9 @@ mod tests {
                 state: None,
                 failure: None,
                 profile_id: None,
+                local_only: false,
+                image_reference: None,
+                image_to_3d_task: None,
             }],
         });
 
@@ -994,6 +1027,9 @@ mod tests {
             state: Some("streaming".to_string()),
             failure: None,
             profile_id: None,
+            local_only: false,
+            image_reference: None,
+            image_to_3d_task: None,
         });
         let saved = store.save(conv).expect("save");
         assert_eq!(saved.messages[0].state.as_deref(), Some("stopped"));
@@ -1008,6 +1044,9 @@ mod tests {
             state: Some("streaming".to_string()),
             failure: None,
             profile_id: None,
+            local_only: false,
+            image_reference: None,
+            image_to_3d_task: None,
         });
         let saved2 = store.save(conv2).expect("save2");
         assert_eq!(saved2.messages[0].state.as_deref(), Some("stopped"));
@@ -1132,6 +1171,9 @@ mod tests {
                     state: Some("complete".to_string()),
                     failure: None,
                     profile_id: None,
+                    local_only: false,
+                    image_reference: None,
+                    image_to_3d_task: None,
                 });
                 conv.messages.push(StoredMessage {
                     id: format!("a-{idx}"),
@@ -1141,6 +1183,9 @@ mod tests {
                     state: Some("complete".to_string()),
                     failure: None,
                     profile_id: Some("nexora-sonnet-qwen2.5-coder-14b-instruct-q4-k-m".to_string()),
+                    local_only: false,
+                    image_reference: None,
+                    image_to_3d_task: None,
                 });
                 store_clone.save(conv).expect("save").id
             }));

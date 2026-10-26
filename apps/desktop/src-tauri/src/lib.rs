@@ -1,9 +1,19 @@
+mod adaptive;
 mod auth;
 mod export;
 mod history;
+mod image_generation;
+mod image_editing;
+mod image_references;
 mod inference;
+mod integrations;
 mod licensing;
+mod media_models;
+mod resource_management;
+mod sonnet_image_generation;
 mod usage;
+mod video_editing;
+mod video_generation;
 mod workspace;
 
 use tauri::Manager;
@@ -28,15 +38,16 @@ fn shutdown_desktop_resources(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<inference::InferenceState>() {
         state.shutdown();
     }
+
+    if let Some(state) = app.try_state::<image_generation::ImageGenerationManager>() {
+        state.shutdown();
+    }
 }
 
-/// Starts the Nexora desktop shell.
-///
-/// The only capabilities exposed to the webview are the read-only status
-/// snapshot, model/runtime configuration with validation, engine start/stop,
-/// one streaming generation request, and a read-only daily usage snapshot.
-/// There is no shell, no filesystem browsing, and no network access from the
-/// UI.
+/// Starts the Nexora desktop shell and registers its explicit Tauri command
+/// surface. Native commands remain separated by subsystem; coding-model
+/// inference and local media operations use distinct managers and request
+/// paths.
 pub fn run() {
     let app = match tauri::Builder::default()
         .setup(|app| {
@@ -46,6 +57,24 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
 
             app.manage(inference::InferenceState::load(config_dir.clone()));
+            app.manage(media_models::MediaModelManager::new(
+                data_dir.join("media-models"),
+            ));
+            let resource_dir = app.path().resource_dir().ok();
+            let executable_dir = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+            let media_resources = resource_management::MediaResourceCoordinator::default();
+            app.manage(media_resources.clone());
+            app.manage(image_generation::ImageGenerationManager::new(
+                data_dir.join("generated-images"),
+                resource_dir,
+                executable_dir,
+                media_resources,
+            ));
+            app.manage(image_editing::ImageEditingManager::new(
+                data_dir.join("image-editing"),
+            ));
             app.manage(usage::UsageState::load(&config_dir));
             app.manage(history::commands::HistoryState::new(data_dir));
             app.manage(workspace::commands::WorkspaceState::new());
@@ -69,6 +98,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inference::commands::get_app_status,
             inference::commands::get_system_info,
+            integrations::commands::get_blender_detection_status,
+            inference::commands::get_adaptive_capabilities,
             inference::commands::get_disk_space,
             inference::commands::get_settings,
             inference::commands::get_model_profile,
@@ -153,6 +184,23 @@ pub fn run() {
             licensing::commands::licence_get_status,
             licensing::commands::licence_activate,
             licensing::commands::licence_deactivate,
+            media_models::commands::list_media_models,
+            media_models::commands::get_media_model,
+            media_models::commands::download_media_model,
+            media_models::commands::cancel_media_model_download,
+            media_models::commands::validate_media_model,
+            media_models::commands::remove_media_model,
+            image_generation::commands::get_local_image_generation_status,
+            image_generation::commands::generate_local_image,
+            image_generation::commands::cancel_local_image_generation,
+            image_generation::commands::get_generated_image_artifact,
+            sonnet_image_generation::commands::get_sonnet_image_generation_status,
+            image_editing::commands::get_local_image_editing_status,
+            image_editing::commands::import_image_edit_source,
+            video_generation::commands::get_local_video_generation_status,
+            video_editing::commands::get_local_video_editing_status,
+            image_editing::commands::get_image_edit_source,
+            image_editing::commands::remove_image_edit_source,
         ])
         .build(tauri::generate_context!())
     {

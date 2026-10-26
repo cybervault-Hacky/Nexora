@@ -16,6 +16,14 @@ const UserMessage = memo(function UserMessage({ message }: { message: ChatMessag
     <article className="message message--user">
       <div className="message__bubble">
         <UserContent content={message.content} />
+        {message.imageReference ? (
+          <div className="message__image-reference" aria-label="Validated image reference metadata">
+            <span>Image attached · Reference validated</span>
+            <span>PNG · {message.imageReference.width} × {message.imageReference.height} · {(message.imageReference.sizeBytes / 1024).toFixed(1)} KB</span>
+            {message.imageTo3dTask ? <span>Image-to-3D task prepared · not analyzed</span> : null}
+            <span>Opaque local reference retained with this conversation.</span>
+          </div>
+        ) : null}
       </div>
       <span className="message__meta">
         You · {formatTime(message.createdAt)}

@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useRef,
   type FormEvent,
   type ReactNode,
   type RefObject,
@@ -11,6 +12,8 @@ import {
   type ComposerError,
 } from "../features/chat/chat";
 import { Icon } from "./Icon";
+import type { ComposerMode } from "../features/chat/mediaMode";
+import type { ImageReferenceMetadata } from "../features/chat/imageTo3dTask";
 
 const MAX_TEXTAREA_HEIGHT = 208;
 
@@ -29,6 +32,18 @@ interface ComposerProps {
   blockedReason?: string | null;
   /** The existing approved model selector, rendered inside the composer. */
   modelSelector?: ReactNode;
+  /** Optional local media-mode selector; omitted by existing standalone uses. */
+  mode?: ComposerMode;
+  onModeChange?: (mode: ComposerMode) => void;
+  /** Media status is being queried; no model generation is in progress. */
+  checkingMedia?: boolean;
+  /** A clear local media request can be submitted without a coding model. */
+  allowSubmitWithoutModel?: boolean;
+  imageReference?: { metadata: ImageReferenceMetadata; previewUrl: string } | null;
+  imageReferenceBusy?: boolean;
+  imageReferenceError?: string | null;
+  onPickImageReference?: (file: File) => void;
+  onRemoveImageReference?: () => void;
   onOpenProjects?: () => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -45,16 +60,31 @@ export function Composer({
   blockedReason = null,
   onOpenProjects,
   modelSelector,
+  mode = "auto",
+  onModeChange,
+  checkingMedia = false,
+  allowSubmitWithoutModel = false,
+  imageReference = null,
+  imageReferenceBusy = false,
+  imageReferenceError = null,
+  onPickImageReference,
+  onRemoveImageReference,
   onChange,
   onSubmit,
   onStop,
   onDismissError,
 }: ComposerProps) {
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const length = value.length;
   const trimmedLength = value.trim().length;
   const tooLong = length > MAX_MESSAGE_LENGTH;
   const showCounter = length > WARN_MESSAGE_LENGTH;
-  const canSend = canGenerate && trimmedLength > 0 && !tooLong && !busy;
+  const canSend =
+    (canGenerate || allowSubmitWithoutModel) &&
+    trimmedLength > 0 &&
+    !tooLong &&
+    !busy &&
+    !checkingMedia;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -74,7 +104,7 @@ export function Composer({
   }, [error, textareaRef]);
 
   function requestSubmit() {
-    if (!canGenerate || busy) {
+    if ((!canGenerate && !allowSubmitWithoutModel) || busy || checkingMedia) {
       return;
     }
 
@@ -88,12 +118,56 @@ export function Composer({
 
   const statusText = busy
     ? "Generating on this machine…"
-    : canGenerate
-      ? "Local model ready"
-      : (blockedReason ?? "No model loaded");
+    : imageReferenceBusy
+      ? "Validating the image reference locally…"
+      : imageReference
+        ? "Image attached · Reference validated · Analysis unavailable"
+        : checkingMedia
+          ? "Checking local media capability…"
+          : allowSubmitWithoutModel
+            ? "Media request — local status queried on send"
+            : mode !== "auto"
+              ? `${mode === "image" ? "Image" : "Video"} mode — local status queried on send`
+              : canGenerate
+                ? "Local model ready"
+                : (blockedReason ?? "No model loaded");
 
   return (
     <form className="composer-wrap" onSubmit={handleSubmit} aria-label="Message composer">
+      {onPickImageReference ? (
+        <input
+          ref={imageInputRef}
+          className="sr-only"
+          type="file"
+          accept="image/png,.png"
+          aria-label="Choose PNG image reference"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) onPickImageReference(file);
+          }}
+        />
+      ) : null}
+      {imageReference ? (
+        <div className="composer__reference" role="status" aria-label="Image reference preview">
+          <img src={imageReference.previewUrl} alt="Selected image reference preview" />
+          <div className="composer__reference-details">
+            <strong>Image attached · Reference validated</strong>
+            <span>PNG · {imageReference.metadata.width} × {imageReference.metadata.height} · {(imageReference.metadata.sizeBytes / 1024).toFixed(1)} KB</span>
+            <span>Analysis unavailable. Image stays local and is not sent to a model.</span>
+          </div>
+          <button
+            type="button"
+            className="composer__reference-remove"
+            aria-label="Remove image reference"
+            disabled={imageReferenceBusy || busy || checkingMedia}
+            onClick={onRemoveImageReference}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      ) : null}
+      {imageReferenceError ? <p className="composer__reference-error" role="alert">{imageReferenceError}</p> : null}
       <div className={`composer ${error ? "composer--error" : ""}`}>
         <label className="sr-only" htmlFor="composer-input">
           Message Nexora
@@ -112,10 +186,19 @@ export function Composer({
           value={value}
           rows={1}
           placeholder={
-            canGenerate
-              ? "Ask anything…"
-              : (blockedReason ?? "Load a local model to start")
+            imageReference
+              ? "Describe the 3D asset you want from this reference…"
+              : allowSubmitWithoutModel
+                ? "Describe the local media task…"
+                : mode === "image"
+                  ? "Describe an image task…"
+                  : mode === "video"
+                    ? "Describe a video task…"
+                    : canGenerate
+                      ? "Ask anything…"
+                      : (blockedReason ?? "Load a local model to start")
           }
+          disabled={checkingMedia}
           aria-describedby="composer-help composer-status"
           aria-invalid={error ? true : undefined}
           spellCheck
@@ -150,10 +233,38 @@ export function Composer({
         />
 
         <div className="composer__footer">
+          {onPickImageReference ? (
+            <button
+              type="button"
+              className="composer__reference-pick"
+              disabled={imageReferenceBusy || busy || checkingMedia}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Icon name="file" size={13} />
+              {imageReference ? "Replace image" : "Add image reference"}
+            </button>
+          ) : null}
+          {onModeChange ? (
+            <div className="composer__mode">
+              <label className="composer__mode-label" htmlFor="composer-mode">Mode</label>
+              <select
+                id="composer-mode"
+                className="composer__mode-control"
+                aria-label="Chat mode"
+                value={mode}
+                disabled={busy || checkingMedia}
+                onChange={(event) => onModeChange(event.target.value as ComposerMode)}
+              >
+                <option value="auto">Auto</option>
+                <option value="image">Image</option>
+                <option value="video">Video</option>
+              </select>
+            </div>
+          ) : null}
           {modelSelector ? <div className="composer__model">{modelSelector}</div> : null}
           <p className="composer__status" id="composer-status">
             <span
-              className={`status-dot ${busy ? "status-dot--busy" : canGenerate ? "status-dot--ok" : "status-dot--idle"}`}
+              className={`status-dot ${busy ? "status-dot--busy" : canGenerate && mode === "auto" && !allowSubmitWithoutModel ? "status-dot--ok" : "status-dot--idle"}`}
               aria-hidden="true"
             />
             <span>{statusText}</span>
@@ -189,7 +300,7 @@ export function Composer({
                 aria-label="Send message"
                 aria-keyshortcuts="Enter"
                 title={
-                  canGenerate
+                  canGenerate || allowSubmitWithoutModel
                     ? canSend
                       ? "Send (Enter)"
                       : "Type a message to send"

@@ -1,0 +1,31 @@
+ M apps/desktop/src-tauri/Cargo.lock
+ M apps/desktop/src-tauri/Cargo.toml
+ M apps/desktop/src-tauri/src/history/storage.rs
+ M apps/desktop/src-tauri/src/inference/commands.rs
+ M apps/desktop/src-tauri/src/inference/hardware.rs
+ M apps/desktop/src-tauri/src/lib.rs
+ M apps/desktop/ui/src/components/Composer.tsx
+ M apps/desktop/ui/src/features/chat/chat.ts
+ M apps/desktop/ui/src/features/chat/usePersistentConversation.ts
+ M apps/desktop/ui/src/lib/history.ts
+ M apps/desktop/ui/src/lib/inference.ts
+ M apps/desktop/ui/src/lib/ipc.ts
+ M apps/desktop/ui/src/lib/rustContract.test.ts
+ M apps/desktop/ui/src/pages/ChatPage.tsx
+ M apps/desktop/ui/src/styles/app.css
+?? apps/desktop/src-tauri/src/adaptive.rs
+?? apps/desktop/src-tauri/src/image_editing/
+?? apps/desktop/src-tauri/src/image_generation/
+?? apps/desktop/src-tauri/src/media_models/
+?? apps/desktop/src-tauri/src/resource_management.rs
+?? apps/desktop/src-tauri/src/sonnet_image_generation/
+?? apps/desktop/src-tauri/src/video_editing/
+?? apps/desktop/src-tauri/src/video_generation/
+?? apps/desktop/ui/src/features/chat/mediaMode.ts
+?? apps/desktop/ui/src/lib/imageEditing.ts
+?? apps/desktop/ui/src/lib/imageGeneration.ts
+?? apps/desktop/ui/src/lib/mediaModels.ts
+?? apps/desktop/ui/src/lib/sonnetImageGeneration.ts
+?? apps/desktop/ui/src/lib/videoEditing.ts
+?? apps/desktop/ui/src/lib/videoGeneration.ts
+?? docs/nexora/

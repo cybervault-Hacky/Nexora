@@ -23,6 +23,8 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "time", "macros", "rt", "fs", "io-util"] }
 getrandom = "0.2"
 sha2 = "0.10"
+png = "0.18.1"
+crc32fast = "1.5.3"
 similar = "2.7"
 regex = "1"
 
