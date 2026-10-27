@@ -1,0 +1,27 @@
+/*
+ * Homepage particle background (Phase 11).
+ *
+ * A decorative layer behind the hero copy. Three rules matter here:
+ * `pointer-events: none` keeps links, text selection, scrolling, and focus
+ * untouched; `inset: 0` inside a positioned parent means the field can never
+ * create horizontal overflow; and `z-index: 0` under a `z-index: 1` hero keeps
+ * the type above it.
+ */
+
+.particle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* The canvas is transparent; the page background shows through it. */
+  background-color: transparent;
+}
+
+.particle-layer__canvas {
+  display: block;
+  /* `base.css` sets `height: auto` on canvas, which would collapse this to the
+   * backing-store aspect ratio. The layer owns the size instead. */
+  width: 100%;
+  height: 100%;
+}

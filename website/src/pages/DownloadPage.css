@@ -1,0 +1,138 @@
+/* Windows Download page. */
+
+.download__status {
+  margin-top: var(--space-8);
+}
+
+.download__section-title {
+  max-width: var(--container-narrow);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.download__status .download__section-title {
+  margin-bottom: var(--space-4);
+}
+
+.download__lead {
+  margin-top: var(--space-4);
+  margin-bottom: var(--space-5);
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+.download__note {
+  margin-top: var(--space-6);
+  max-width: var(--reading-width);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* ── Prerequisites ───────────────────────────────────────────────────── */
+
+.download__prereqs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: var(--container-narrow);
+}
+
+.download__prereq {
+  padding-block: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+.download__prereq-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+}
+
+.download__prereq-detail {
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* ── Pre-download checklist ──────────────────────────────────────────── */
+
+.download__checklist {
+  margin: 0;
+  max-width: var(--container-narrow);
+}
+
+.download__check {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+.download__check-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  color: var(--color-text-primary);
+}
+
+.download__check-detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* ── Trust ───────────────────────────────────────────────────────────── */
+
+.download__trust {
+  max-width: var(--container-narrow);
+  padding-top: var(--space-7);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.download__trust-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+}
+
+.download__trust-body {
+  margin-top: var(--space-4);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+.download__trust-links {
+  margin-top: var(--space-5);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* ── Wider screens ───────────────────────────────────────────────────── */
+
+@media (min-width: 34rem) {
+  .download__check {
+    grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
+    gap: var(--space-5);
+    align-items: baseline;
+  }
+}

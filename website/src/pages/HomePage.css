@@ -1,0 +1,9 @@
+/* Home page frame: the positioning context for the Phase 11 particle layer. */
+
+.home {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}

@@ -1,0 +1,136 @@
+/*
+ * Button primitive.
+ *
+ * Shared geometry across variants; only surface, border, and text colour
+ * differ. Every size keeps a touch-safe hit area at `md` and above, and the
+ * `sm` size is only appropriate for dense, non-primary actions.
+ */
+
+.btn {
+  --btn-bg: transparent;
+  --btn-bg-hover: transparent;
+  --btn-bg-active: transparent;
+  --btn-text: var(--color-text-primary);
+  --btn-border: transparent;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding-inline: var(--control-padding-x);
+  border: var(--border-width) solid var(--btn-border);
+  border-radius: var(--radius-md);
+  background-color: var(--btn-bg);
+  color: var(--btn-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-none);
+  letter-spacing: var(--tracking-snug);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-press) var(--ease-out);
+}
+
+.btn:hover {
+  background-color: var(--btn-bg-hover);
+}
+
+.btn:active {
+  background-color: var(--btn-bg-active);
+}
+
+/* Pressed state.
+ *
+ * A 1.5% scale is enough to feel like the button met the pointer without the
+ * label visibly shifting or the control looking like it grows. It is keyed on
+ * the press, not the hover, so a hovered but unpressed button never moves.
+ * Keyboard activation (`Enter`/`Space` on a button) produces `:active` in every
+ * current browser, so keyboard users get the same feedback. */
+.btn:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(var(--scale-press));
+}
+
+/* Keyboard focus ring sits outside the border so it is visible on every
+ * variant without changing the button's size. */
+.btn:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ── Variants ───────────────────────────────────────────────────────── */
+
+.btn--primary {
+  --btn-bg: var(--color-btn-primary-bg);
+  --btn-bg-hover: var(--color-btn-primary-bg-hover);
+  --btn-bg-active: var(--color-btn-primary-bg-active);
+  --btn-text: var(--color-btn-primary-text);
+  --btn-border: var(--color-btn-primary-bg);
+}
+
+.btn--primary:hover {
+  color: var(--color-btn-primary-text);
+}
+
+.btn--secondary {
+  --btn-bg: var(--color-btn-secondary-bg);
+  --btn-bg-hover: var(--color-btn-secondary-bg-hover);
+  --btn-bg-active: var(--color-btn-secondary-bg-active);
+  --btn-text: var(--color-btn-secondary-text);
+  --btn-border: var(--color-border);
+}
+
+.btn--secondary:hover {
+  --btn-border: var(--color-border-strong);
+  color: var(--color-btn-secondary-text);
+}
+
+/* ── Sizes ──────────────────────────────────────────────────────────── */
+
+.btn--sm {
+  min-height: var(--control-height-sm);
+  padding-inline: var(--space-4);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+}
+
+.btn--md {
+  min-height: var(--control-height-md);
+}
+
+.btn--lg {
+  min-height: var(--control-height-lg);
+  padding-inline: var(--space-6);
+  font-size: var(--text-base);
+}
+
+.btn--block {
+  display: flex;
+  width: 100%;
+}
+
+/* ── Disabled ───────────────────────────────────────────────────────── */
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn:disabled:hover,
+.btn[aria-disabled="true"]:hover {
+  background-color: var(--btn-bg);
+}
+
+/* A disabled control must not look focused. */
+.btn:disabled:focus-visible {
+  outline: none;
+}

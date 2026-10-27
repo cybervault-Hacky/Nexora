@@ -1,0 +1,25 @@
+/* Shared page header block. */
+
+.page-intro {
+  max-width: 52rem;
+}
+
+.page-intro__title {
+  margin-top: var(--space-3);
+  max-width: 24ch;
+  font-size: var(--text-4xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tighter);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+
+.page-intro__lead {
+  margin-top: var(--space-5);
+  max-width: 58ch;
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}

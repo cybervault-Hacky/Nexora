@@ -1,0 +1,132 @@
+/*
+ * Hero section.
+ *
+ * One centred column of type on an open canvas. The composition is carried by
+ * the headline's size, the measure of each line, and the space around them —
+ * there is no illustration to balance, so nothing else competes with the copy.
+ *
+ * Centred only at this one place on the site: interior pages keep their
+ * left-aligned editorial intro, which keeps the home page distinct as the
+ * product's front door.
+ */
+
+.hero {
+  /* Fills the space between the header and the footer and centres the copy in
+   * it, so the composition holds together on both short and tall displays. */
+  flex: 1 0 auto;
+  display: grid;
+  align-content: center;
+  /* Narrow screens get a tighter top and bottom: the hero already fills the
+   * viewport, and 64px of air above a phone headline pushes the supporting copy
+   * below the fold. The desktop value is unchanged. */
+  padding-block: clamp(2.5rem, 1rem + 7vw, 8rem);
+  /* Phase 11: the particle layer is absolutely positioned inside `.home`, so the
+   * hero must establish its own stacking level above it. Position only — the
+   * hero's own layout is unchanged. */
+  position: relative;
+  z-index: 1;
+}
+
+.hero__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 60rem;
+  margin-inline: auto;
+  text-align: center;
+}
+
+.hero__eyebrow {
+  margin-bottom: var(--space-6);
+}
+
+.hero__title {
+  font-size: var(--text-display);
+  font-weight: var(--weight-semibold);
+  line-height: 1.04;
+  letter-spacing: var(--tracking-tighter);
+  color: var(--color-text-primary);
+  /* Long words are not broken mid-word, and the lockup is allowed to use the
+   * full column instead of a narrower intrinsic measure. */
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+/* The headline is a two-sentence lockup, so each sentence gets its own line
+ * instead of leaving the break to font metrics: the same words render on
+ * Segoe UI, Helvetica, Arial and Open Sans, and a natural wrap lands on three
+ * lines in all of them. Inside a line the text still wraps normally on narrow
+ * viewports. */
+.hero__title-line {
+  display: block;
+}
+
+.hero__lead {
+  margin-top: var(--space-6);
+  max-width: 48ch;
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* ── Narrow screens ──────────────────────────────────────────────────────
+ * The fluid display size bottoms out at 40px, which at 288px of content width
+ * breaks the lockup into five short lines ("Your AI / coding / workspace. / On
+ * your / terms."). Dropping the floor to 34px lets each sentence hold together
+ * on two lines at 320px and one at 430px, which is the same lockup the desktop
+ * shows rather than a different composition. */
+@media (max-width: 30rem) {
+  .hero__title {
+    font-size: clamp(2rem, 1.4rem + 3.4vw, 2.125rem);
+    line-height: 1.06;
+  }
+
+  .hero__lead {
+    margin-top: var(--space-5);
+    font-size: var(--text-md);
+  }
+
+  /* The status line wraps to an awkward ragged shape when the dot is inline with
+   * a centred block; aligning both left keeps the two lines flush. */
+  .hero__status {
+    margin-top: var(--space-7);
+    text-align: left;
+  }
+}
+
+/* ── Status (non-interactive) ────────────────────────────────────────── */
+
+/* A quiet line of text, not a chip and not a button: there is nothing to click
+ * until a verified installer exists. */
+.hero__status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-top: var(--space-9);
+  max-width: 42rem;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+/* Static marker; no animation, so nothing to disable under
+ * prefers-reduced-motion. */
+.hero__status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-1px);
+  border-radius: var(--radius-full);
+  background-color: var(--color-accent);
+}
+
+/* Only lock the lines where the container is provably wider than the longest
+ * one; below this the sentences wrap inside their own line instead of spilling
+ * past the gutters on a narrower desktop window. */
+@media (min-width: 72rem) {
+  .hero__title-line {
+    white-space: nowrap;
+  }
+}

@@ -1,0 +1,15 @@
+/*
+ * Nexora website — global stylesheet entry.
+ *
+ * Import order is deliberate:
+ *   1. tokens   — raw design values (no output of its own beyond :root)
+ *   2. base     — reset and element-level typography
+ *   3. utilities— layout and helper classes
+ *
+ * Component styles live next to their components and are imported from the
+ * component modules, so this file stays a thin composition layer.
+ */
+
+@import "./tokens.css";
+@import "./base.css";
+@import "./utilities.css";

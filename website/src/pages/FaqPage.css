@@ -1,0 +1,21 @@
+/* FAQ page — intro note and closing cross-link line. */
+
+.faq__note {
+  margin-top: var(--space-6);
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}
+
+.faq__closing {
+  margin-top: var(--space-7);
+  padding-top: var(--space-5);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}

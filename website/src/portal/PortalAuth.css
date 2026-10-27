@@ -1,0 +1,272 @@
+/*
+ * Developer Portal — sign-in surface.
+ *
+ * Deliberately quiet: one centred panel, one accent (the submit button is the
+ * site's primary button colour), and nothing that competes with the fields. It
+ * uses the same tokens as the public site, so the portal reads as part of
+ * Nexora rather than as a bolted-on admin template.
+ */
+
+.portal-auth {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* A short page should still centre vertically without ever clipping on a
+   * small viewport: `min-height` with padding does both. */
+  min-height: min(72vh, 44rem);
+  padding: var(--space-9) var(--page-padding) var(--space-10);
+}
+
+.portal-auth__panel {
+  width: 100%;
+  max-width: 26.5rem;
+  padding: var(--space-8);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.portal-auth__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-7);
+  color: var(--color-text-primary);
+}
+
+.portal-auth__mark {
+  color: var(--color-text-primary);
+}
+
+.portal-auth__wordmark {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+.portal-auth__title {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.portal-auth__lead {
+  margin: var(--space-3) 0 var(--space-6);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  max-width: 42ch;
+}
+
+.portal-auth__notice {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-left: var(--border-width-strong) solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-primary);
+}
+
+.portal-auth__notice-title {
+  margin: 0 0 var(--space-1);
+  font-weight: var(--weight-semibold);
+}
+
+.portal-auth__notice p {
+  margin: 0;
+}
+
+.portal-auth__notice code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  background: rgb(22 24 29 / 6%);
+}
+
+.portal-auth__form {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.portal-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.portal-field__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.portal-field__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.portal-field__input {
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  /* 16px minimum: anything smaller makes iOS zoom the page on focus. */
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.portal-field__input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.portal-field__input:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.portal-field__input:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--color-focus);
+}
+
+.portal-field__input:disabled {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.portal-field__input--invalid {
+  border-color: var(--color-danger);
+}
+
+.portal-field__input--with-action {
+  padding-right: 5.25rem;
+}
+
+.portal-field__action {
+  position: absolute;
+  right: var(--space-1);
+  min-width: 3.5rem;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.portal-field__action:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+.portal-field__action:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.portal-field__error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+}
+
+.portal-auth__hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* The status region keeps its space only when it has content, so the button
+ * never jumps between states. */
+.portal-auth__status:empty {
+  display: none;
+}
+
+.portal-auth__error {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.portal-auth__submit {
+  min-height: var(--control-height-md);
+  padding: var(--space-3) var(--space-5);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  font-family: inherit;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background-color 140ms ease, opacity 140ms ease;
+}
+
+.portal-auth__submit:hover:not(:disabled) {
+  background: var(--color-btn-primary-bg-hover);
+}
+
+.portal-auth__submit:active:not(:disabled) {
+  background: var(--color-btn-primary-bg-active);
+}
+
+.portal-auth__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.portal-auth__footnote {
+  margin: var(--space-6) 0 0;
+  font-size: var(--text-sm);
+}
+
+.portal-auth__footnote a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.portal-auth__footnote a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 34rem) {
+  .portal-auth {
+    padding-top: var(--space-7);
+  }
+
+  .portal-auth__panel {
+    padding: var(--space-6);
+    border-radius: var(--radius-md);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portal-field__input,
+  .portal-field__action,
+  .portal-auth__submit {
+    transition: none;
+  }
+}

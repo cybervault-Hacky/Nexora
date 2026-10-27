@@ -1,0 +1,12 @@
+# Deliberate isolation boundary.
+#
+# The repository root declares a pnpm workspace limited to `apps/*`. Without a
+# workspace file of its own, pnpm walks up from `website/` and resolves against
+# that root workspace, which would write to the root `pnpm-lock.yaml` and the
+# root `node_modules/`. Declaring `website/` as its own single-project workspace
+# keeps the website's dependencies, lockfile, and `node_modules/` entirely
+# local to this directory.
+#
+# Do not remove this file, and do not add `website/*` to the root workspace.
+packages:
+  - "."

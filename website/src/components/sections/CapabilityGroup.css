@@ -1,0 +1,96 @@
+/* Capability group: editorial two-column block, stacking on narrow screens. */
+
+.cap-group {
+  padding-block: var(--space-7);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.cap-group:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cap-group__head {
+  min-width: 0;
+}
+
+.cap-group__title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+
+.cap-group__intro {
+  margin-top: var(--space-3);
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+/* ── Capability list ─────────────────────────────────────────────────── */
+
+.cap-group__list {
+  margin: var(--space-5) 0 0;
+  min-width: 0;
+}
+
+.cap-group__item {
+  padding-block: var(--space-4);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.cap-group__item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cap-group__item-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.cap-group__item-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+}
+
+.cap-group__item-detail {
+  margin: var(--space-2) 0 0;
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────── */
+
+@media (min-width: 64rem) {
+  .cap-group {
+    display: grid;
+    grid-template-columns: minmax(0, 23rem) minmax(0, 1fr);
+    gap: var(--space-9);
+    padding-block: var(--space-8);
+  }
+
+  .cap-group__list {
+    margin-top: 0;
+  }
+
+  /* Sticky headings keep context while scanning a long list. Static
+   * positioning is the fallback if a browser ignores sticky. */
+  .cap-group__head {
+    position: sticky;
+    top: calc(var(--header-height) + var(--space-5));
+    align-self: start;
+  }
+}

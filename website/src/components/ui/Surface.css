@@ -1,0 +1,45 @@
+/* Neutral surface primitive. */
+
+.surface {
+  background-color: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.surface--flat {
+  box-shadow: none;
+}
+
+.surface--raised {
+  box-shadow: var(--shadow-sm);
+}
+
+.surface--floating {
+  box-shadow: var(--shadow-md);
+}
+
+.surface--pad-none {
+  padding: 0;
+}
+
+.surface--pad-sm {
+  padding: var(--space-4);
+}
+
+.surface--pad-md {
+  padding: var(--space-6);
+}
+
+.surface--pad-lg {
+  padding: var(--space-7);
+}
+
+@media (min-width: 48rem) {
+  .surface--pad-md {
+    padding: var(--space-7);
+  }
+
+  .surface--pad-lg {
+    padding: var(--space-8);
+  }
+}

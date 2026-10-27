@@ -1,0 +1,419 @@
+/*
+ * Site header — glass navigation capsule (Phase 13).
+ *
+ * One translucent capsule holds the brand and the navigation controls. It is
+ * the header's grid: two columns on every width, so the pieces sit in one
+ * container rather than in adjacent boxes. On narrow screens the track is
+ * brand / toggle and the capsule spans the container; from 64rem it shrinks to
+ * its content and centres, which keeps the padding visually equal on both
+ * sides instead of leaving a dead column of glass to the right of the links.
+ *
+ * Structure:
+ *   .site-header           sticky, transparent, no border — nothing visible
+ *     .site-header__shell  container, the positioning context for the panel
+ *       .site-header__capsule   the glass surface
+ *       .site-header__panel     overlay card, drops out below the capsule
+ *
+ * The capsule floats: the header keeps a band of transparent air above and
+ * below it, so page content scrolls behind the glass instead of under a bar.
+ * Its height is tokenised (`--header-height`) so scroll offsets and sticky
+ * sidebars agree with it.
+ *
+ * Desktop navigation takes over at 64rem, where the inline list has room.
+ */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  /* No background and no border: the capsule is the only visible surface.
+   * A full-width bar behind it would defeat the floating-capsule design. */
+  background-color: transparent;
+  /* Air around the capsule. Safe-area insets keep it clear of a phone's
+   * status bar / notch when the browser runs full-bleed. */
+  padding-block: calc(var(--header-block-pad) + env(safe-area-inset-top, 0px))
+    var(--header-block-pad);
+  padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
+}
+
+/* The container is the positioning context for the panel, so the panel and the
+ * capsule share exactly the same inline edges. (`.site-header__bar` is already
+ * taken: it is one of the three lines of the hamburger icon.) */
+.site-header__shell {
+  position: relative;
+}
+
+/* ── The capsule ─────────────────────────────────────────────────────── */
+
+.site-header__capsule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: var(--header-capsule-h);
+  padding-inline: var(--space-3);
+  border: var(--border-width) solid var(--color-glass-border);
+  border-radius: var(--radius-full);
+  background-color: var(--color-glass-solid);
+  box-shadow: var(--shadow-glass);
+  /* The inset highlight is the top edge catching light: one hairline, no
+   * gradient band, no glow. */
+  background-image: linear-gradient(
+    to bottom,
+    var(--color-glass-highlight),
+    transparent 55%
+  );
+}
+
+/* Real glass where the engine supports it; the near-opaque tint above is the
+ * fallback and already carries the text on its own. */
+@supports ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .site-header__capsule {
+    background-color: var(--color-glass);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass));
+    backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass));
+  }
+}
+
+/* ── Brand ───────────────────────────────────────────────────────────── */
+
+.site-header__brand {
+  grid-column: 1;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* A comfortable target for the logo-as-link on touch, without changing its
+   * optical position inside the capsule. */
+  min-height: 2.75rem;
+  padding-inline: var(--space-2);
+  color: var(--color-text-primary);
+  text-decoration: none;
+  border-radius: var(--radius-full);
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+/* The wordmark carries no underline or colour shift — a slight dim on hover is
+ * enough for a logo that is also a link, and it keeps the mark itself crisp. */
+.site-header__brand:hover {
+  color: var(--color-text-primary);
+  opacity: 0.72;
+}
+
+.site-header__brand:active {
+  opacity: 0.55;
+}
+
+.site-header__mark {
+  flex-shrink: 0;
+  color: var(--color-text-primary);
+}
+
+.site-header__wordmark {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--leading-none);
+}
+
+/* ── Navigation ──────────────────────────────────────────────────────── */
+
+.site-header__nav {
+  grid-column: 2;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Mobile: the inline list is replaced by the menu panel. */
+.site-header__nav-list {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  align-items: center;
+}
+
+/* The prose rule in base.css (`li + li`) must not leak into the navigation:
+ * an 8px top margin on every item after the first lifts the first label
+ * visually out of line with the rest. Reset it for both header lists. */
+.site-header__nav-list li + li {
+  margin-top: 0;
+}
+
+.site-header__link {
+  --nav-link-pad: var(--space-3);
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: var(--header-capsule-h);
+  padding-inline: var(--nav-link-pad);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: var(--radius-full);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+/* The hover and current-page marks are a drawn hairline rather than a
+ * `text-decoration`, so the underline can fade and grow with the shared motion
+ * tokens instead of appearing in a single frame. Colour alone never carries the
+ * state: `aria-current` is still on the current link. */
+.site-header__link::after {
+  content: "";
+  position: absolute;
+  left: var(--nav-link-pad);
+  right: var(--nav-link-pad);
+  bottom: 1rem;
+  height: var(--border-width);
+  background-color: currentcolor;
+  opacity: 0;
+  transform: scaleX(0.6);
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+
+.site-header__link:hover {
+  color: var(--color-text-primary);
+}
+
+.site-header__link:hover::after {
+  opacity: 0.55;
+  transform: scaleX(1);
+}
+
+/* Pressed state for the navigation: opacity only, so nothing reflows and the
+ * centred navigation cannot shift by a pixel. */
+.site-header__link:active {
+  opacity: 0.6;
+}
+
+.site-header__link--active {
+  color: var(--color-text-primary);
+}
+
+.site-header__link--active::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+/* ── Menu toggle ─────────────────────────────────────────────────────── */
+
+/* No border and no fill: the toggle sits *in* the capsule, so giving it its own
+ * outlined box would put a second box inside the shared one. */
+.site-header__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height-md);
+  height: var(--control-height-md);
+  padding: 0;
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: 0;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.site-header__toggle:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+.site-header__toggle:active {
+  background-color: var(--color-border-subtle);
+  transform: scale(var(--scale-press));
+}
+
+/* ── Menu icon ───────────────────────────────────────────────────────── */
+
+.site-header__icon {
+  position: relative;
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.site-header__bar {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1.6px;
+  border-radius: 999px;
+  background-color: currentcolor;
+  /* Transform-only animation: the bars never reflow the button. */
+  transition:
+    transform var(--duration-base) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.site-header__bar:nth-child(1) {
+  top: 5px;
+}
+
+.site-header__bar:nth-child(2) {
+  top: 9.2px;
+}
+
+.site-header__bar:nth-child(3) {
+  top: 13.4px;
+}
+
+/* Open: the outer bars converge on the centre and cross; the middle bar is
+ * already inside the cross, so it simply fades. */
+.site-header__toggle[aria-expanded="true"] .site-header__bar:nth-child(1) {
+  transform: translateY(4.2px) rotate(45deg);
+}
+
+.site-header__toggle[aria-expanded="true"] .site-header__bar:nth-child(2) {
+  opacity: 0;
+  transform: scaleX(0.4);
+}
+
+.site-header__toggle[aria-expanded="true"] .site-header__bar:nth-child(3) {
+  transform: translateY(-4.2px) rotate(-45deg);
+}
+
+/* ── Mobile panel ────────────────────────────────────────────────────── */
+
+/* A glass card that drops out below the capsule, aligned to the same inline
+ * edges. It is an overlay, not a block in the header's flow, so opening the
+ * menu cannot push the page down or reflow the capsule.
+ *
+ * The open/close animation, `inert`, and the `visibility` hand-off are Phase 12
+ * behaviour and are unchanged. */
+.site-header__panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  /* The positioning context is the container's *padding* box, so the panel has
+   * to step past the gutters to line up with the capsule's edges. */
+  left: var(--page-padding);
+  right: var(--page-padding);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--color-glass-border);
+  border-radius: var(--radius-xl);
+  background-color: var(--color-glass-panel-solid);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transform: translateY(-6px);
+  visibility: hidden;
+  /* `visibility` flips only after the fade finishes on close, and at once on
+   * open, so the panel is never focusable or clickable while invisible. */
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out),
+    visibility 0s linear var(--duration-base);
+}
+
+@supports ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .site-header__panel {
+    background-color: var(--color-glass-panel);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass));
+    backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass));
+  }
+}
+
+.site-header__panel[data-open="true"] {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out),
+    visibility 0s;
+}
+
+.site-header__panel-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-header__panel-list li + li {
+  margin-top: 0;
+}
+
+.site-header__panel-link {
+  display: flex;
+  align-items: center;
+  /* Comfortably tappable, and 8px of vertical rhythm comes from the panel's
+   * own padding rather than from borders between rows. */
+  min-height: 2.75rem;
+  padding-inline: var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.site-header__panel-link:hover {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.site-header__panel-link:active {
+  background-color: var(--color-border-subtle);
+}
+
+/* `NavLink` also sets aria-current="page", so the current page is announced by
+ * assistive technology and never signalled by colour alone. */
+.site-header__panel-link--active {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/* ── Desktop ─────────────────────────────────────────────────────────── */
+
+@media (min-width: 64rem) {
+  .site-header__capsule {
+    /* A content-sized pill, centred on the page: the brand and the links are
+     * separated by one fixed gap instead of by two flexible tracks, so the
+     * space inside the glass is evenly used and the surface looks balanced.
+     * `max-width` is the belt to the `minmax(0, …)` braces — the links can
+     * never spill outside the container, even in a language with longer
+     * labels. */
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
+    grid-template-columns: auto auto;
+    column-gap: var(--space-6);
+    padding-inline: var(--space-4);
+  }
+
+  .site-header__nav {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .site-header__nav-list {
+    display: flex;
+  }
+
+  .site-header__toggle,
+  .site-header__panel {
+    display: none;
+  }
+}
+
+/* Between 64rem and 75rem every pixel of the capsule is scarce: eight links,
+ * the brand and the gutters share one row. Trimming the per-link padding and
+ * the brand's own padding is what keeps the brand clear of the first link
+ * rather than letting the two collide just above the breakpoint. */
+@media (min-width: 64rem) and (max-width: 75rem) {
+  .site-header__link {
+    --nav-link-pad: var(--space-2);
+  }
+
+  .site-header__brand {
+    padding-inline: var(--space-1);
+  }
+}

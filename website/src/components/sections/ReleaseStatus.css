@@ -1,0 +1,51 @@
+/* Release status banner.
+ *
+ * Marked with a rule rather than filled with a panel, so it reads as the same
+ * kind of statement as the qualifying notes on the other pages: a fact about the
+ * release, not a card to interact with.
+ */
+
+.release-status {
+  max-width: var(--container-narrow);
+  padding-left: var(--space-5);
+  border-left: var(--border-width-strong) solid var(--color-border-strong);
+}
+
+.release-status__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--color-text-primary);
+}
+
+/* Static marker — no animation, so nothing to disable for reduced motion. */
+.release-status__dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background-color: var(--color-text-muted);
+}
+
+.release-status__text {
+  margin-top: var(--space-2);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* ── Available state (unused until a real release exists) ────────────── */
+
+.release-status--available {
+  border-left-color: var(--color-accent);
+}
+
+.release-status--available .release-status__dot {
+  background-color: var(--color-accent);
+}
