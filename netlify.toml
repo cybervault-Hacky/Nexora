@@ -1,0 +1,6 @@
+# The website is an isolated pnpm workspace (see website/pnpm-workspace.yaml),
+# so the root install does not cover its dependencies. Install them explicitly
+# before building.
+[build]
+  command = "pnpm --dir website install --frozen-lockfile && pnpm --dir website build"
+  publish = "website/dist"
