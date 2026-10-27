@@ -31,6 +31,7 @@ import { createPortalServer } from "../index.mjs";
 
 const WEBSITE_DIR = path.resolve(import.meta.dirname, "../..");
 const STATIC_DIR = path.join(WEBSITE_DIR, "dist");
+const NETLIFY_CONFIG = path.resolve(WEBSITE_DIR, "../netlify.toml");
 
 /* ─────────────────────────────── harness ─────────────────────────────── */
 
@@ -78,6 +79,36 @@ async function makeStaticFixture() {
 }
 
 /* ─────────────────────── static site + SPA routing ───────────────────── */
+
+test("Netlify's SPA fallback cannot turn API or missing-file failures into HTML success responses", async () => {
+  const source = await fs.readFile(NETLIFY_CONFIG, "utf8");
+  const rules = source
+    .split(/\r?\n(?=\[\[redirects\]\])/)
+    .slice(1)
+    .map((section) => {
+      const rule = {};
+      for (const match of section.matchAll(/^\s{2}(from|to|status)\s*=\s*(?:"([^"]+)"|(\d+))\s*$/gm)) {
+        rule[match[1]] = match[1] === "status" ? Number(match[3]) : match[2];
+      }
+      return rule;
+    });
+
+  // Rule order is part of the contract: Netlify uses the first match. Leaving
+  // every rule unforced lets real files shadow the fallback, including hashed
+  // assets and sitemap.xml when an indexable build actually emits it.
+  assert.deepEqual(rules, [
+    { from: "/api", to: "/404.txt", status: 404 },
+    { from: "/api/*", to: "/404.txt", status: 404 },
+    { from: "/sitemap.xml", to: "/404.txt", status: 404 },
+    { from: "/assets/*", to: "/404.txt", status: 404 },
+    { from: "/*", to: "/index.html", status: 200 },
+  ]);
+  assert.ok(!source.includes("force = true"), "static files must retain Netlify's default shadowing");
+
+  const notFound = await fs.readFile(path.join(WEBSITE_DIR, "public", "404.txt"), "utf8");
+  assert.ok(notFound.length > 0);
+  assert.ok(!notFound.includes("<div id=\"root\">"), "the failure body must not be the React app shell");
+});
 
 test("deep links and refreshes serve the app shell, and assets are served separately", async () => {
   const app = await startServer();
