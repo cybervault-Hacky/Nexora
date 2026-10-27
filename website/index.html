@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nexora — AI Coding Assistant</title>
+    <meta
+      name="description"
+      content="Nexora is a Windows desktop AI coding assistant built around local models, designed for a more private, locally run coding workflow. In active development."
+    />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#ffffff" />
+    <!--
+      Phase 14 indexing policy. This tag is the *pre-JavaScript* default and is
+      the value the site ships with: no confirmed production domain exists, so
+      the build stays out of search indexes.
+
+      On a launch build (VITE_SITE_URL + VITE_SITE_INDEXABLE=true) the Vite SEO
+      plugin rewrites it to "index, follow", and `usePageMetadata` keeps it in
+      step per route once the app mounts — the not-found route is always
+      "noindex, follow". See README → "Phase 14 — SEO and discoverability".
+
+      This is crawler guidance, not access control.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p>
+        The Nexora website needs JavaScript enabled to display its content.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,64 @@
+/*
+ * Fact list — hairline-separated definition rows.
+ *
+ * No card, no background: on a page of this length, surfaces would produce a
+ * wall of boxes. A rule between rows is enough to group each statement.
+ */
+
+.fact-list {
+  margin: 0;
+  max-width: 48rem;
+}
+
+.fact-list__row {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-5);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.fact-list__row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.fact-list__row:last-child {
+  padding-bottom: 0;
+}
+
+.fact-list__term {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fact-list__term-text {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+  text-wrap: pretty;
+}
+
+.fact-list__detail {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+  /* Long identifiers and file names must not push the row wider than the
+   * viewport on a narrow phone. */
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 48rem) {
+  .fact-list__row {
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+    gap: var(--space-2) var(--space-8);
+    align-items: baseline;
+  }
+}

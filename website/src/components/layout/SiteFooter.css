@@ -1,0 +1,117 @@
+/*
+ * Site footer.
+ *
+ * Two stacked rows: identity and description, then a hairline rule with the two
+ * trust links beneath it. No column headings, no link grid, no repeated
+ * navigation, no status paragraph.
+ */
+
+.site-footer {
+  margin-top: auto;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+  background-color: var(--color-bg-secondary);
+  padding-block: var(--space-8) var(--space-7);
+}
+
+/* ── Brand ───────────────────────────────────────────────────────────── */
+
+.site-footer__brand {
+  max-width: 34rem;
+}
+
+.site-footer__mark-row {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* A 20px wordmark row is a hard target on a phone; 44px is the comfortable
+   * minimum. The extra height comes from padding, so the mark does not move. */
+  min-height: 2.75rem;
+  color: var(--color-text-primary);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.site-footer__mark-row:hover {
+  color: var(--color-text-primary);
+}
+
+.site-footer__mark {
+  flex-shrink: 0;
+  color: var(--color-text-primary);
+}
+
+.site-footer__wordmark {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--leading-none);
+}
+
+.site-footer__description {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+/* ── Trust links ─────────────────────────────────────────────────────── */
+
+/* The rule spans the full content width, so the links read as the footer's
+ * closing line rather than as a second column of the brand block. The links
+ * keep the container's left edge, which lines them up with the wordmark and the
+ * description above at every width. */
+.site-footer__legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin-top: var(--space-7);
+  padding-top: var(--space-5);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.site-footer__link {
+  display: inline-flex;
+  align-items: center;
+  /* 44px tall on touch; the desktop value stays compact. */
+  min-height: 2.75rem;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.site-footer__link:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-thickness: var(--border-width);
+  text-underline-offset: 4px;
+}
+
+/* The targets are 44px by default, which is right for touch. Compact sizing is
+ * gated on a *fine pointer*, not on viewport width: a 768–1024px tablet is still
+ * driven by a finger, while a narrow desktop window is still driven by a mouse.
+ * Width would get both of those wrong. */
+@media (hover: hover) and (pointer: fine) {
+  .site-footer__link {
+    min-height: var(--space-7);
+  }
+
+  /* 20px is the natural height of the wordmark row, and a mouse pointer is not
+   * an exemption from the 24px minimum target size. Growing the box would push
+   * the footer 4px taller on desktop, so the hit area is extended instead: the
+   * wordmark keeps its exact position and the link still answers a pointer 24px
+   * tall. Layout above and below is untouched. */
+  .site-footer__mark-row {
+    min-height: 0;
+  }
+
+  .site-footer__mark-row::after {
+    content: "";
+    position: absolute;
+    inset: -4px 0;
+  }
+}
+

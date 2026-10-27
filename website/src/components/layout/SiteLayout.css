@@ -1,0 +1,67 @@
+/* Page frame shared by every route. */
+
+.site {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--color-bg);
+}
+
+.site__main {
+  flex: 1 0 auto;
+  /* A column flex context so a page whose content is shorter than the viewport
+   * (the home hero) can take the remaining height and centre itself, instead of
+   * leaving a band of empty space above the footer on tall displays. Pages with
+   * more content than the viewport are unaffected. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* The main landmark is a programmatic focus target for the skip link and for
+ * client-side route changes; it must not draw a focus ring when focused this
+ * way. Interactive elements inside it keep their own visible focus. */
+.site__main:focus {
+  outline: none;
+}
+
+/* ── Route transition (Phase 12) ─────────────────────────────────────── */
+
+/*
+ * A short fade-and-rise as each page enters. It is an *entrance* only: React
+ * Router renders the new page immediately, and this animation starts from the
+ * stylesheet, so the page is never withheld from the DOM, from assistive
+ * technology, or from search engines while it plays. The global
+ * `prefers-reduced-motion` rule in base.css collapses the duration to ~0, which
+ * leaves the end state in place.
+ *
+ * `site__route` is keyed on the pathname by the layout, which is what makes the
+ * animation replay on navigation instead of running once.
+ */
+.site__route {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  animation: route-enter var(--duration-base) var(--ease-out) both;
+}
+
+@keyframes route-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--shift-enter));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* If animation is unavailable for any reason, the page must still be visible:
+ * the rule above is the only thing that could hide it, so a browser that
+ * ignores the keyframes simply shows the base state. */
+@media (prefers-reduced-motion: reduce) {
+  .site__route {
+    animation: none;
+  }
+}

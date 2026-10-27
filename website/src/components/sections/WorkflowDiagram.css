@@ -1,0 +1,104 @@
+/*
+ * Conceptual workflow diagram.
+ *
+ * Column stacks on narrow screens, row from 48rem. Static 2D only: borders,
+ * one dashed accent connector, and text. No canvas, WebGL, 3D, or animation.
+ */
+
+.flow {
+  margin: 0;
+  min-width: 0;
+}
+
+.flow__canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-bg-secondary);
+}
+
+/* ── Stages ──────────────────────────────────────────────────────────── */
+
+.flow__stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  text-align: center;
+  align-items: center;
+}
+
+/* The final stage carries the accent hairline, marking where inference is
+ * intended to run. */
+.flow__stage--accent {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+}
+
+.flow__mark {
+  display: inline-flex;
+  color: var(--color-text-primary);
+}
+
+.flow__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+}
+
+.flow__meta {
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: var(--color-text-muted);
+}
+
+/* ── Connector ───────────────────────────────────────────────────────── */
+
+/* Vertical by default, horizontal once the stages sit in a row. */
+.flow__arrow {
+  align-self: center;
+  width: 0;
+  height: var(--space-4);
+  border-left: var(--border-width-strong) dashed var(--color-border-strong);
+}
+
+.flow__caption {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* ── Horizontal layout ───────────────────────────────────────────────── */
+
+@media (min-width: 48rem) {
+  .flow__canvas {
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--space-2);
+    padding: var(--space-6);
+  }
+
+  .flow__stage {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .flow__arrow {
+    align-self: center;
+    width: var(--space-4);
+    height: 0;
+    border-left: 0;
+    border-top: var(--border-width-strong) dashed var(--color-border-strong);
+  }
+}

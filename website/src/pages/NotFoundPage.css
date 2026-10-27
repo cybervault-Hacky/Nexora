@@ -1,0 +1,23 @@
+/* Fallback route. */
+
+.not-found {
+  max-width: var(--container-narrow);
+}
+
+.not-found__title {
+  margin-top: var(--space-3);
+  font-size: var(--text-4xl);
+  letter-spacing: var(--tracking-tighter);
+  color: var(--color-text-primary);
+}
+
+.not-found__lead {
+  margin-top: var(--space-4);
+  max-width: var(--reading-width);
+  font-size: var(--text-lg);
+  color: var(--color-text-secondary);
+}
+
+.not-found__actions {
+  margin-top: var(--space-7);
+}

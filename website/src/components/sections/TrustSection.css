@@ -1,0 +1,80 @@
+/*
+ * Trust section — editorial block shared by the Privacy, Security, About and
+ * Support pages.
+ *
+ * Typographic separation only: one hairline above each section, one heading,
+ * one optional lead. No cards, no backgrounds — on a page of this length,
+ * surfaces would produce a wall of boxes. The generic descendant rules keep the
+ * pages free of one-off paragraph classes.
+ */
+
+.trust-section {
+  /* 32px above and below each block: with a hairline between them this reads as
+   * a deliberate editorial rhythm rather than a stack of loose sections, and it
+   * keeps a ten-section disclosure page from becoming a scroll marathon. */
+  padding-block: var(--space-7);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.trust-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.trust-section__title {
+  max-width: var(--container-narrow);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+
+.trust-section__lead {
+  margin-top: var(--space-3);
+  max-width: var(--reading-width);
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+.trust-section__body {
+  margin-top: var(--space-5);
+}
+
+/* Vertical rhythm between the body's own children, so pages can be written as
+ * plain paragraphs and lists. */
+.trust-section__body > * + * {
+  margin-top: var(--space-4);
+}
+
+.trust-section__body p {
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+.trust-section__body ul {
+  max-width: var(--reading-width);
+  padding-inline-start: var(--space-5);
+}
+
+.trust-section__body li {
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* Closing cross-link line, shared by the trust pages. */
+.trust-links {
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}

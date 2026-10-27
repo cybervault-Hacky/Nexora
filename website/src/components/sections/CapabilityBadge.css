@@ -1,0 +1,41 @@
+/* Capability status label. */
+
+.cap-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid transparent;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.5;
+  letter-spacing: var(--tracking-snug);
+  white-space: nowrap;
+}
+
+.cap-badge__dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background-color: currentcolor;
+}
+
+/* Measured contrast: 7.46:1 */
+.cap-badge--implemented {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+/* Measured contrast: 6.44:1 */
+.cap-badge--unverified {
+  background-color: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+/* Measured contrast: 6.69:1 */
+.cap-badge--planned {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}

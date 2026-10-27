@@ -1,0 +1,205 @@
+/*
+ * Baseline / reset.
+ *
+ * Element-level defaults only. Bare element selectors are used here so that
+ * future components inherit sensible typography without re-declaring it;
+ * nothing in this file targets a component class.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Anchor targets clear the sticky navigation. */
+  scroll-padding-top: calc(var(--header-height) + var(--space-3));
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-relaxed);
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Long URLs and identifiers wrap instead of forcing horizontal scroll. */
+  overflow-wrap: break-word;
+}
+
+/* Keep horizontal overflow from scrolling the page on narrow viewports
+ * without hiding genuine layout bugs from measurement. */
+html,
+body {
+  max-width: 100%;
+}
+
+/* Typographic defaults: margin is intentionally zeroed everywhere; vertical
+ * rhythm is owned by layout components rather than by arbitrary margins. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-4xl);
+  letter-spacing: var(--tracking-tighter);
+}
+
+h2 {
+  font-size: var(--text-3xl);
+}
+
+h3 {
+  font-size: var(--text-2xl);
+  line-height: var(--leading-snug);
+}
+
+h4 {
+  font-size: var(--text-xl);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+}
+
+h5 {
+  font-size: var(--text-lg);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+}
+
+h6 {
+  font-size: var(--text-base);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-normal);
+}
+
+p {
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+li + li {
+  margin-top: var(--space-2);
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+hr {
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+/* Links inherit the accent treatment by default; components may override. */
+a {
+  color: var(--color-accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: var(--border-width);
+  text-underline-offset: 0.2em;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+}
+
+a:active {
+  color: var(--color-accent-active);
+}
+
+/* Form controls inherit page typography instead of falling back to the
+ * browser default UI font. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+::selection {
+  background-color: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+
+/* Keyboard-visible focus for every interactive element. Outlines are never
+ * removed globally; only elements that provide an equivalent ring of their
+ * own may replace it. */
+/* No border-radius here: a global radius would reshape focused elements that
+ * are intentionally square. Components draw their own ring when the default
+ * offset does not suit them. */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Reduced-motion defaults apply to every transition introduced in this
+ * phase. Motion never carries meaning here, so removing it is safe. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

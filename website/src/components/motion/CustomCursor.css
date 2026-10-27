@@ -1,0 +1,149 @@
+/*
+ * Custom cursor (Phase 12).
+ *
+ * Two halves that must stay in step:
+ *   1. `.cursor` — the decorative overlay that draws the glyph.
+ *   2. `html.has-nexora-cursor` — hides the native cursor, but only where the
+ *      native cursor would be the arrow or the hand.
+ *
+ * The class is added by the component after it has confirmed a fine pointer and
+ * no reduced-motion request, so a browser that cannot run the overlay never
+ * ends up with no cursor at all.
+ */
+
+.cursor {
+  /* Single source of truth for the glyph box; the component reads the rendered
+   * size back for hotspot alignment instead of keeping a second constant. */
+  --cursor-glyph-size: 26px;
+
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2147483000;
+  width: 0;
+  height: 0;
+  /* Never intercept clicks, drags, selection or scrolling. */
+  pointer-events: none;
+  opacity: 0;
+  /* `will-change` is scoped to an element that is already composited by its
+   * transform, so this is a hint, not a new layer per frame. */
+  will-change: transform;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.cursor[data-visible="true"] {
+  opacity: 1;
+}
+
+.cursor__glyph {
+  display: block;
+  /* base.css applies `max-width: 100%; height: auto` to every svg, which
+   * collapses to 0 inside this zero-sized layer. The cursor owns its own
+   * intrinsic size, so both are restated here. */
+  width: var(--cursor-glyph-size);
+  height: var(--cursor-glyph-size);
+  max-width: none;
+  overflow: visible;
+  /* Scale from the tip so hover feedback grows away from the hotspot and the
+   * pointer never appears to drift off the target. */
+  transform-origin: 0 0;
+  transform: scale(var(--cursor-scale, 1));
+  transition: transform var(--duration-base) var(--ease-out);
+}
+
+.cursor__outline {
+  fill: var(--color-cursor);
+}
+
+/* Separation from whatever sits behind the pointer. Matches the page
+ * background, so on the site's own surfaces it contributes nothing. */
+.cursor__keyline {
+  fill: none;
+  stroke: var(--color-bg);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+
+/* ── States ──────────────────────────────────────────────────────────── */
+
+/* Hover: the same glyph, a little larger. No design change, no ring, no fill
+ * swap — the reference is the reference in every state. */
+.cursor[data-state="hover"] .cursor__glyph {
+  --cursor-scale: var(--cursor-scale-hover);
+}
+
+/* Press: the point settles back toward its resting size, which reads as
+ * "pushed" without a bounce or a ripple. */
+.cursor[data-state="press"] .cursor__glyph {
+  --cursor-scale: var(--cursor-scale-press);
+  transition-duration: var(--duration-fast);
+}
+
+/* ── Native cursor suppression ───────────────────────────────────────── */
+
+/*
+ * `:where()` keeps the exemption list at zero specificity so any component that
+ * sets its own cursor (or a future one) wins without needing an override.
+ */
+html.has-nexora-cursor,
+html.has-nexora-cursor * {
+  cursor: none;
+}
+
+html.has-nexora-cursor :where(
+  input,
+  textarea,
+  select,
+  option,
+  [contenteditable]:not([contenteditable="false"]),
+  [style*="resize"],
+  [data-native-cursor]
+) {
+  cursor: revert;
+}
+
+/* A disabled control is a state cue, not a click target: let the browser show
+ * `not-allowed` and hide the decorative glyph over it. */
+html.has-nexora-cursor :where(:disabled, [aria-disabled="true"]) {
+  cursor: revert;
+}
+
+/* Reduced motion: never hide the native cursor this late — the component
+ * removes the class itself, but this keeps the stylesheet honest on its own. */
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    display: none;
+  }
+
+  html.has-nexora-cursor,
+  html.has-nexora-cursor * {
+    cursor: revert;
+  }
+}
+
+/* Coarse pointers never get here, but if the class is ever applied there the
+ * native cursor must win: a finger must not see a fake mouse pointer. */
+@media (hover: none), (pointer: coarse) {
+  html.has-nexora-cursor,
+  html.has-nexora-cursor * {
+    cursor: revert;
+  }
+}
+
+/* Forced colours (Windows high contrast, and any engine honouring
+ * `forced-colors: active`). Phase 15 measured this: the glyph's fill is the
+ * fixed `--color-cursor` navy, which forced colours do not remap, so on a
+ * forced-dark background it painted at 1.31:1 against black — while the native
+ * cursor was suppressed, leaving no usable pointer at all. The decorative
+ * overlay steps aside entirely and the system cursor comes back, which is the
+ * behaviour a high-contrast user expects. No effect outside this mode. */
+@media (forced-colors: active) {
+  .cursor {
+    display: none;
+  }
+
+  html.has-nexora-cursor,
+  html.has-nexora-cursor * {
+    cursor: revert;
+  }
+}

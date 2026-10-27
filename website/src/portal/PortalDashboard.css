@@ -1,0 +1,491 @@
+/*
+ * Developer Portal — dashboard shell and shared panel styles.
+ *
+ * Same tokens as the public site, same restrained palette: neutral surfaces, one
+ * accent used for links and focus, hairline borders, and no colour used to carry
+ * meaning on its own. The layout is a two-column grid from 900px up and a single
+ * column below it.
+ */
+
+.portal {
+  padding: var(--space-7) var(--page-padding) var(--space-10);
+  max-width: var(--container-max);
+  margin: 0 auto;
+}
+
+.portal--centered {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: min(60vh, 30rem);
+  max-width: var(--container-narrow);
+}
+
+.portal--auth {
+  padding: 0;
+  max-width: none;
+}
+
+/* The public site's page-transition wrapper applies a transform on navigation,
+ * which would make it the containing block for the sticky header. The portal
+ * opts its own bar out of stickiness entirely, so nothing can collide. */
+
+.portal__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+.portal__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+
+.portal__mark {
+  color: var(--color-text-primary);
+  flex: none;
+}
+
+.portal__wordmark {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+.portal__divider {
+  width: 1px;
+  height: 1rem;
+  background: var(--color-border);
+}
+
+.portal__portal-label {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.portal__account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.portal__account-text {
+  display: grid;
+  text-align: right;
+  min-width: 0;
+}
+
+.portal__account-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.portal__account-mail {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.portal__signout,
+.portal-button {
+  min-height: var(--control-height-sm);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-btn-secondary-bg);
+  color: var(--color-btn-secondary-text);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.portal__signout:hover:not(:disabled),
+.portal-button:hover:not(:disabled) {
+  background: var(--color-btn-secondary-bg-hover);
+  border-color: var(--color-border-strong);
+}
+
+.portal__signout:disabled,
+.portal-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.portal__layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-7);
+  padding-top: var(--space-7);
+}
+
+@media (min-width: 56.25rem) {
+  .portal__layout {
+    grid-template-columns: 12.5rem minmax(0, 1fr);
+    gap: var(--space-9);
+  }
+}
+
+/* ───────────────────────── navigation ───────────────────────── */
+
+.portal__nav-list {
+  /* An auto-fitting grid rather than a wrapped flex row: with five items, a
+   * wrap can leave one link stranded on its own line at 390px. This keeps the
+   * rows even at every width without introducing a scrolling region that could
+   * hide a destination. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 56.25rem) {
+  .portal__nav-list {
+    display: flex;
+    flex-direction: column;
+    /* A sticky rail is safe: it starts below the header's own reserved space and
+     * only sticks once the page scrolls, and the site's sticky header never
+     * overlaps it because the rail is shorter than the viewport. */
+    position: sticky;
+    top: calc(var(--header-height) + var(--space-4));
+  }
+}
+
+.portal__nav-link {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.portal__nav-link:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+/* Active state is carried by weight, a tint, and a marker bar — never by colour
+ * alone. `aria-current="page"` (set by NavLink) is the semantic signal. */
+.portal__nav-link--active {
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.portal__main {
+  min-width: 0;
+}
+
+.portal__title {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.portal__description {
+  margin: var(--space-2) 0 0;
+  max-width: var(--reading-width);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+.portal__panel-slot {
+  margin-top: var(--space-7);
+}
+
+.portal__unknown {
+  max-width: var(--container-narrow);
+  margin: 0 auto;
+  padding: var(--space-9) 0;
+}
+
+/* ───────────────────────── panels ───────────────────────── */
+
+.portal-panel + .portal-panel {
+  margin-top: var(--space-7);
+}
+
+.portal-panel__description {
+  margin: var(--space-2) 0 0;
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+/* The first sub-section sits directly under the panel's description, so it does
+ * not need the full top margin the later ones use. */
+.portal-panel__description + .portal-facts,
+.portal-panel__description + .portal-list {
+  margin-top: var(--space-5);
+}
+
+.portal-panel__subhead {
+  margin: var(--space-7) 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.portal-panel__text {
+  margin: 0 0 var(--space-3);
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+.portal-panel__note {
+  margin: var(--space-4) 0 0;
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+/* ───────────────────────── facts ───────────────────────── */
+
+.portal-facts {
+  margin: var(--space-5) 0 0;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.portal-facts__row {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+@media (min-width: 38rem) {
+  .portal-facts__row {
+    grid-template-columns: 12rem minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+}
+
+.portal-facts__term {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.portal-facts__detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ───────────────────────── states ───────────────────────── */
+
+.portal-state {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+.portal-state__title {
+  margin: 0;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.portal-state__body {
+  margin-top: var(--space-2);
+}
+
+.portal-state__body p {
+  margin: 0 0 var(--space-2);
+}
+
+.portal-state__body p:last-child {
+  margin-bottom: 0;
+}
+
+.portal-state--error {
+  border-color: var(--color-border);
+  border-left: var(--border-width-strong) solid var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.portal-state--unconfigured {
+  border-left: var(--border-width-strong) solid var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.portal-state__retry {
+  margin-top: var(--space-3);
+  min-height: var(--control-height-sm);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+/* ───────────────────────── lists, routes, code ───────────────────── */
+
+.portal-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+.portal-list li + li {
+  margin-top: var(--space-2);
+}
+
+.portal-list a,
+.portal-state a {
+  color: var(--color-accent);
+  text-underline-offset: 0.15em;
+}
+
+.portal-routes {
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.portal-routes__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  font-size: var(--text-sm);
+}
+
+.portal-routes__path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-primary);
+}
+
+.portal-routes__link {
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  text-underline-offset: 0.15em;
+}
+
+.portal-routes__meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.portal-events {
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.portal-events__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-width) solid var(--color-border-subtle);
+  font-size: var(--text-sm);
+}
+
+.portal-events__event {
+  color: var(--color-text-primary);
+}
+
+.portal-events__time {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.portal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.portal-actions__hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.portal-code {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-primary);
+  /* A long command must scroll inside its own box, never widen the page. */
+  overflow-x: auto;
+}
+
+.portal-inline-error {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 34rem) {
+  .portal__account {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .portal__account-text {
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portal__nav-link,
+  .portal__signout,
+  .portal-button {
+    transition: none;
+  }
+}

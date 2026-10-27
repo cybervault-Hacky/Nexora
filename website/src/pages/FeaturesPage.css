@@ -1,0 +1,67 @@
+/* Features page layout. */
+
+.features__summary {
+  margin-top: var(--space-7);
+  max-width: var(--reading-width);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}
+
+.features__groups {
+  min-width: 0;
+}
+
+/* ── Closing limits block ────────────────────────────────────────────── */
+
+.features__limits {
+  max-width: var(--container-narrow);
+  padding-top: var(--space-7);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.features__limits-title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: var(--color-text-primary);
+}
+
+.features__limits-list {
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.features__limits-list li {
+  position: relative;
+  padding-left: var(--space-5);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+.features__limits-list li + li {
+  margin-top: var(--space-3);
+}
+
+/* Neutral square marker — deliberately not a check or a cross, which would
+ * read as a pass/fail verdict. */
+.features__limits-list li::before {
+  content: "";
+  position: absolute;
+  top: 0.55em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border: var(--border-width) solid var(--color-text-muted);
+  border-radius: var(--radius-xs);
+}
+
+.features__limits-note {
+  margin-top: var(--space-5);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-muted);
+}

@@ -1,0 +1,61 @@
+/* Status legend. */
+
+.cap-legend {
+  margin-top: var(--space-8);
+  padding: var(--space-5);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg-secondary);
+  max-width: var(--container-narrow);
+}
+
+.cap-legend__title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.cap-legend__list {
+  margin: var(--space-4) 0 0;
+}
+
+.cap-legend__row {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-3);
+  border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.cap-legend__row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cap-legend__term {
+  margin: 0;
+}
+
+.cap-legend__meaning {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text-secondary);
+}
+
+@media (min-width: 34rem) {
+  .cap-legend__row {
+    grid-template-columns: minmax(0, 10rem) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: baseline;
+  }
+}
+
+@media (min-width: 64rem) {
+  .cap-legend {
+    margin-top: var(--space-9);
+    padding: var(--space-6);
+  }
+}

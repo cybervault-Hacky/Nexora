@@ -1,0 +1,29 @@
+# Website-local ignore rules.
+#
+# The repository root .gitignore also applies here (it ignores node_modules/,
+# dist/, coverage/, .vite/, *.log and .env files). These rules document the
+# website's own generated artifacts explicitly so the directory is
+# self-explanatory and independently maintainable.
+
+# Dependencies
+node_modules/
+
+# Build output and caches
+dist/
+.vite/
+*.tsbuildinfo
+
+# Developer portal runtime data: account hashes and session digests.
+# Never committed — it is per-install state, not source.
+.portal-data/
+
+# Local-only files and environment overrides (never commit secrets)
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor, OS, and log noise
+.DS_Store
+Thumbs.db
+*.log

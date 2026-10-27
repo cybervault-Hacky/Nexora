@@ -1,0 +1,263 @@
+/*
+ * Nexora website — design tokens (Phase 2).
+ *
+ * Single source of truth for colour, typography, spacing, shape, depth, and
+ * motion. Components consume these variables only; no component should hard
+ * code a colour, spacing value, or radius.
+ *
+ * Theme: light-first. Nexora's desktop application is deliberately dark-only,
+ * so the website's theme is not shared with it — these tokens are website
+ * scoped and must not be imported by the desktop UI.
+ *
+ * Every text/background pair defined here was contrast-checked against
+ * WCAG 2.1 (see website/README.md for the measured ratios).
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ───────────────────────── Colour: surfaces ───────────────────────── */
+  --color-bg: #ffffff;
+  --color-bg-secondary: #faf9f7; /* warm white — section wash */
+  --color-bg-tertiary: #f4f2ef; /* inset recess */
+  --color-surface: #ffffff;
+  --color-surface-muted: #fbfaf8;
+
+  /* ───────────────────────── Colour: text ───────────────────────────── */
+  --color-text-primary: #16181d; /* charcoal, 17.76:1 on white */
+  --color-text-secondary: #51555d; /* 7.48:1 on white */
+  --color-text-muted: #6b6f77; /* 5.04:1 on white — AA for small text */
+  --color-text-inverse: #ffffff;
+
+  /* ───────────────────────── Colour: borders ────────────────────────── */
+  --color-border-subtle: #ebe8e3;
+  --color-border: #ddd9d3;
+  --color-border-strong: #c8c3bb;
+
+  /* ───────────────────────── Colour: accent ─────────────────────────── */
+  /* One restrained brand accent. Used for links, focus rings, and small
+   * emphasis only — never as a large background wash. */
+  --color-accent: #1a56db; /* 6.18:1 on white */
+  --color-accent-hover: #1445b3; /* 8.29:1 on white */
+  --color-accent-active: #103a99;
+  --color-accent-soft: #eef3fe; /* tint for selected/hover surfaces */
+
+  /* ───────────────────────── Colour: cursor ─────────────────────────── */
+  /* Sampled from the approved cursor reference: a blue-shifted navy rather
+   * than black, which is the only "accent" the glyph carries. 16.2:1 on
+   * white, so the pointer is legible over every surface on the site. */
+  --color-cursor: #192133;
+
+  /* ───────────────────────── Colour: controls ───────────────────────── */
+  --color-btn-primary-bg: #16181d;
+  --color-btn-primary-bg-hover: #2a2d33;
+  --color-btn-primary-bg-active: #000000;
+  --color-btn-primary-text: #ffffff;
+
+  --color-btn-secondary-bg: #ffffff;
+  --color-btn-secondary-bg-hover: #f6f5f2;
+  --color-btn-secondary-bg-active: #efede9;
+  --color-btn-secondary-text: #16181d;
+
+  /* ───────────────────────── Colour: status ─────────────────────────── */
+  /* Deliberately muted. Status colour is always paired with text so state is
+   * never communicated by colour alone. */
+  --color-success: #14713f;
+  --color-warning: #7a5100;
+  --color-danger: #ac2c22;
+  --color-success-soft: #eaf5ee;
+  --color-warning-soft: #fdf5e4;
+  --color-danger-soft: #fbeeed;
+
+  /* ───────────────────────── Colour: focus ──────────────────────────── */
+  --color-focus: #1a56db;
+
+  /* ───────────────────────── Typography: families ───────────────────── */
+  /* System stack only — no downloaded fonts, so first paint is never blocked
+   * on a font request and there is no licensing surface to manage. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* ───────────────────────── Typography: weights ────────────────────── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ───────────────────────── Typography: scale ──────────────────────── */
+  /* Fluid sizes use clamp() so text scales with the viewport without ever
+   * exceeding a comfortable maximum on large displays or overflowing the
+   * minimum supported width (320px). */
+  --text-2xs: 0.6875rem; /* 11px — micro labels */
+  --text-xs: 0.75rem; /* 12px — labels, metadata */
+  --text-sm: 0.875rem; /* 14px — supporting text */
+  --text-md: 1rem; /* 16px — UI text, buttons */
+  --text-base: 1rem; /* 16px — body default */
+  --text-lg: clamp(1.125rem, 1.06rem + 0.3vw, 1.3125rem); /* 18 → 21 — lead */
+  --text-xl: clamp(1.25rem, 1.17rem + 0.36vw, 1.4375rem); /* 20 → 23 — h4 */
+  --text-2xl: clamp(1.5rem, 1.33rem + 0.72vw, 1.875rem); /* 24 → 30 — h3 */
+  --text-3xl: clamp(1.75rem, 1.5rem + 1.1vw, 2.375rem); /* 28 → 38 — h2 */
+  --text-4xl: clamp(2.125rem, 1.65rem + 2vw, 3.25rem); /* 34 → 52 — h1 */
+  /* Hero display size — larger than h1 but still restrained, and floored so
+   * it never overflows a 320px viewport. */
+  --text-display: clamp(2.5rem, 1.55rem + 4vw, 4.5rem); /* 40 → 72 */
+
+  /* ───────────────────────── Typography: rhythm ─────────────────────── */
+  --leading-none: 1;
+  --leading-tight: 1.1; /* headings */
+  --leading-snug: 1.28; /* sub-headings, UI */
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65; /* body copy */
+
+  --tracking-tighter: -0.03em;
+  --tracking-tight: -0.021em;
+  --tracking-snug: -0.011em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-wider: 0.08em; /* uppercase labels */
+
+  /* ───────────────────────── Spacing ───────────────────────────────── */
+  /* 4px base grid. Every margin, padding, and gap resolves to one of
+   * these steps. */
+  --space-0: 0;
+  --space-1: 0.25rem; /* 4 */
+  --space-2: 0.5rem; /* 8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.25rem; /* 20 */
+  --space-6: 1.5rem; /* 24 */
+  --space-7: 2rem; /* 32 */
+  --space-8: 2.5rem; /* 40 */
+  --space-9: 3rem; /* 48 */
+  --space-10: 4rem; /* 64 */
+  --space-11: 5rem; /* 80 */
+  --space-12: 6rem; /* 96 */
+
+  /* Vertical rhythm between page sections — fluid, so long pages do not
+   * waste vertical space on phones. */
+  --section-space: clamp(3.5rem, 2.75rem + 3.5vw, 5.5rem);
+  --section-space-tight: clamp(2.5rem, 2rem + 2.2vw, 3.5rem);
+
+  /* ───────────────────────── Layout ────────────────────────────────── */
+  --container-max: 76rem; /* 1216px — standard content width */
+  --container-narrow: 46rem; /* 736px — reading / focused width */
+  --reading-width: 62ch; /* comfortable measure for body copy */
+
+  /* Page gutters: never touching the edge on mobile, never over-stretched
+   * on wide displays. */
+  --page-padding: clamp(1.25rem, 4.5vw, 3rem);
+  --page-padding-wide: clamp(1.5rem, 6vw, 4rem);
+
+  --grid-gap: clamp(1rem, 2vw, 2rem);
+
+  /* ───────────────────────── Borders & shape ───────────────────────── */
+  --border-width: 1px;
+  --border-width-strong: 2px;
+
+  /* Restrained rounding: rectangular geometry by default, with pill shape
+   * reserved for tags only. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* ───────────────────────── Depth ─────────────────────────────────── */
+  /* Soft and low-opacity. No glows. */
+  --shadow-xs: 0 1px 2px rgb(22 24 29 / 4%);
+  --shadow-sm:
+    0 1px 3px rgb(22 24 29 / 6%), 0 1px 2px rgb(22 24 29 / 4%);
+  --shadow-md:
+    0 4px 12px rgb(22 24 29 / 6%), 0 1px 3px rgb(22 24 29 / 5%);
+  --shadow-lg:
+    0 12px 32px rgb(22 24 29 / 8%), 0 2px 8px rgb(22 24 29 / 4%);
+
+  /* ──────────────────── Glass navigation (Phase 13) ─────────────────── */
+  /* The header capsule: a translucent near-white surface with a backdrop
+   * blur. `--color-glass` is what the blur version uses; `--color-glass-solid`
+   * is the fallback surface for browsers without `backdrop-filter` and is
+   * opaque enough to carry the text on its own (see the contrast note in
+   * website/README.md).
+   *
+   * The tint is white, not grey: on this site every page is white or warm
+   * white, so a white glass reads as a soft lift rather than a tinted panel. */
+  --color-glass: rgb(255 255 255 / 78%);
+  /* The drop-down menu covers text rather than sitting above open space, so it
+   * needs a heavier tint than the capsule to stay legible. */
+  --color-glass-panel: rgb(255 255 255 / 92%);
+  --color-glass-panel-solid: rgb(255 255 255 / 98%);
+  --color-glass-solid: rgb(255 255 255 / 94%);
+  --color-glass-border: rgb(22 24 29 / 7%);
+  --color-glass-highlight: rgb(255 255 255 / 72%);
+  --blur-glass: 18px;
+  --saturate-glass: 1.5;
+  --shadow-glass:
+    0 8px 28px rgb(22 24 29 / 7%), 0 1px 2px rgb(22 24 29 / 5%);
+
+  /* ───────────────────────── Controls ──────────────────────────────── */
+  /* md is the touch-safe default (44px). */
+  --control-height-sm: 2.25rem; /* 36 */
+  --control-height-md: 2.75rem; /* 44 */
+  --control-height-lg: 3.25rem; /* 52 */
+  --control-padding-x: 1.25rem;
+  /* Height of a desktop navigation link, and of the capsule that holds them. */
+  --nav-height: 4rem;
+  --header-capsule-h: var(--nav-height);
+  /* Air above and below the capsule: what makes it read as a floating island
+   * rather than a bar pinned to the top of the page. */
+  --header-block-pad: var(--space-3);
+  /* Total sticky-header footprint. Scroll offsets and sticky sidebars use this
+   * so nothing hides behind the capsule. */
+  --header-height: calc(var(--header-capsule-h) + var(--header-block-pad) * 2);
+
+  /* ───────────────────────── Focus ────────────────────────────────── */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 3px;
+  --focus-ring-color: var(--color-focus);
+
+  /* ───────────────────────── Motion ───────────────────────────────── */
+  /* Transitions only. Continuous motion lives in the home page's particle
+   * field (Phase 11) and in the cursor overlay (Phase 12); nothing here is
+   * scroll-triggered. */
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  /* Quick enough to feel like feedback rather than animation. */
+  --duration-press: 90ms;
+
+  /* ───────────────────── Phase 12: interaction ─────────────────────── */
+  /* How far a control settles when pressed. Small enough that text inside it
+   * does not visibly move. */
+  --scale-press: 0.985;
+  /* Cursor hover/press sizes, relative to its resting glyph. */
+  --cursor-scale-hover: 1.1;
+  --cursor-scale-press: 0.94;
+  /* How far a route fades up as it enters. */
+  --shift-enter: 6px;
+}
+
+/* ── Narrow viewports ────────────────────────────────────────────────────
+ * Two adjustments, both deliberate:
+ *
+ * 1. The capsule is shorter. A 64px capsule plus margins takes ~72px off the
+ *    top of a 320–430px phone screen, so it drops to 56px with 8px of air.
+ * 2. `--text-2xs` (11px) becomes 12px. The uppercase, letter-spaced micro
+ *    labels that use it are legible at 11px on a desktop monitor but not on a
+ *    phone held at arm's length. Desktop keeps 11px.
+ *
+ * Motion tokens are untouched: the global reduced-motion rule already floors
+ * every transition. */
+@media (max-width: 48rem) {
+  :root {
+    --text-2xs: 0.75rem; /* 12px on narrow screens */
+    --header-capsule-h: 3.5rem; /* 56 */
+    --header-block-pad: var(--space-2);
+  }
+}
