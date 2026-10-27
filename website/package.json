@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:netlify": "tsc --noEmit && vite build && node scripts/prepare-netlify-redirects.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "portal": "node server/index.mjs",

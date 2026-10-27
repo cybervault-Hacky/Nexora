@@ -1,23 +1,26 @@
-# ₹0 public launch plan — website + working developer portal
+# ₹0 hosting investigation — historical Oracle VM fallback
 
-**Status: proposal, nothing deployed.** This document is the plan Sarthak reviews
-before any account, repository connection, DNS record, or deployment is created.
-It records what the code actually does (audited, not assumed), what free hosting
-currently offers (verified against provider documentation on 2026-10-27), and the
-one architecture that keeps the real portal working at ₹0.
+> **Superseded for implementation.** The current temporary ₹0 configuration and
+> operator steps are in [`NORTHFLANK_SANDBOX.md`](./NORTHFLANK_SANDBOX.md). This
+> document is retained as earlier research and an Oracle VM fallback, not as the
+> current launch procedure. Nothing in either document is deployed by itself.
 
-Short version: **the only ₹0 option that keeps a server-authenticated `/admin`
-portal with durable Owner storage and needs no code changes is a free virtual
-machine — Oracle Cloud Infrastructure "Always Free" — running the existing Node
-process behind nginx + Let's Encrypt.** Every free PaaS examined either discards
-its filesystem on restart (portal account lost) or no longer offers a free tier to
-new accounts.
+**Status: historical proposal, nothing deployed.** The original investigation
+recorded the existing server contract and provider limits checked on 2026-10-27.
+The follow-up Northflank review found a persistent-volume PaaS option that the
+earlier comparison had missed.
+
+Short version: **Northflank Sandbox is now the proposed temporary ₹0 setup;
+Oracle Always Free remains a higher-maintenance fallback.** Neither is a
+production-grade reliability guarantee. The current implementation adds a small
+container/proxy configuration while leaving the server and authentication code
+unchanged.
 
 > **Follow-up:** you asked to investigate the serverless ₹0 route first. That
 > scoping is in [`SERVERLESS_SCOPING.md`](./SERVERLESS_SCOPING.md) — it covers the
 > Cloudflare Workers + D1 option, its verified limits, and the blocker that decides
-> the question (the free plan's 10 ms CPU budget versus password hashing). Nothing
-> in either document has been implemented.
+> the question (the free plan's 10 ms CPU budget versus password hashing). That
+> serverless migration remains unimplemented; the Northflank setup does not use it.
 
 ---
 
@@ -75,7 +78,8 @@ Handled **inside the app**, so a plain reverse proxy is enough:
 Required in production: `NEXORA_PORTAL_ENV=production`,
 `NEXORA_PORTAL_ORIGIN=https://<confirmed-host>`, `NEXORA_PORTAL_SECURE_COOKIES=true`,
 `NEXORA_PORTAL_HOST`, `NEXORA_PORTAL_PORT`, `NEXORA_PORTAL_DATA_DIR`.
-Recommended behind a proxy: `NEXORA_PORTAL_TRUST_PROXY=true`.
+Proxy trust: keep `NEXORA_PORTAL_TRUST_PROXY=false` unless the controlled proxy
+is verified to overwrite untrusted `X-Forwarded-For` input.
 Optional: `NEXORA_PORTAL_STATIC_DIR`, `NEXORA_PORTAL_SESSION_TTL_SECONDS`,
 `NEXORA_PORTAL_SESSION_IDLE_SECONDS`, `NEXORA_PORTAL_ENV_FILE`.
 Owner provisioning only: `NEXORA_PORTAL_OWNER_EMAIL`, `_NAME`, `_PASSWORD`.
@@ -117,16 +121,18 @@ disk" changes that.
 
 | Provider | Free compute for a new account today | Durable disk at ₹0 | Verdict |
 | --- | --- | --- | --- |
-| **Oracle Cloud — Always Free** | Yes: 1,500 OCPU-hours + 9,000 GB-hours/month of Ampere A1 (= **2 OCPU / 12 GB** continuously), or 2 × AMD micro (1/8 OCPU, 1 GB) | **Yes**: 200 GB block/boot storage included, home region, for the life of the account; 10 TB/month egress | **Recommended.** Boot volume is real persistence; no code change |
+| **Northflank Sandbox** | Yes: up to $20/month of advertised resources; always on, no sleeping | **Yes**: persistent Single Read/Write service volumes | **Current temporary choice.** Non-production free tier, no SLA; see `NORTHFLANK_SANDBOX.md` |
+| **Oracle Cloud — Always Free** | Yes: 1,500 OCPU-hours + 9,000 GB-hours/month of Ampere A1 (= **2 OCPU / 12 GB** continuously), or 2 × AMD micro (1/8 OCPU, 1 GB) | **Yes**: 200 GB block/boot storage included, home region, for the life of the account; 10 TB/month egress | **Fallback.** Real persistence, but VM administration, capacity, and idle-reclamation risks |
 | **Render** | Yes: one free web service (512 MB, 0.1 CPU, 750 instance-hours/month) | **No.** Free instances have an ephemeral filesystem, cannot attach a persistent disk, and lose local files on every redeploy, restart or spin-down. Free Postgres **expires 30 days after creation** | ✗ unsupported for a durable portal |
 | **Fly.io** | No. New organisations get a trial only (2 machine-hours or 7 days); no free allowance since Oct 2024; volumes $0.15/GB-month | Only via a paid volume | ✗ not ₹0 |
-| **Railway** | Free plan $0 with **$1 of usage credit/month**; RAM billed at $10/GB-month, so a 0.5 GB always-on service (~$5/month) exceeds the credit and stops | Volume storage is $0.15/GB-month and draws on the same credit | ✗ not sustainable at ₹0 |
-| **Koyeb** | One free web service is documented, but Koyeb's pricing FAQ states that on entering a card at sign-up (a $29 pre-authorisation hold) they **also charge the pro-rated amount for the plan you select — currently Pro at $29/month**; free instances **cannot attach volumes** | No | ✗ costs money at sign-up |
+| **Railway** | Free plan $0 with **$1 of actual usage credit/month**; idle compute continues metering and exhausting credit takes workloads offline | One 0.5 GB volume is supported, but storage draws on the same small credit | ✗ too quota-fragile for a reliable portal |
+| **Koyeb** | One free web service (512 MB, 0.1 vCPU), but it scales to zero after one idle hour and **cannot attach volumes** | No; local SSD is ephemeral and can be lost during rescheduling | ✗ unsupported for a durable portal |
 | **Google Cloud Always Free** | Yes: 1 e2-micro + 30 GB standard PD, but only 1 GB egress/month; Google's VPC pricing bills an **in-use external IPv4 at $0.005/hour (≈$3.65/month)**, and the free tier covers one hour a month | Durable, but not reliably ₹0 for a *public* site | ✗ charge risk |
 | **Cloudflare Workers / Deno Deploy** | Yes, with durable KV/D1 free tiers | Durable, **but** requires rewriting the server (no `node:http`/`node:fs`) and adding dependencies | ✗ needs a migration you have not approved |
 | **Static hosts** (Pages, Netlify, Vercel, S3) | Yes | Not applicable | ✗ cannot run the portal; would mean removing authentication |
 
 Sources, all provider documentation read on 2026-10-27:
+`northflank.com/pricing`, `northflank.com/docs/v1/application/databases-and-persistence/add-a-volume`,
 `render.com/docs/free`, `render.com/docs/disks`, `fly.io/docs/about/pricing`,
 `docs.railway.com/pricing/plans`, `koyeb.com/docs/faqs/pricing` +
 `koyeb.com/docs/reference/instances`, `docs.oracle.com/en-us/iaas/Content/FreeTier/`
@@ -134,18 +140,16 @@ Sources, all provider documentation read on 2026-10-27:
 `cloud.google.com/vpc/network-pricing`. Third-party write-ups were used only to
 locate the relevant documentation, never as evidence of a limit.
 
-### One extra compatibility fact that rules out the PaaS options here
+### Repository compatibility follow-up
 
-`git ls-files website` returns **0 files** — the whole `website/` directory is
-untracked on this branch (150 untracked paths, nothing staged). Git-integration
-hosts (Render, Railway, Fly, Vercel…) build *from the repository*, so they would
-deploy an empty site unless `website/` were committed — a git action that is
-explicitly forbidden without approval. A VM is provisioned by copying files over
-SSH, so it needs no commit today.
+The earlier checkout left `website/` untracked; the current branch now tracks it.
+The Northflank build therefore uses the isolated `website/` pnpm workspace and
+its committed lockfile directly. No Git, account, or deployment action is part
+of preparing the configuration.
 
 ---
 
-## 4. Recommended architecture (₹0)
+## 4. Historical Oracle fallback architecture (not the current implementation)
 
 ```
 Internet ──HTTPS(443)──▶ nginx (Ubuntu package)
@@ -167,8 +171,9 @@ Oracle Cloud Always Free VM (Ubuntu 24.04, A1 1 OCPU / 6 GB, 47–50 GB boot vol
   enough to *run* it; 6 GB (A1) is chosen so the TypeScript/Vite **build** can also
   run on the box. If A1 capacity is unavailable in the home region, deploy a prebuilt
   `dist/` onto an AMD micro instead — the runtime fits comfortably in 1 GB.
-- **No changes to the repository are required.** No new dependency, no store
-  migration, no auth change.
+- **Historical fallback only.** The current Northflank implementation adds the
+  container and opt-in proxy configuration documented in
+  `NORTHFLANK_SANDBOX.md`; neither path changes the store or authentication.
 
 ### If you reject Oracle (no card on file with a cloud provider)
 

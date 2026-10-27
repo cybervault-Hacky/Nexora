@@ -2,14 +2,17 @@
 # so the root install does not cover its dependencies. Install them explicitly
 # before building.
 [build]
-  command = "pnpm --dir website install --frozen-lockfile && pnpm --dir website build"
+  command = "pnpm --dir website install --frozen-lockfile && pnpm --dir website build:netlify"
   publish = "website/dist"
 
 # Netlify serves only website/dist; it does not run website/server/index.mjs.
+# build:netlify emits dist/_redirects only when NEXORA_PORTAL_BACKEND_ORIGIN is
+# a validated bare HTTPS origin. Netlify processes that file before these rules,
+# so a configured backend proxies /api without inventing a hostname here. When
+# the variable is absent, the static API 404 protections below remain active.
 # Keep API and non-SPA file failures ahead of the History API fallback. These
 # rules are not forced, so real files (including an emitted sitemap and hashed
-# assets) still take precedence. Replace the two API 404 rules with a real
-# backend proxy only after that backend exists; see website/DEPLOYMENT.md.
+# assets) still take precedence. See website/NORTHFLANK_SANDBOX.md.
 [[redirects]]
   from = "/api"
   to = "/404.txt"

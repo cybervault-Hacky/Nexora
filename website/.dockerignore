@@ -1,0 +1,22 @@
+# Dependencies, generated output, and caches
+node_modules/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Local secrets and private runtime state must never enter the build context
+.env
+.env.*
+**/.env
+**/.env.*
+.portal-data/
+**/.portal-data/
+*.local
+**/*.local
+
+# Tests and local tooling are not runtime inputs
+server/tests/
+.netlify/
+*.log
+.DS_Store
