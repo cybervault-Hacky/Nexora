@@ -288,7 +288,7 @@ between the router and its links. Adding a page means adding one entry to
 `ROUTES`, one element to the route table in `App.tsx`, and — if it belongs in
 the navigation — one entry to `NAV_ITEMS`.
 
-### Hosting requirement: SPA fallback (not yet configured)
+### Hosting requirement: SPA fallback
 
 The site is a static bundle that uses the History API. **Any host that serves
 it must rewrite unknown paths to `/index.html`**, otherwise `/features` and
@@ -298,21 +298,25 @@ every other deep link will 404 on a page refresh or a direct visit:
 | --- | --- |
 | Vite dev server | none — `appType: "spa"` is the default and already rewrites |
 | Vite `preview` | none — same default |
-| Netlify | `/* /index.html 200` redirect |
+| Netlify | configured in the repository-root `netlify.toml`: API and missing-file `404` rules, then `/* → /index.html` with status `200` |
 | Vercel | `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }` |
 | GitHub Pages | no SPA rewrite — needs a `404.html` copy of `index.html`, or hash routing |
 | Nginx | `try_files $uri $uri/ /index.html;` |
 
-Deployment is **not** configured and no host configuration files have been
-added (Phase 14 deliberately added none). Three consequences to plan for:
+The current Netlify static deployment originally returned Netlify's 404 for
+both `/admin` and `/features` because no fallback was configured. The routing
+correction is not live until Netlify redeploys it. API paths, an absent
+`sitemap.xml`, and missing assets have explicit `404` rules before the catch-all
+so they cannot become `200` HTML responses. The rules are not forced, allowing
+real assets and an emitted sitemap to shadow them. The admin route keeps its
+existing client-side `noindex, nofollow` metadata. Unknown extensionless paths
+still return `200` with the client-rendered not-found page — page metadata is
+not an HTTP status.
 
-1. unknown paths currently return **HTTP 200** with the not-found page
-   rendered client-side, because the dev server rewrites them to `index.html`;
-2. a genuine **404 status** requires host-side configuration — the `noindex`
-   metadata on the fallback route is not a substitute for a status code;
-3. the crawl files the Phase 14 build emits (`dist/robots.txt`, and
-   `dist/sitemap.xml` once a domain is configured) must be served from the
-   domain root, and must not be swallowed by the SPA rewrite.
+Netlify does **not** run `server/index.mjs`. The fallback makes the admin
+frontend accessible only after redeployment; sign-in additionally requires the
+separate persistent Node backend and same-origin API proxy described in
+`DEPLOYMENT.md` §4.
 
 The `/admin`-serving Node process (`server/index.mjs`, see below) implements
 this behaviour itself — extensionless paths return the shell, unknown paths

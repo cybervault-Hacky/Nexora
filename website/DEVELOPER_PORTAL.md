@@ -1,11 +1,13 @@
 # Nexora Developer Account Portal — architecture and operations
 
 **Scope of this document:** the private developer portal at `/admin` and the
-server that backs it. It does **not** describe a deployment: nothing in this
-document has been deployed, published, or pointed at a domain.
+server that backs it.
 
-Status: **implemented locally, not deployed.** See
-"Known limitations" at the end for exactly what is missing.
+Status: **implemented; static frontend and backend are separate deployment
+concerns.** The current Netlify site serves only the static frontend and has no
+Node portal backend connected. The SPA routing correction is not live until
+Netlify redeploys it, and even then authentication remains unavailable until the
+real backend is deployed and proxied as described in `DEPLOYMENT.md` §4.
 
 ---
 
@@ -327,15 +329,17 @@ NEXORA_PORTAL_DATA_DIR=.portal-data \
 
 Rotation also revokes every existing session.
 
-## 10. Production requirements (not configured here)
+## 10. Production requirements (backend not connected to Netlify)
 
 > The step-by-step launch sequence — pre-flight, environment variables, owner
 > provisioning and rotation, supervisor example, proxy example, health checks,
 > backups, rollback, and the manual pre-launch checks — is
-> [`DEPLOYMENT.md`](./DEPLOYMENT.md). This section is the portal-side summary.
+> [`DEPLOYMENT.md`](./DEPLOYMENT.md). Its §4 also covers the current Netlify
+> static deployment and the exact same-origin API proxy required later. This
+> section is the portal-side summary.
 
-The portal is **not deployed** and no host configuration exists in this
-repository. Before it could run in production, a deployment must provide:
+Netlify has static routing configuration, but **no production portal backend is
+connected**. A working authenticated deployment must provide:
 
 1. **A Node process** (`node server/index.mjs`, or the same command under a
    supervisor). A static host alone cannot run this: authentication is
@@ -345,11 +349,12 @@ repository. Before it could run in production, a deployment must provide:
    server refuses to start otherwise.
 3. **A persistent volume** for `NEXORA_PORTAL_DATA_DIR`, outside the web root,
    readable only by the service account. Single-instance only — see §13.
-4. **The site's SPA rewrite must exclude `/api/*`**, and should exclude
-   `/robots.txt`, `/sitemap.xml` and `/assets/*` as well. This is the same
-   limitation documented since Phase 14/16: a host that rewrites every unknown
-   path to `index.html` will answer `/api/portal/overview` with HTML instead of
-   `401`, and `/sitemap.xml` with the shell instead of a `404`.
+4. **The site's SPA rewrite must exclude `/api` and `/api/*`**, and should
+   preserve real `/robots.txt`, `/sitemap.xml` and `/assets/*` responses. The
+   Netlify configuration therefore puts API and missing-file `404` rules before
+   its final SPA fallback; real files shadow those rules. Once a backend exists,
+   the API rules must be replaced by the same-origin proxy in `DEPLOYMENT.md` §4
+   — not supplemented with CORS or a browser-visible second origin.
 5. **Security headers.** The server sets `X-Content-Type-Options` and
    `Referrer-Policy` always, `X-Robots-Tag: noindex, nofollow` on `/admin` and
    on every API response, and — only when `NEXORA_PORTAL_ENV=production` with
@@ -386,14 +391,14 @@ That work is **outside this task's scope** and requires changes to files outside
 
 ```bash
 cd website
-pnpm test:portal          # 73 tests, Node's built-in runner, no dependencies
+pnpm test:portal          # 74 tests, Node's built-in runner, no dependencies
 ```
 
 | File | Covers |
 | --- | --- |
 | `server/tests/auth.test.mjs` | scrypt encoding/verification (including tampered and absurdly-costed hashes), token and CSRF rules, password policy, email normalisation, rate-limit windows, configuration fail-closed behaviour and origin parsing, and that the config description leaks neither paths nor secrets |
 | `server/tests/owner-env.test.mjs` | the `.env` parser and loader (quoting, escapes, no-override, permissions), Owner configuration validation, first-run provisioning, "a restart never overwrites the password", rotation with session revocation, safe invalid-configuration startup, log/API/build-output leakage checks, and the `--from-env` CLI |
-| `server/tests/deployment.test.mjs` | the deployment contract: SPA deep links, assets served separately, missing files as `404` (not the shell), path-traversal refusal, `/api/*` never falling through to the shell, `HEAD` answered like `GET`, `robots.txt` and `/sitemap.xml` in both the configured and the unconfigured build, public pages indexable while `/admin` and the API stay `noindex`, immutable caching for hashed assets and `no-cache` for the shell, production-only security headers (absent in development), a production start that refuses incomplete configuration, and a clean `SIGTERM` shutdown |
+| `server/tests/deployment.test.mjs` | the deployment contract: Netlify's ordered static routing rules and non-forced file shadowing, SPA deep links, assets served separately, missing files as `404` (not the shell), path-traversal refusal, `/api/*` never falling through to the shell, `HEAD` answered like `GET`, `robots.txt` and `/sitemap.xml` in both the configured and the unconfigured build, public pages indexable while `/admin` and the API stay `noindex`, immutable caching for hashed assets and `no-cache` for the shell, production-only security headers (absent in development), a production start that refuses incomplete configuration, and a clean `SIGTERM` shutdown |
 | `server/tests/portal-api.test.mjs` | public routes and crawl files; the admin shell; status without leakage; successful, failed, and rate-limited sign-in; cookie attributes; CSRF on reads, sign-out, and cross-origin requests; role/identity forgery; rotation; idle and absolute expiry; sign-out revocation; configuration and store fail-closed paths; no CORS; body/method limits; secret-free storage; error hygiene; no redirects or destination parameters; the provisioning CLI (create, refuse a second account, weak password, rotation) |
 
 Each integration test runs its own server on an ephemeral port with a temporary
@@ -430,9 +435,9 @@ test suite.
 - **No analytics, content management, support inbox, or deployment
   integration.** The dashboard reports these as unconfigured rather than
   inventing figures; that is the honest state, not an unfinished screen.
-- **No deployment or publication has occurred.** Nothing here has been hosted,
-  indexed, or exposed publicly, and the portal has never run outside this
-  development environment.
+- **No production portal backend is connected.** The Netlify site is static only;
+  it has no Node process, persistent Owner store, or provisioned API. A deployed
+  `/admin` shell alone must never be reported as a working authenticated portal.
 
 ## 14. What the portal does *not* expose
 

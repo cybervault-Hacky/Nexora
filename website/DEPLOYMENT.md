@@ -1,13 +1,18 @@
 # Deployment checklist — Nexora website + developer portal
 
-**Status: nothing in this repository has been deployed, published, or indexed.**
-This document is preparation. It describes what a deployment *would* require and
-what the owner must decide before one happens. It contains no credentials, no
-hostnames, and no provider choices — none were supplied, so none are assumed.
+**Current status:** the static website is deployed on Netlify at
+`https://get-nexora-desktop.netlify.app/`, but no Node portal backend is connected
+to it. The routing correction in this repository is **not live until Netlify
+rebuilds and deploys it**. No backend, Owner account, credential, or indexing
+change is created by that static deployment.
 
-The site and the portal are **one Node process**: `node server/index.mjs` serves
+The full-stack design is **one Node process**: `node server/index.mjs` can serve
 the built static site from `dist/` and the private portal API from `/api/portal/*`
-on the same origin. A static-only host cannot run this (sign-in is server-side).
+on the same origin. The current Netlify deployment instead serves `dist/` as
+static files, so a working portal needs the same Node API on a separate host with
+Netlify proxying `/api/*` to it. Netlify static hosting never runs
+`website/server/index.mjs`; serving the `/admin` shell is not the same as making
+sign-in available.
 
 | Document | Covers |
 | --- | --- |
@@ -45,7 +50,7 @@ change.
 cd website
 
 corepack pnpm@9.15.4 install --frozen-lockfile   # clean, reproducible install
-corepack pnpm@9.15.4 test:portal                 # 73 tests, Node's runner, no deps
+corepack pnpm@9.15.4 test:portal                 # 74 tests, Node's runner, no deps
 corepack pnpm@9.15.4 typecheck                   # tsc --noEmit
 corepack pnpm@9.15.4 build                       # emits dist/
 ```
@@ -211,6 +216,99 @@ node server/index.mjs      # serves dist/ + /api/portal/* on NEXORA_PORTAL_PORT
 Use `pnpm portal` in development only; it is the same command with the local
 `NODE_ENV`.
 
+### Current Netlify deployment: static frontend + separate backend
+
+The root `netlify.toml` publishes only `website/dist`. Its routing rules are
+ordered deliberately:
+
+1. `/api` and `/api/*` return the static `404.txt` failure body while no backend
+   is configured. They must never fall through to a `200` HTML response that
+   looks like a successful API request.
+2. An absent `/sitemap.xml` and missing `/assets/*` file likewise remain `404`.
+   These rules are not forced, so an emitted sitemap and real hashed assets
+   shadow them and are served normally.
+3. The final `/* → /index.html` rewrite serves the React shell for `/admin`,
+   `/admin/*`, and the public History API routes. The existing client-side
+   `/admin` metadata remains `noindex, nofollow`; no new edge-authentication or
+   indexing mechanism is introduced.
+
+After this configuration is deployed, the admin **frontend** can load directly
+and on refresh. Until a backend is connected, it must show its unavailable
+state; `/api/portal/*` intentionally remains `404`. Setting `NEXORA_PORTAL_*`
+variables in Netlify's build environment does not start the server and must not
+be used as a substitute. Never put Owner credentials in `netlify.toml`, the
+static build, or Netlify build variables.
+
+#### Connecting the real API (required for sign-in)
+
+First deploy `server/index.mjs` to a host that provides all of §4: Node
+`>=22.12.0`, one long-running instance, HTTPS, and a persistent
+`NEXORA_PORTAL_DATA_DIR` outside the web root. Build `dist/` there as well; the
+server and its status panels expect that directory. Configure the backend with
+the **browser-facing** origin, not its internal hostname:
+
+```dotenv
+NEXORA_PORTAL_ENV=production
+NEXORA_PORTAL_ORIGIN=https://get-nexora-desktop.netlify.app
+NEXORA_PORTAL_SECURE_COOKIES=true
+NEXORA_PORTAL_PORT=4174
+NEXORA_PORTAL_DATA_DIR=/var/lib/nexora-portal
+NEXORA_PORTAL_STATIC_DIR=/srv/nexora/website/dist
+```
+
+Set `NEXORA_PORTAL_HOST` to the interface used by that host's reverse proxy
+(`127.0.0.1` for same-VM nginx, or `0.0.0.0` where the container/platform
+requires it). Set `NEXORA_PORTAL_TRUST_PROXY=true` only when a proxy you control
+overwrites `X-Forwarded-For`; do not enable it merely because Netlify is in the
+request path. All other production validation in §2 remains mandatory.
+
+Once the backend has a real HTTPS origin, **replace both API 404 rules** in
+`netlify.toml` with the following (substituting only the actual origin), and
+keep them before the SPA fallback:
+
+```toml
+[[redirects]]
+  from = "/api"
+  to = "https://<backend-origin>/api"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://<backend-origin>/api/:splat"
+  status = 200
+  force = true
+```
+
+Do not leave the old 404 rules in front: Netlify uses the first matching rule.
+Do not point the browser at a second origin or weaken the server's origin,
+CSRF, cookie, or CORS rules. The Netlify rewrite is what preserves the existing
+same-origin API contract.
+
+Provision the Owner **on the backend host**, after its persistent volume is
+ready, using the existing hidden-prompt CLI in §3 and a fresh password chosen by
+the Owner. Static deployment must not provision an account. Remove any
+bootstrap password from the environment after first-run provisioning, as §3
+requires.
+
+A real proxied deployment must then be verified end to end: JSON content types,
+`GET /api/portal/status` → `200`, signed-out `GET /api/portal/session` → `401`,
+sign-in setting `HttpOnly; Secure; SameSite=Strict` on the Netlify origin,
+Owner-only API authorization, CSRF/origin rejection, sign-out revocation, and
+persistence across a backend restart. Also confirm that Netlify and the backend
+preserve request methods, bodies, `Origin`/`Sec-Fetch-Site`, cookies, and
+`Set-Cookie`. If the provider chain cannot do so, serve the entire site from
+the Node process instead; do not disable security checks to accommodate it.
+Netlify documents a 26-second proxy rewrite timeout, so an always-on backend is
+preferred over a sleeping service.
+
+**Free-hosting limitation:** the current Netlify static deployment supplies no
+Node runtime and no persistent portal volume. A separate backend is unavoidable
+for the existing authentication design. The ₹0 VM option and its card/capacity
+requirements are recorded in `LAUNCH_PLAN_ZERO_COST.md`; free PaaS instances
+with ephemeral filesystems are not durable Owner stores. A purely static,
+config-only change cannot provide a working authenticated portal.
+
 ---
 
 ## 5. Domain, HTTPS, and the reverse proxy
@@ -304,7 +402,7 @@ Verify after deploying:
 ```bash
 curl -s https://<domain>/robots.txt
 curl -s https://<domain>/sitemap.xml | grep -c "<loc>"    # expect 9
-curl -sI https://<domain>/admin | grep -i x-robots-tag    # expect noindex
+curl -sI https://<domain>/admin | grep -i x-robots-tag    # Node-hosted full stack: expect noindex
 ```
 
 `robots.txt` is crawler guidance, not access control: if `/admin` must be
@@ -402,7 +500,10 @@ Run on the real host, after TLS, with the real domain:
 - [ ] `/admin` loads, sign-in works with the real owner, the wrong password is a generic error, and repeated failures are rate limited.
 - [ ] The session cookie is `HttpOnly; Secure; SameSite=Strict` in the browser's storage inspector; it is absent after sign-out.
 - [ ] Sign-out, then refresh: no dashboard content is served from cache.
-- [ ] `X-Robots-Tag: noindex` on `/admin`; absent on public pages.
+- [ ] On the Node-hosted full stack, `X-Robots-Tag: noindex` is present on
+  `/admin` and absent on public pages. On the Netlify static shell, verify the
+  rendered `/admin` meta robots directive instead; do not assume the Node
+  server's headers apply to Netlify's static responses.
 - [ ] `robots.txt` and `sitemap.xml` reflect the intended indexing state; `/sitemap.xml` has exactly nine URLs when indexable.
 - [ ] Restart the service: the owner can still sign in (persistent storage works) and no account is recreated.
 - [ ] Back up the store, restore it into a scratch instance, sign in there.
@@ -414,7 +515,9 @@ Run on the real host, after TLS, with the real domain:
 
 ## 13. What this repository deliberately does not contain
 
-- No deploy scripts, CI/CD pipelines, Dockerfiles, or host configuration.
+- No backend deploy scripts, CI/CD pipelines, Dockerfiles, or backend host
+  configuration. The root Netlify file configures only the static build,
+  frontend routing, and the documented future API proxy location.
 - No domain, DNS, TLS certificate, or hosting-account artefacts.
 - No production credentials, tokens, or keys — not in docs, not in code, not in
   the build output.

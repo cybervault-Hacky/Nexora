@@ -4,3 +4,35 @@
 [build]
   command = "pnpm --dir website install --frozen-lockfile && pnpm --dir website build"
   publish = "website/dist"
+
+# Netlify serves only website/dist; it does not run website/server/index.mjs.
+# Keep API and non-SPA file failures ahead of the History API fallback. These
+# rules are not forced, so real files (including an emitted sitemap and hashed
+# assets) still take precedence. Replace the two API 404 rules with a real
+# backend proxy only after that backend exists; see website/DEPLOYMENT.md.
+[[redirects]]
+  from = "/api"
+  to = "/404.txt"
+  status = 404
+
+[[redirects]]
+  from = "/api/*"
+  to = "/404.txt"
+  status = 404
+
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "/404.txt"
+  status = 404
+
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.txt"
+  status = 404
+
+# BrowserRouter deep links, including /admin and /admin/*, need the app shell.
+# This must remain the last redirect rule.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
