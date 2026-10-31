@@ -757,6 +757,9 @@ from any other site.
 
 `src/components/sections/ParticleField.tsx` renders one `<canvas>` behind the
 hero copy on `/` only, inside a positioned `.home` wrapper (`pages/HomePage.css`).
+It is an original Nexora spatial particle field — floating motes with a cursor
+gravity well, depth parallax and a restrained ambient light — inspired by
+spatial particle interfaces, not copied from any product.
 
 **Why Canvas 2D.** The field needs ~20–130 moving elements, each with its own
 velocity, opacity and soft radial falloff, redrawn every frame. As DOM nodes
@@ -770,34 +773,58 @@ by roughly 1 kB gzipped.
 `--color-border-strong` (the warm border tone, 45%), the `--color-accent` blue
 (35%), and `--color-text-muted` (20%). Density is one particle per 9,000 CSS px²
 clamped to 18–130, and coarse pointers (touch) get 60% of that, so a 1440×1000
-desktop renders ~100 particles and a 390 px phone ~24. Depth comes from
-per-particle radius (2.0–5.2 px), alpha and drift speed (5–15 px/s).
+desktop renders ~100 particles and a 390 px phone ~24. Depth comes from a
+per-particle depth value in [0, 1]: near motes are larger, drift a little
+faster and react more strongly to the pointer, and shift more with the pointer
+under parallax.
 
-**Motion.** Each particle drifts in its own direction and wraps at the edges
-with an 8 px margin, so motion never starts or stops abruptly and the field
-cannot create overflow.
+**Motion.** Each particle drifts along a gently curving path — its drift
+direction rotates slowly — and wraps at the edges with an 8 px margin, so
+motion never starts or stops abruptly and the field cannot create overflow.
+The slow rotation is what keeps the movement organic rather than a field of
+straight runners.
 
-**Cursor interaction.** A pointer within a broad radius (18% of the field width,
-clamped to 150–260 px) is attracted with a *quadratic* falloff — full strength at
-the pointer, nothing at the rim. The essential detail is the relax term: every
-particle's velocity also relaxes exponentially (1.4/s) back toward its own
-drift, so particles sweep past the pointer and carry on. Without that term
-attraction accumulates and the field collapses into a blob. Velocity is clamped
-at 90 px/s, and the pointer state lives in refs — no React render is triggered
-by a frame or a move.
+**Cursor interaction.** The pointer is a small gravity well inside a broad
+radius (18% of the field width, clamped to 150–260 px). Motes in the outer band
+are drawn into a *tangential swirl* with a weak inward pull, so they orbit the
+pointer; motes that get close are *repelled* and pushed away. Both falloffs are
+quadratic — full strength where they apply, nothing at the rim — and the force
+is weighted by depth, so near motes react more than distant ones. The essential
+detail is still the relax term: every particle's velocity relaxes exponentially
+(1.4/s) back toward its own drift, so motes sweep past the pointer and carry on
+instead of collapsing onto it or sticking. Velocity is clamped at 90 px/s, and
+the pointer state lives in refs — no React render is triggered by a frame or a
+move.
 
-Measured in the browser as motion per unit of ink (which normalises for the
-extra particles attraction deposits near the pointer), one representative run:
-**0.058 idle → 0.119 attracted (2.0×) → 0.054 settled (0.45× of attracted)**.
-A region 430 px away stays at 1.04×, and one at the top-left at 0.59×. Local
-density while the pointer is held stays at roughly 1.8–3.7× the canvas mean
-across runs, i.e. the field remains distributed, and does not keep growing
-(0.30 → 0.34 over four further seconds held).
+The earlier attraction-only field was measured in the browser as motion per unit
+of ink (which normalises for the extra particles attraction deposits near the
+pointer): **0.058 idle → 0.119 attracted (2.0×) → 0.054 settled**. The field
+was later rebuilt around the swirl/repel gravity well above; the relax term and
+the 90 px/s clamp are unchanged, so the field still stays distributed and does
+not collapse, but those ink-motion numbers describe the predecessor rather than
+the current field.
+
+**Depth, parallax and ambient light.** Depth is carried three ways: near motes
+are larger and drift faster, the pointer force is weighted by depth, and a
+subtle parallax offset shifts each mote's render position by up to 7 px at depth
+1 — eased toward the pointer and back to zero when it leaves, so near motes
+shift more than far ones and the volume reads. A soft ambient light (a large,
+faint radial in the accent tint, drawn at ~0.05 global alpha) follows the pointer
+and gently illuminates the motes closest to it; it fades out when the pointer is
+gone, so the field returns to its natural, unlit state.
+
+**Touch.** Touch has no hover, and a drag-tracked attraction would compete with
+scrolling, so coarse pointers get a lighter field that drifts organically. A
+*quick tap* (a short press with little movement) emits a gentle outward ripple
+that relaxes away — a non-interfering affordance that reuses the repel math.
+Drags and long presses are ignored.
 
 **Reduced motion.** `prefers-reduced-motion: reduce` draws exactly one static
-frame and never starts a loop; the pointer listener returns early, so moving the
-pointer cannot restart motion. Selecting the preference at runtime is handled by
-a `change` listener. The page is complete and legible with no animation at all.
+frame and never starts a loop — the ambient light and parallax are not started,
+so the field becomes a still texture. The pointer listener returns early, so
+moving the pointer cannot restart motion. Selecting the preference at runtime is
+handled by a `change` listener, which also clears the light, parallax and any
+in-flight ripples. The page is complete and legible with no animation at all.
 
 **Lifecycle.** One `requestAnimationFrame` loop guarded by an idempotent
 `start()` — Strict Mode's double-invoked effect cannot create a second loop
@@ -818,8 +845,11 @@ wheel scrolling, and the mobile disclosure.
 is exactly 5.04:1 on white and therefore has almost no headroom. Solving the
 worst case per colour, allowing up to three particle centres overlapping a pixel,
 caps peak alpha at 0.219 / 0.076 / 0.090 for the three colours; the implemented
-ranges (0.045–0.075, 0.016–0.025, 0.020–0.030) sit under those ceilings.
-Presence comes from size and count, not darkness. Measured against the rendered
+ranges (0.045–0.075, 0.016–0.025, 0.020–0.030) sit under those ceilings. The
+ambient-light illumination multiplies a mote's alpha by up to 1.3 near the
+pointer; even at the brightest mote that stays well under the 0.219 ceiling, so
+the bound still holds. Presence comes from size and count, not darkness.
+Measured against the rendered
 canvas while particles drift behind the text, the worst composite leaves the
 12 px muted eyebrow at **4.76:1** and the status line at **4.86:1**, with the
 headline at 16.3:1 and the lead at 7.0:1. Because a 12 px box can go seconds
@@ -1084,7 +1114,7 @@ or lost a heading.
    which is idempotent under a double invoke. Verified: the first Tab on a fresh
    page focuses the skip link again.
 
-### Particles: measured, deliberately unchanged
+### Particles (Phase 13: measured, deliberately unchanged)
 
 The Phase 11 field was measured before anything was decided, and it did not need
 to change: the count is already scaled by canvas area, the backing store is
@@ -1100,6 +1130,14 @@ No emitter, trail, or second loop was added, the field is still independent of
 the cursor, and `prefers-reduced-motion` still stops it entirely (0 rAF
 callbacks in 500 ms). **No FPS claim is made**: frame rate was not profiled, and
 headless Chromium is not a device measurement.
+
+> A later pass rebuilt the field around a swirl/repel gravity well with depth
+> parallax, an ambient light and a touch tap-ripple (see Phase 11 above). The
+> performance model is unchanged — still one canvas, one `requestAnimationFrame`
+> loop, an area-scaled count and a DPR-capped backing store — and
+> `prefers-reduced-motion` still stops it entirely. The "independent of the
+> cursor" note above describes the Phase 13 state; the enhanced field is
+> cursor-interactive by design.
 
 ### Verification for this phase
 
