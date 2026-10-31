@@ -391,7 +391,7 @@ That work is **outside this task's scope** and requires changes to files outside
 
 ```bash
 cd website
-pnpm test:portal          # 74 tests, Node's built-in runner, no dependencies
+pnpm test:portal          # full portal/security suite, Node's built-in runner
 ```
 
 | File | Covers |

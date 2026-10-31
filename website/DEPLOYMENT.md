@@ -2,9 +2,11 @@
 
 **Current status:** the static website is deployed on Netlify at
 `https://get-nexora-desktop.netlify.app/`, but no Node portal backend is connected
-to it. The routing correction in this repository is **not live until Netlify
-rebuilds and deploys it**. No backend, Owner account, credential, or indexing
-change is created by that static deployment.
+to it. This repository now contains a **proposed temporary Northflank Sandbox**
+container and an opt-in Netlify proxy build step. No hosting account, backend
+hostname, Owner account, credential, deployment, or indexing change has been
+created. The static API 404s remain the safe default until a real backend origin
+is configured and an approved Netlify build runs.
 
 The full-stack design is **one Node process**: `node server/index.mjs` can serve
 the built static site from `dist/` and the private portal API from `/api/portal/*`
@@ -17,9 +19,10 @@ sign-in available.
 | Document | Covers |
 | --- | --- |
 | this file | launch sequence, hosting, domain, backups, rollback |
+| `NORTHFLANK_SANDBOX.md` | **Current temporary ₹0 implementation**: exact Northflank, persistent-volume, Owner, Netlify, and restore steps |
 | `README.md` | the site itself — routes, design system, build |
 | `DEVELOPER_PORTAL.md` | the portal — auth model, storage, API, limitations |
-| `LAUNCH_PLAN_ZERO_COST.md` | the ₹0 hosting investigation and recommended architecture (card-verification VM) |
+| `LAUNCH_PLAN_ZERO_COST.md` | earlier ₹0 investigation and historical Oracle VM fallback; superseded for the current implementation |
 | `SERVERLESS_SCOPING.md` | the serverless ₹0 alternative (Cloudflare Workers + D1) and its blocker |
 
 ---
@@ -38,9 +41,10 @@ rather than guessed at in code.
 | 5 | Whether to keep the **JSON store** | It is single-instance by design. Multi-instance or multi-operator use needs the migration in `DEVELOPER_PORTAL.md` §11 — a separate, approved task. |
 | 6 | Whether to **enable public indexing** | Requires decision 1 plus a review of the pages; see §7. |
 
-The repository deliberately contains no DNS records, host config, TLS
-certificates, or provider files. Adding them is a deployment action, not a code
-change.
+The repository deliberately contains no real backend hostname, DNS records, TLS
+certificates, hosting account, or credential. The Northflank files are reusable
+configuration only; creating the service and setting its generated hostname are
+deployment actions, not effects of editing this repository.
 
 ---
 
@@ -50,20 +54,24 @@ change.
 cd website
 
 corepack pnpm@9.15.4 install --frozen-lockfile   # clean, reproducible install
-corepack pnpm@9.15.4 test:portal                 # 74 tests, Node's runner, no deps
+corepack pnpm@9.15.4 test:portal                 # full Node portal/security suite
 corepack pnpm@9.15.4 typecheck                   # tsc --noEmit
-corepack pnpm@9.15.4 build                       # emits dist/
+corepack pnpm@9.15.4 build:netlify               # build + safe optional API proxy
 ```
 
 All four must pass. `pnpm build` runs the type check first and fails the build
-if it fails.
+if it fails; `build:netlify` performs that same type check and Vite build before
+configuring the optional proxy. With no `NEXORA_PORTAL_BACKEND_ORIGIN`, `dist/_redirects` must be
+absent and the tracked API 404s stay active.
 
-Then confirm the build is clean of secrets and of private routes:
+Then confirm the build is clean of server configuration and has the expected
+private-build artifacts. The `/admin` string in the JavaScript bundle is the
+public client route, not a credential or an authentication bypass:
 
 ```bash
 ls dist                     # index.html, assets/, robots.txt (sitemap.xml only when configured)
 grep -rIl "NEXORA_PORTAL_" dist || echo "no server variable names in dist"
-grep -rIl "/admin" dist/assets || echo "no portal route in the bundle"
+! grep -q "/admin" dist/index.html
 find . -name ".env" -not -path "./node_modules/*" -exec ls -l {} \;
 ```
 
@@ -176,6 +184,10 @@ Any host that can run Node `>=22.12.0` (the `engines` field) and keep a process 
 2. It must be a **long-running process**, not a static upload. Sessions and the
    store live in memory and in `NEXORA_PORTAL_DATA_DIR`.
 
+For the current temporary ₹0 container setup, use the exact values and volume
+procedure in [`NORTHFLANK_SANDBOX.md`](./NORTHFLANK_SANDBOX.md). The generic VM
+example below is not the Northflank configuration.
+
 Supervisor example (systemd; adjust paths, user, and hardening to the host):
 
 ```ini
@@ -223,7 +235,8 @@ ordered deliberately:
 
 1. `/api` and `/api/*` return the static `404.txt` failure body while no backend
    is configured. They must never fall through to a `200` HTML response that
-   looks like a successful API request.
+   looks like a successful API request. A generated `dist/_redirects` can
+   override only these two rules when a validated real backend origin exists.
 2. An absent `/sitemap.xml` and missing `/assets/*` file likewise remain `404`.
    These rules are not forced, so an emitted sitemap and real hashed assets
    shadow them and are served normally.
@@ -234,10 +247,11 @@ ordered deliberately:
 
 After this configuration is deployed, the admin **frontend** can load directly
 and on refresh. Until a backend is connected, it must show its unavailable
-state; `/api/portal/*` intentionally remains `404`. Setting `NEXORA_PORTAL_*`
-variables in Netlify's build environment does not start the server and must not
-be used as a substitute. Never put Owner credentials in `netlify.toml`, the
-static build, or Netlify build variables.
+state; `/api/portal/*` intentionally remains `404`. Setting server runtime
+variables in Netlify does not start the server and must not be used as a
+substitute. `NEXORA_PORTAL_BACKEND_ORIGIN` is only public proxy configuration
+for an already-running backend. Never put Owner credentials in `netlify.toml`,
+the static build, or Netlify build variables.
 
 #### Connecting the real API (required for sign-in)
 
@@ -262,52 +276,55 @@ requires it). Set `NEXORA_PORTAL_TRUST_PROXY=true` only when a proxy you control
 overwrites `X-Forwarded-For`; do not enable it merely because Netlify is in the
 request path. All other production validation in §2 remains mandatory.
 
-Once the backend has a real HTTPS origin, **replace both API 404 rules** in
-`netlify.toml` with the following (substituting only the actual origin), and
-keep them before the SPA fallback:
+For Northflank, use `/data` and `/app/dist` instead of the generic VM paths
+above, and follow `NORTHFLANK_SANDBOX.md` exactly.
 
-```toml
-[[redirects]]
-  from = "/api"
-  to = "https://<backend-origin>/api"
-  status = 200
-  force = true
+Once the backend has a real HTTPS origin, set
+`NEXORA_PORTAL_BACKEND_ORIGIN=https://<actual-backend-host>` in Netlify's
+**Production / Builds** configuration and run an approved production build. Do
+not edit the tracked API 404 rules or hardcode an unknown hostname. The
+`build:netlify` step validates the value and generates only these rules in
+`dist/_redirects`:
 
-[[redirects]]
-  from = "/api/*"
-  to = "https://<backend-origin>/api/:splat"
-  status = 200
-  force = true
+```text
+/api https://<actual-backend-host>/api 200!
+/api/* https://<actual-backend-host>/api/:splat 200!
 ```
 
-Do not leave the old 404 rules in front: Netlify uses the first matching rule.
+Netlify processes that publish-directory file before `netlify.toml`, so the
+real proxy takes precedence while the tracked 404s remain the safe default for
+unset builds. An unset/blank variable emits no proxy and removes a stale
+generated file; an invalid or non-HTTPS value fails the build. Removing the
+variable and rebuilding is the rollback. Deploy previews should not receive the
+production backend variable.
+
 Do not point the browser at a second origin or weaken the server's origin,
 CSRF, cookie, or CORS rules. The Netlify rewrite is what preserves the existing
 same-origin API contract.
 
-Provision the Owner **on the backend host**, after its persistent volume is
-ready, using the existing hidden-prompt CLI in §3 and a fresh password chosen by
-the Owner. Static deployment must not provision an account. Remove any
-bootstrap password from the environment after first-run provisioning, as §3
-requires.
+For Northflank, provision the Owner through the existing first-start runtime
+secret flow after `/data` is ready, then remove the bootstrap password and
+restart. Do not run the offline CLI concurrently with the live store. Static
+deployment must not provision an account; see `NORTHFLANK_SANDBOX.md` §5.
 
 A real proxied deployment must then be verified end to end: JSON content types,
 `GET /api/portal/status` → `200`, signed-out `GET /api/portal/session` → `401`,
-sign-in setting `HttpOnly; Secure; SameSite=Strict` on the Netlify origin,
-Owner-only API authorization, CSRF/origin rejection, sign-out revocation, and
-persistence across a backend restart. Also confirm that Netlify and the backend
-preserve request methods, bodies, `Origin`/`Sec-Fetch-Site`, cookies, and
-`Set-Cookie`. If the provider chain cannot do so, serve the entire site from
-the Node process instead; do not disable security checks to accommodate it.
-Netlify documents a 26-second proxy rewrite timeout, so an always-on backend is
-preferred over a sleeping service.
+the Owner's real sign-in setting `HttpOnly; Secure; SameSite=Strict` on the
+Netlify origin, Owner-only API authorization, CSRF/origin rejection, sign-out
+revocation, and persistence across a backend restart. Also confirm that Netlify
+and the backend preserve request methods, bodies, `Origin`/`Sec-Fetch-Site`,
+cookies, and `Set-Cookie`. If the provider chain cannot do so, remove the proxy
+variable and restore the static API 404s; do not disable security checks to
+accommodate it. Netlify documents a 26-second proxy rewrite timeout, so an
+always-on backend is preferred over a sleeping service.
 
 **Free-hosting limitation:** the current Netlify static deployment supplies no
 Node runtime and no persistent portal volume. A separate backend is unavoidable
-for the existing authentication design. The ₹0 VM option and its card/capacity
-requirements are recorded in `LAUNCH_PLAN_ZERO_COST.md`; free PaaS instances
-with ephemeral filesystems are not durable Owner stores. A purely static,
-config-only change cannot provide a working authenticated portal.
+for the existing authentication design. `NORTHFLANK_SANDBOX.md` records the
+proposed temporary ₹0 setup, its card/documentation conflict, quotas, backup
+responsibilities, and non-production limitations. Free PaaS instances with
+ephemeral filesystems are not durable Owner stores. A purely static, config-only
+change cannot provide a working authenticated portal.
 
 ---
 
